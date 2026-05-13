@@ -24,6 +24,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.positionChanged
+import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalViewConfiguration
@@ -136,6 +137,12 @@ internal fun ZoomableAsyncImage(
                         var totalDx = 0f
                         var totalDy = 0f
                         var mode: Mode = Mode.Undetermined
+                        // Track release velocity so a quick down-flick
+                        // dismisses even if the finger didn't travel the
+                        // full 120px threshold. Matches iOS's
+                        // `predictedEndTranslation` (translation + 0.3s ·
+                        // velocity).
+                        val velocityTracker = VelocityTracker()
 
                         while (true) {
                             val event = awaitPointerEvent(PointerEventPass.Main)
@@ -143,7 +150,9 @@ internal fun ZoomableAsyncImage(
 
                             if (activeCount == 0) {
                                 if (mode == Mode.SwipeDown) {
-                                    if (dragY >= dismissThreshold) {
+                                    val velocityY = velocityTracker.calculateVelocity().y
+                                    val projectedY = dragY + velocityY * 0.3f
+                                    if (projectedY >= dismissThreshold) {
                                         onSwipeDownDismiss()
                                     } else {
                                         scope.launch { dragYAnim.animateTo(0f) }
@@ -190,6 +199,7 @@ internal fun ZoomableAsyncImage(
                                         abs(totalDy) > abs(totalDx) && totalDy > 0f -> {
                                             mode = Mode.SwipeDown
                                             scope.launch { dragYAnim.snapTo(totalDy) }
+                                            velocityTracker.addPosition(change.uptimeMillis, change.position)
                                             change.consume()
                                         }
                                         else -> {
@@ -207,6 +217,7 @@ internal fun ZoomableAsyncImage(
                                 Mode.SwipeDown -> {
                                     val next = (dragY + delta.y).coerceAtLeast(0f)
                                     scope.launch { dragYAnim.snapTo(next) }
+                                    velocityTracker.addPosition(change.uptimeMillis, change.position)
                                     change.consume()
                                 }
                                 Mode.Pinch -> {

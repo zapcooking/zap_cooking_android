@@ -42,6 +42,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -254,6 +255,7 @@ private fun VideoPagerPage(
                     var totalDx = 0f
                     var totalDy = 0f
                     var verticalLocked = false
+                    val velocityTracker = VelocityTracker()
                     while (true) {
                         val event = awaitPointerEvent(PointerEventPass.Main)
                         if (event.changes.size != 1) return@awaitEachGesture
@@ -267,6 +269,7 @@ private fun VideoPagerPage(
                                 if (abs(totalDy) > abs(totalDx) && totalDy > 0f) {
                                     verticalLocked = true
                                     scope.launch { dragYAnim.snapTo(totalDy) }
+                                    velocityTracker.addPosition(change.uptimeMillis, change.position)
                                     change.consume()
                                 } else {
                                     return@awaitEachGesture
@@ -275,11 +278,17 @@ private fun VideoPagerPage(
                         } else {
                             val next = (dragY + delta.y).coerceAtLeast(0f)
                             scope.launch { dragYAnim.snapTo(next) }
+                            velocityTracker.addPosition(change.uptimeMillis, change.position)
                             change.consume()
                         }
                         if (!change.pressed) {
                             if (verticalLocked) {
-                                if (dragY >= 120f) onSwipeDownDismiss()
+                                // Project release velocity 0.3s forward (matches iOS
+                                // `predictedEndTranslation`) so a quick down-flick
+                                // dismisses even when raw distance is short.
+                                val velocityY = velocityTracker.calculateVelocity().y
+                                val projectedY = dragY + velocityY * 0.3f
+                                if (projectedY >= 120f) onSwipeDownDismiss()
                                 else scope.launch { dragYAnim.animateTo(0f) }
                             }
                             return@awaitEachGesture
