@@ -15,8 +15,12 @@ import com.wisp.app.relay.RelayConfig
 import com.wisp.app.relay.RelayPool
 import com.wisp.app.relay.SubscriptionManager
 import com.wisp.app.repo.ContactRepository
+import com.wisp.app.repo.KeyRepository
 import com.wisp.app.repo.LiveChatMessage
 import com.wisp.app.repo.LiveStreamRepository
+import com.wisp.app.repo.MentionCandidate
+import com.wisp.app.repo.MentionSearchRepository
+import com.wisp.app.repo.ProfileRepository
 import com.wisp.app.repo.RelayListRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -54,6 +58,16 @@ class LiveStreamViewModel(app: Application) : AndroidViewModel(app) {
     private val _replyTarget = MutableStateFlow<LiveChatMessage?>(null)
     val replyTarget: StateFlow<LiveChatMessage?> = _replyTarget
 
+    private var mentionSearchRepo: MentionSearchRepository? = null
+    private val _mentionCandidates = MutableStateFlow<List<MentionCandidate>>(emptyList())
+    val mentionCandidates: StateFlow<List<MentionCandidate>> = _mentionCandidates
+
+    fun searchMention(query: String) { mentionSearchRepo?.search(query, viewModelScope) }
+    fun clearMentionState() {
+        _mentionCandidates.value = emptyList()
+        mentionSearchRepo?.clear()
+    }
+
     fun init(
         hostPubkey: String,
         dTag: String,
@@ -63,6 +77,7 @@ class LiveStreamViewModel(app: Application) : AndroidViewModel(app) {
         outboxRouter: OutboxRouter,
         subManager: SubscriptionManager,
         contactRepo: ContactRepository,
+        profileRepo: ProfileRepository,
         naddrRelayHints: List<String> = emptyList()
     ) {
         if (this.hostPubkey == hostPubkey && this.dTag == dTag) return
@@ -71,6 +86,13 @@ class LiveStreamViewModel(app: Application) : AndroidViewModel(app) {
         this.liveStreamRepo = liveStreamRepo
         this.relayPool = relayPool
         this.contactRepo = contactRepo
+        if (mentionSearchRepo == null) {
+            mentionSearchRepo = MentionSearchRepository(
+                profileRepo, contactRepo, relayPool, KeyRepository(getApplication())
+            ).also { repo ->
+                viewModelScope.launch { repo.candidates.collect { _mentionCandidates.value = it } }
+            }
+        }
         this.aTagValue = Nip53.aTagValue(hostPubkey, dTag)
 
         // Set current stream in repo

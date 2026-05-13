@@ -2478,7 +2478,7 @@ fun WispNavHost(
                     hostPubkey, dTag, feedViewModel.liveStreamRepo,
                     feedViewModel.relayPool, feedViewModel.relayListRepo,
                     feedViewModel.outboxRouter, feedViewModel.subManager,
-                    feedViewModel.contactRepo, naddrHints
+                    feedViewModel.contactRepo, feedViewModel.profileRepo, naddrHints
                 )
             }
             DisposableEffect(hostPubkey, dTag) {

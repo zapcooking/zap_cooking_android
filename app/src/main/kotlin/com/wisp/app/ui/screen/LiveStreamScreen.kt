@@ -73,9 +73,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -87,6 +89,7 @@ import com.wisp.app.nostr.NostrSigner
 import com.wisp.app.nostr.hexToByteArray
 import com.wisp.app.repo.EventRepository
 import com.wisp.app.repo.LiveChatMessage
+import com.wisp.app.repo.MentionCandidate
 import com.wisp.app.nostr.NostrEvent
 import com.wisp.app.ui.component.EmojiReactionPopup
 import com.wisp.app.ui.component.InlineVideoPlayerWithFullscreen
@@ -125,6 +128,16 @@ fun LiveStreamScreen(
     val messageText by viewModel.messageText.collectAsState()
     val sending by viewModel.sending.collectAsState()
     val replyTarget by viewModel.replyTarget.collectAsState()
+    val mentionCandidates by viewModel.mentionCandidates.collectAsState()
+    var tfv by remember { mutableStateOf(TextFieldValue()) }
+    LaunchedEffect(messageText) {
+        if (tfv.text != messageText) tfv = TextFieldValue(messageText, TextRange(messageText.length))
+    }
+    val mentionAutocomplete = remember(tfv) { detectLiveMentionAutocomplete(tfv) }
+    LaunchedEffect(mentionAutocomplete) {
+        if (mentionAutocomplete != null) viewModel.searchMention(mentionAutocomplete.query)
+        else viewModel.clearMentionState()
+    }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     // Auto-scroll to bottom when new messages arrive
@@ -289,6 +302,47 @@ fun LiveStreamScreen(
             }
         }
 
+        // Mention candidates
+        if (mentionCandidates.isNotEmpty() && mentionAutocomplete != null) {
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                tonalElevation = 3.dp,
+                shadowElevation = 2.dp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 200.dp)
+                    .padding(horizontal = 8.dp, vertical = 2.dp)
+            ) {
+                LazyColumn {
+                    items(mentionCandidates, key = { it.profile.pubkey }) { candidate ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    val uri = "nostr:" + Nip19.nprofileEncode(candidate.profile.pubkey)
+                                    val newTfv = insertLiveMentionAutocomplete(
+                                        tfv, mentionAutocomplete.triggerIndex, uri
+                                    )
+                                    tfv = newTfv
+                                    viewModel.updateText(newTfv.text)
+                                    viewModel.clearMentionState()
+                                }
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            ProfilePicture(url = candidate.profile.picture, size = 28)
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = candidate.profile.displayString,
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         // Input bar
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -299,8 +353,8 @@ fun LiveStreamScreen(
                 .padding(horizontal = 8.dp, vertical = 6.dp)
         ) {
             BasicTextField(
-                value = messageText,
-                onValueChange = { viewModel.updateText(it) },
+                value = tfv,
+                onValueChange = { new -> tfv = new; viewModel.updateText(new.text) },
                 modifier = Modifier
                     .weight(1f)
                     .heightIn(min = 40.dp, max = 120.dp)
@@ -322,7 +376,7 @@ fun LiveStreamScreen(
                 ),
                 decorationBox = { innerTextField ->
                     Box {
-                        if (messageText.isEmpty()) {
+                        if (tfv.text.isEmpty()) {
                             Text(
                                 text = "Chat...",
                                 style = MaterialTheme.typography.bodyMedium,
@@ -336,7 +390,7 @@ fun LiveStreamScreen(
             Spacer(Modifier.width(4.dp))
             IconButton(
                 onClick = { viewModel.sendMessage(signer) },
-                enabled = messageText.isNotBlank() && !sending
+                enabled = tfv.text.isNotBlank() && !sending
             ) {
                 if (sending) {
                     CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
@@ -344,13 +398,46 @@ fun LiveStreamScreen(
                     Icon(
                         Icons.AutoMirrored.Filled.Send,
                         contentDescription = "Send",
-                        tint = if (messageText.isNotBlank()) MaterialTheme.colorScheme.primary
+                        tint = if (tfv.text.isNotBlank()) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                     )
                 }
             }
         }
     }
+}
+
+private data class LiveMentionAutocomplete(val triggerIndex: Int, val query: String)
+
+private fun detectLiveMentionAutocomplete(tfv: TextFieldValue): LiveMentionAutocomplete? {
+    val text = tfv.text
+    val cursor = tfv.selection.end
+    if (cursor <= 0) return null
+    var i = cursor - 1
+    while (i >= 0) {
+        val c = text[i]
+        when {
+            c == '@' -> {
+                val query = text.substring(i + 1, cursor)
+                if (query.contains(' ') || query.contains('\n')) return null
+                val before = if (i > 0) text[i - 1] else ' '
+                return if (before == ' ' || before == '\n') LiveMentionAutocomplete(i, query) else null
+            }
+            c == ' ' || c == '\n' -> return null
+        }
+        i--
+    }
+    if (i < 0 && text.isNotEmpty() && text[0] == '@') {
+        val query = text.substring(1, cursor)
+        if (!query.contains(' ') && !query.contains('\n')) return LiveMentionAutocomplete(0, query)
+    }
+    return null
+}
+
+private fun insertLiveMentionAutocomplete(tfv: TextFieldValue, triggerIndex: Int, insertion: String): TextFieldValue {
+    val newText = tfv.text.substring(0, triggerIndex) + insertion + " " + tfv.text.substring(tfv.selection.end)
+    val newCursor = triggerIndex + insertion.length + 1
+    return TextFieldValue(newText, TextRange(newCursor))
 }
 
 @Composable
