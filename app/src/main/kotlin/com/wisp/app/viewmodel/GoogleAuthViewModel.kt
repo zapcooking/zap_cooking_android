@@ -5,18 +5,20 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.wisp.app.auth.GoogleAccountDerivation
+import com.wisp.app.auth.BackupCrypto
+import com.wisp.app.auth.DriveBackupService
 import com.wisp.app.auth.GoogleSignInException
 import com.wisp.app.auth.GoogleSignInManager
+import com.wisp.app.nostr.Keys
+import com.wisp.app.nostr.Nip19
 import com.wisp.app.nostr.toHex
 import com.wisp.app.repo.FiatPreferences
 import com.wisp.app.repo.KeyRepository
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -32,26 +34,26 @@ import java.util.concurrent.TimeUnit
 private const val TAG = "GoogleAuth"
 
 /**
- * "Continue with Google" flow with deterministic account derivation — no
- * backup events, no encryption, no Drive.
+ * Orchestrates the "Continue with Google" flow:
+ *   1. Sign in via GoogleSignInManager → derive backup key from sub claim.
+ *   2. List every backup in the user's Drive appDataFolder. Each filename
+ *      embeds the npub (`wisp_nsec_<npub>.bin`) so we can show the chooser
+ *      without downloading every file.
+ *   3. UI shows a list of restorable accounts (if any) plus a "Create new
+ *      account" option that's always available — users can keep adding new
+ *      Nostr identities to the same Google account's backup space.
  *
- *   1. Sign in via Credential Manager → get the user's Google `sub`.
- *   2. Derive candidate keypairs for indices 0..MAX-1 from that `sub`.
- *   3. Query a set of public relays for any kind 0 / 3 / 10002 events from
- *      those derived pubkeys. A pubkey with any activity = an "in use"
- *      account that should appear in the chooser.
- *   4. The chooser shows discovered accounts (avatar + display name come
- *      from the kind-0 metadata, no separate fetch needed) plus "Create
- *      another account" — which derives the next unused index.
- *
- * Nothing is published, encrypted, or stored on relays. The user's own
- * normal Nostr activity is what makes their derived accounts discoverable.
+ * The plaintext nsec only leaves Drive when the user actually picks Restore;
+ * generation only happens when they pick Create.
  */
 class GoogleAuthViewModel(app: Application) : AndroidViewModel(app) {
     private val keyRepo = KeyRepository(app)
+    private val driveService = DriveBackupService()
 
-    data class AccountSummary(
-        val accountIndex: Int,
+    /** One restorable account entry surfaced in the chooser. */
+    data class BackupSummary(
+        val fileId: String,
+        val npub: String,
         val pubkeyHex: String,
         val displayName: String? = null,
         val picture: String? = null
@@ -60,11 +62,8 @@ class GoogleAuthViewModel(app: Application) : AndroidViewModel(app) {
     sealed class State {
         object Idle : State()
         object SigningIn : State()
-        object CheckingRelays : State()
-        data class Choose(
-            val accounts: List<AccountSummary>,
-            val nextNewIndex: Int
-        ) : State()
+        object CheckingDrive : State()
+        data class Choose(val backups: List<BackupSummary>) : State()
         object Working : State()
         data class Done(val isNewAccount: Boolean) : State()
         data class Error(val message: String) : State()
@@ -73,7 +72,9 @@ class GoogleAuthViewModel(app: Application) : AndroidViewModel(app) {
     private val _state = MutableStateFlow<State>(State.Idle)
     val state: StateFlow<State> = _state
 
-    private var pendingSub: String? = null
+    private var pendingBackupKey: ByteArray? = null
+    private var pendingAccessToken: String? = null
+    private var profileFetchJob: Job? = null
 
     fun beginSignIn(activity: ComponentActivity, webClientId: String) {
         Log.d(TAG, "beginSignIn called, current state=${_state.value::class.simpleName}, webClientId.length=${webClientId.length}")
@@ -87,21 +88,43 @@ class GoogleAuthViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 Log.d(TAG, "calling manager.signIn(activity)…")
-                val sub = manager.signIn(activity)
-                Log.d(TAG, "signIn returned sub-len=${sub.length}")
-                pendingSub = sub
+                val result = manager.signIn(activity)
+                Log.d(TAG, "signIn returned: sub-len=${result.sub.length}, hasToken=${result.accessToken.isNotEmpty()}")
+                val backupKey = BackupCrypto.deriveBackupKey(result.sub)
+                pendingBackupKey = backupKey
+                pendingAccessToken = result.accessToken
 
-                _state.value = State.CheckingRelays
-                Log.d(TAG, "state -> CheckingRelays")
+                _state.value = State.CheckingDrive
+                Log.d(TAG, "state -> CheckingDrive")
 
-                val accounts = probeForActiveAccounts(sub)
-                if (accounts.isEmpty()) {
-                    Log.d(TAG, "no accounts found — auto-creating account at index 0")
-                    createAccountAt(sub, accountIndex = 0)
-                } else {
-                    val nextNew = accounts.maxOf { it.accountIndex } + 1
-                    _state.value = State.Choose(accounts, nextNew)
-                    Log.d(TAG, "state -> Choose with ${accounts.size} active account(s), nextNew=$nextNew")
+                val files = driveService.listBackups(result.accessToken)
+                Log.d(TAG, "listBackups returned ${files.size} file(s)")
+
+                val summaries = files.mapNotNull { file ->
+                    val npub = file.npubFromName ?: try {
+                        // Legacy file with no npub in the filename — decrypt to learn it.
+                        val payload = driveService.downloadBackup(result.accessToken, file.fileId)
+                        val nsec = BackupCrypto.decryptNsec(payload, backupKey)
+                        Nip19.npubEncode(Keys.xOnlyPubkey(nsec))
+                    } catch (e: Exception) {
+                        Log.w(TAG, "couldn't resolve npub for ${file.name}; skipping", e)
+                        null
+                    }
+                    npub?.let {
+                        val pubkeyHex = try {
+                            Nip19.npubDecode(it).toHex()
+                        } catch (e: Exception) {
+                            Log.w(TAG, "couldn't decode npub $it", e)
+                            return@let null
+                        }
+                        BackupSummary(fileId = file.fileId, npub = it, pubkeyHex = pubkeyHex)
+                    }
+                }.distinctBy { it.npub }
+
+                _state.value = State.Choose(summaries)
+                Log.d(TAG, "state -> Choose with ${summaries.size} restorable account(s)")
+                if (summaries.isNotEmpty()) {
+                    fetchProfilesInBackground(summaries.map { it.pubkeyHex })
                 }
             } catch (e: GoogleSignInException) {
                 Log.w(TAG, "GoogleSignInException", e)
@@ -113,192 +136,161 @@ class GoogleAuthViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun selectAccount(accountIndex: Int) {
-        Log.d(TAG, "selectAccount tapped, index=$accountIndex")
-        val sub = pendingSub ?: return
+    fun restoreAccount(fileId: String) {
+        Log.d(TAG, "restoreAccount tapped, fileId=$fileId")
+        val key = pendingBackupKey ?: return
+        val accessToken = pendingAccessToken ?: return
         _state.value = State.Working
         viewModelScope.launch {
             try {
-                val keypair = GoogleAccountDerivation.deriveAccountKeypair(sub, accountIndex)
+                val payload = driveService.downloadBackup(accessToken, fileId)
+                val nsec = BackupCrypto.decryptNsec(payload, key)
+                val keypair = Keys.fromPrivkey(nsec)
                 keyRepo.saveKeypair(keypair)
                 keyRepo.reloadPrefs(keypair.pubkey.toHex())
                 _state.value = State.Done(isNewAccount = false)
                 Log.d(TAG, "state -> Done(isNewAccount=false)")
             } catch (e: Exception) {
-                Log.w(TAG, "selectAccount failed", e)
-                _state.value = State.Error(e.message ?: "Failed to log in.")
+                Log.w(TAG, "restoreAccount failed", e)
+                _state.value = State.Error(e.message ?: "Failed to restore account.")
             }
         }
     }
 
     fun createNewAccount() {
         Log.d(TAG, "createNewAccount tapped")
-        val sub = pendingSub ?: return
-        val current = _state.value as? State.Choose ?: return
-        val newIndex = current.nextNewIndex
-        viewModelScope.launch {
-            createAccountAt(sub, newIndex)
-        }
-    }
-
-    /**
-     * Shared helper: derives the keypair at [accountIndex], saves it locally,
-     * and transitions to Done(isNewAccount = true). Called both from the user
-     * tapping "Create another account" and from the auto-create-at-zero path
-     * when no existing accounts are discovered on sign-in.
-     */
-    private suspend fun createAccountAt(sub: String, accountIndex: Int) {
+        val key = pendingBackupKey ?: return
+        val accessToken = pendingAccessToken ?: return
         _state.value = State.Working
-        try {
-            val keypair = GoogleAccountDerivation.deriveAccountKeypair(sub, accountIndex)
-            keyRepo.saveKeypair(keypair)
-            keyRepo.reloadPrefs(keypair.pubkey.toHex())
-            val fiatPrefs = FiatPreferences.get(getApplication())
-            fiatPrefs.setFiatMode(true)
-            fiatPrefs.setCurrency("USD")
-            _state.value = State.Done(isNewAccount = true)
-            Log.d(TAG, "state -> Done(isNewAccount=true), accountIndex=$accountIndex")
-        } catch (e: Exception) {
-            Log.w(TAG, "createAccountAt failed", e)
-            _state.value = State.Error(e.message ?: "Failed to create account.")
+        viewModelScope.launch {
+            try {
+                val keypair = Keys.generate()
+                val npub = Nip19.npubEncode(keypair.pubkey)
+                val payload = BackupCrypto.encryptNsec(keypair.privkey, key)
+                driveService.uploadBackup(accessToken, npub, payload)
+                keyRepo.saveKeypair(keypair)
+                keyRepo.reloadPrefs(keypair.pubkey.toHex())
+                val fiatPrefs = FiatPreferences.get(getApplication())
+                fiatPrefs.setFiatMode(true)
+                fiatPrefs.setCurrency("USD")
+                _state.value = State.Done(isNewAccount = true)
+                Log.d(TAG, "state -> Done(isNewAccount=true)")
+            } catch (e: Exception) {
+                Log.w(TAG, "createNewAccount failed", e)
+                _state.value = State.Error(e.message ?: "Failed to create account.")
+            }
         }
     }
 
     fun reset() {
-        pendingSub = null
+        profileFetchJob?.cancel()
+        profileFetchJob = null
+        pendingBackupKey = null
+        pendingAccessToken = null
         _state.value = State.Idle
     }
 
     /**
-     * Derives candidate keypairs for indices 0..MAX_INDEX-1, then queries a
-     * set of widely-used relays for any kind 0 / 3 / 10002 events from those
-     * pubkeys. Returns one [AccountSummary] per pubkey that has activity,
-     * with profile data populated when a kind-0 was found in the same probe.
+     * Opens ephemeral WebSocket connections to a couple of widely-used relays,
+     * requests kind-0 profile metadata for each backup's pubkey, and merges the
+     * parsed display name + picture into the Choose state as results arrive.
+     * Cancelled when the user moves past the chooser.
      */
-    private suspend fun probeForActiveAccounts(sub: String): List<AccountSummary> = withContext(Dispatchers.IO) {
-        data class Candidate(
-            val accountIndex: Int,
-            val pubkeyHex: String,
-            var hasActivity: Boolean = false,
-            var displayName: String? = null,
-            var picture: String? = null
-        )
+    private fun fetchProfilesInBackground(pubkeyHexList: List<String>) {
+        profileFetchJob?.cancel()
+        profileFetchJob = viewModelScope.launch(Dispatchers.IO) {
+            val client = OkHttpClient.Builder()
+                .connectTimeout(8, TimeUnit.SECONDS)
+                .readTimeout(0, TimeUnit.MILLISECONDS)
+                .build()
+            val pubkeys = pubkeyHexList.distinct()
+            if (pubkeys.isEmpty()) return@launch
 
-        val candidates = (0 until MAX_INDEX).map { idx ->
-            val keypair = GoogleAccountDerivation.deriveAccountKeypair(sub, idx)
-            Candidate(accountIndex = idx, pubkeyHex = keypair.pubkey.toHex())
-        }
-        val byPubkey = candidates.associateBy { it.pubkeyHex }
+            val pubkeyJsonArray = pubkeys.joinToString(",") { "\"$it\"" }
+            val reqMessage = """["REQ","wisp-google-profiles",{"kinds":[0],"authors":[$pubkeyJsonArray]}]"""
 
-        val authorList = candidates.joinToString(",") { "\"${it.pubkeyHex}\"" }
-        val subId = "wisp-google-probe"
-        val req = """["REQ","$subId",{"kinds":[0,3,10002],"authors":[$authorList]}]"""
+            val sockets = PROFILE_RELAYS.map { url ->
+                try {
+                    client.newWebSocket(
+                        Request.Builder().url(url).build(),
+                        object : WebSocketListener() {
+                            override fun onOpen(webSocket: WebSocket, response: Response) {
+                                webSocket.send(reqMessage)
+                            }
 
-        val client = OkHttpClient.Builder()
-            .connectTimeout(8, TimeUnit.SECONDS)
-            .readTimeout(0, TimeUnit.MILLISECONDS)
-            .build()
+                            override fun onMessage(webSocket: WebSocket, text: String) {
+                                handleProfileMessage(text)
+                            }
 
-        val eoseCount = java.util.concurrent.atomic.AtomicInteger(0)
-        val sockets = PROBE_RELAYS.map { url ->
-            try {
-                client.newWebSocket(
-                    Request.Builder().url(url).build(),
-                    object : WebSocketListener() {
-                        override fun onOpen(webSocket: WebSocket, response: Response) {
-                            webSocket.send(req)
-                        }
-
-                        override fun onMessage(webSocket: WebSocket, text: String) {
-                            val arr = try { json.parseToJsonElement(text) as? JsonArray } catch (_: Exception) { null }
-                                ?: return
-                            if (arr.size < 2) return
-                            when (arr[0].jsonPrimitive.content) {
-                                "EVENT" -> {
-                                    if (arr.size < 3 || arr[1].jsonPrimitive.content != subId) return
-                                    val event = arr[2] as? JsonObject ?: return
-                                    val pubkey = event["pubkey"]?.jsonPrimitive?.content ?: return
-                                    val candidate = byPubkey[pubkey] ?: return
-                                    candidate.hasActivity = true
-                                    if (event["kind"]?.jsonPrimitive?.content == "0") {
-                                        val content = event["content"]?.jsonPrimitive?.content
-                                        if (content != null) {
-                                            try {
-                                                val profile = json.parseToJsonElement(content).jsonObject
-                                                val name = profile["display_name"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-                                                    ?: profile["name"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-                                                val picture = profile["picture"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
-                                                if (candidate.displayName == null) candidate.displayName = name
-                                                if (candidate.picture == null) candidate.picture = picture
-                                            } catch (_: Exception) {}
-                                        }
-                                    }
-                                }
-                                "EOSE" -> {
-                                    if (arr[1].jsonPrimitive.content == subId) {
-                                        eoseCount.incrementAndGet()
-                                    }
-                                }
+                            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                                Log.w(TAG, "profile relay $url failed", t)
                             }
                         }
-
-                        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                            Log.w(TAG, "probe relay $url failed", t)
-                            eoseCount.incrementAndGet()
-                        }
-                    }
-                )
-            } catch (e: Exception) {
-                Log.w(TAG, "couldn't open probe relay $url", e)
-                eoseCount.incrementAndGet()
-                null
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "couldn't open profile relay $url", e)
+                    null
+                }
             }
-        }
 
-        val deadline = System.currentTimeMillis() + PROBE_TIMEOUT_MS
-        while (System.currentTimeMillis() < deadline) {
-            if (eoseCount.get() >= PROBE_RELAYS.size) break
-            delay(100)
-        }
-
-        for (socket in sockets.filterNotNull()) {
             try {
-                socket.send("""["CLOSE","$subId"]""")
-                socket.close(1000, null)
-            } catch (_: Exception) {}
-        }
-        client.dispatcher.cancelAll()
-        client.connectionPool.evictAll()
-
-        candidates
-            .filter { it.hasActivity }
-            .map {
-                AccountSummary(
-                    accountIndex = it.accountIndex,
-                    pubkeyHex = it.pubkeyHex,
-                    displayName = it.displayName,
-                    picture = it.picture
-                )
+                kotlinx.coroutines.delay(PROFILE_FETCH_TIMEOUT_MS)
+            } finally {
+                for (socket in sockets.filterNotNull()) {
+                    try {
+                        socket.send("""["CLOSE","wisp-google-profiles"]""")
+                        socket.close(1000, null)
+                    } catch (_: Exception) {}
+                }
+                client.dispatcher.cancelAll()
+                client.connectionPool.evictAll()
             }
-            .sortedBy { it.accountIndex }
+        }
+    }
+
+    private fun handleProfileMessage(text: String) {
+        val arr = try { profileJson.parseToJsonElement(text) as? JsonArray } catch (_: Exception) { return } ?: return
+        if (arr.size < 3) return
+        if (arr[0].jsonPrimitive.content != "EVENT") return
+        val event = arr[2] as? JsonObject ?: return
+        if (event["kind"]?.jsonPrimitive?.content != "0") return
+        val pubkey = event["pubkey"]?.jsonPrimitive?.content ?: return
+        val content = event["content"]?.jsonPrimitive?.content ?: return
+        val profile = try { profileJson.parseToJsonElement(content).jsonObject } catch (_: Exception) { return }
+
+        val name = profile["display_name"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
+            ?: profile["name"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
+        val picture = profile["picture"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
+
+        if (name == null && picture == null) return
+
+        // Merge into current Choose state if still active.
+        val current = _state.value
+        if (current !is State.Choose) return
+        val updated = current.backups.map { backup ->
+            if (backup.pubkeyHex == pubkey && (backup.displayName == null || backup.picture == null)) {
+                backup.copy(
+                    displayName = backup.displayName ?: name,
+                    picture = backup.picture ?: picture
+                )
+            } else backup
+        }
+        _state.value = State.Choose(updated)
     }
 
     override fun onCleared() {
         super.onCleared()
-        pendingSub = null
+        profileFetchJob?.cancel()
+        pendingBackupKey = null
+        pendingAccessToken = null
     }
 
     companion object {
-        private val json = Json { ignoreUnknownKeys = true }
-        private const val MAX_INDEX = 16
-        private const val PROBE_TIMEOUT_MS = 6_000L
-        private val PROBE_RELAYS = listOf(
+        private val profileJson = Json { ignoreUnknownKeys = true }
+        private val PROFILE_RELAYS = listOf(
             "wss://relay.damus.io",
-            "wss://relay.primal.net",
-            "wss://nos.lol",
-            "wss://nostr.wine",
-            "wss://relay.wisp.talk",
-            "wss://relay.ditto.pub"
+            "wss://relay.primal.net"
         )
+        private const val PROFILE_FETCH_TIMEOUT_MS = 8_000L
     }
 }
