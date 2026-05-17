@@ -72,22 +72,27 @@ object PrivateReplyPublisher {
             createdAt = rumorCreatedAt
         )
 
+        // Recipient resolution: their kind 10050 DM relays, or — if none — their NIP-65
+        // inbox (read) relays. The recipient never queries our write relays, so we don't
+        // fall back to those: a wrap there would be silently lost.
         val recipientRelays: List<String> = run {
             val dmRelays = DmRelayLookup.fetch(replyTo.pubkey, relayPool, dmRepo)
             if (dmRelays.isNotEmpty()) return@run dmRelays
-            relayListRepo?.getReadRelays(replyTo.pubkey)?.takeIf { it.isNotEmpty() }?.let { return@run it }
-            relayListRepo?.getWriteRelays(replyTo.pubkey)?.takeIf { it.isNotEmpty() }?.let { return@run it }
+            if (relayListRepo != null) {
+                relayListRepo.getReadRelays(replyTo.pubkey)?.takeIf { it.isNotEmpty() }?.let { return@run it }
+                // Cache miss — fetch kind 10002 fresh from indexers, then re-check.
+                PeerRelayListLookup.fetch(replyTo.pubkey, relayPool, relayListRepo)
+                relayListRepo.getReadRelays(replyTo.pubkey)?.takeIf { it.isNotEmpty() }?.let { return@run it }
+            }
             emptyList()
         }
 
+        if (recipientRelays.isEmpty()) return Result(0, null)
+
         val recipientMsg = ClientMessage.event(recipientWrap)
         var sentCount = 0
-        if (recipientRelays.isNotEmpty()) {
-            for (url in recipientRelays) {
-                if (relayPool.sendToRelayOrEphemeral(url, recipientMsg, skipBadCheck = true)) sentCount++
-            }
-        } else {
-            sentCount += relayPool.sendToWriteRelays(recipientMsg)
+        for (url in recipientRelays) {
+            if (relayPool.sendToRelayOrEphemeral(url, recipientMsg, skipBadCheck = true)) sentCount++
         }
 
         if (sentCount == 0) return Result(0, null)
