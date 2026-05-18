@@ -99,6 +99,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -110,6 +111,8 @@ import kotlinx.coroutines.delay
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
@@ -214,6 +217,16 @@ fun ComposeScreen(
             countdownProgress = (elapsed.toFloat() / totalMs).coerceIn(0f, 1f)
             if (countdownProgress >= 1f) break
             delay(16)
+        }
+    }
+
+    // Scroll preview to top of viewport when countdown active and keyboard gone
+    val scrollState = rememberScrollState()
+    var previewTopOffsetPx by remember { mutableIntStateOf(0) }
+    LaunchedEffect(imeVisible, countdownSeconds) {
+        if (!imeVisible && countdownSeconds != null) {
+            val showPreview = content.text.isNotBlank() || (pollEnabled && pollOptions.any { it.isNotBlank() })
+            if (showPreview) scrollState.animateScrollTo(previewTopOffsetPx)
         }
     }
 
@@ -545,7 +558,7 @@ fun ComposeScreen(
                         .weight(1f)
                         .padding(horizontal = 16.dp)
                         .padding(top = 16.dp)
-                        .verticalScroll(rememberScrollState())
+                        .verticalScroll(scrollState)
                 ) {
                     // Reply context (expandable)
                     replyTo?.let {
@@ -1101,6 +1114,11 @@ fun ComposeScreen(
                             }
                         }
                     }
+
+                    // Anchor for scroll-to-preview (always in layout so position is always valid)
+                    Spacer(modifier = Modifier.onGloballyPositioned { coords ->
+                        previewTopOffsetPx = coords.positionInParent().y.toInt()
+                    })
 
                     // Live preview
                     AnimatedVisibility(
