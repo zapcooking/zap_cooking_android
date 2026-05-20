@@ -101,6 +101,12 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
     private val _countdownSeconds = MutableStateFlow<Int?>(null)
     val countdownSeconds: StateFlow<Int?> = _countdownSeconds
 
+    private val _countdownTotalSeconds = MutableStateFlow<Int>(10)
+    val countdownTotalSeconds: StateFlow<Int> = _countdownTotalSeconds
+
+    private val _countdownStartedAt = MutableStateFlow<Long?>(null)
+    val countdownStartedAt: StateFlow<Long?> = _countdownStartedAt
+
     private val _mentionQuery = MutableStateFlow<String?>(null)
     val mentionQuery: StateFlow<String?> = _mentionQuery
 
@@ -612,6 +618,8 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
             }
         }
         _countdownSeconds.value = seconds
+        _countdownTotalSeconds.value = seconds
+        _countdownStartedAt.value = System.currentTimeMillis()
         countdownJob = viewModelScope.launch {
             for (i in (seconds - 1) downTo 1) {
                 delay(1000)
@@ -619,6 +627,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
             }
             delay(1000)
             _countdownSeconds.value = null
+            _countdownStartedAt.value = null
             pendingPublish?.invoke()
             pendingPublish = null
         }
@@ -629,6 +638,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         countdownJob = null
         pendingPublish = null
         _countdownSeconds.value = null
+        _countdownStartedAt.value = null
         _publishing.value = false
     }
 
@@ -636,6 +646,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         countdownJob?.cancel()
         countdownJob = null
         _countdownSeconds.value = null
+        _countdownStartedAt.value = null
         pendingPublish?.invoke()
         pendingPublish = null
     }
