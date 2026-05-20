@@ -4,6 +4,8 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
@@ -12,8 +14,10 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.offset
@@ -34,6 +38,12 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.PersonRemove
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.Surface
 
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QrCodeScanner
@@ -53,6 +63,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Tab
@@ -189,13 +201,15 @@ fun UserProfileScreen(
     fetchGroupPreview: (suspend (String, String) -> com.wisp.app.repo.GroupPreview?)? = null,
     onAddEmojiSet: ((String, String) -> Unit)? = null,
     onRemoveEmojiSet: ((String, String) -> Unit)? = null,
-    isEmojiSetAdded: ((String, String) -> Boolean)? = null
+    isEmojiSetAdded: ((String, String) -> Boolean)? = null,
+    onMuteUser: (() -> Unit)? = null
 ) {
     val resolvedEmojisState = rememberUpdatedState(resolvedEmojis)
     val unicodeEmojisState = rememberUpdatedState(unicodeEmojis)
     val invoiceNoteActions = remember(onPayInvoice, onGroupRoom, onLiveStreamClick, fetchGroupPreview, onAddEmojiSet, onOpenEmojiLibrary) {
         if (onPayInvoice != null || onGroupRoom != null || fetchGroupPreview != null || onAddEmojiSet != null || onLiveStreamClick != null || onOpenEmojiLibrary != null) {
             com.wisp.app.ui.component.NoteActions(
+            onProfileClick = { pubkey -> onNavigateToProfile?.invoke(pubkey) },
             onPayInvoice = onPayInvoice,
             onGroupRoom = onGroupRoom,
             onLiveStreamClick = onLiveStreamClick,
@@ -374,26 +388,39 @@ fun UserProfileScreen(
     val groups by viewModel.groups.collectAsState()
     val groupsLoading by viewModel.groupsLoading.collectAsState()
 
+    // Dynamic tab list: Pair(contentId, title). contentId 8 = Conversation.
+    val showConversationTab = !isOwnProfile && userPubkey != null
+    val profileTabs: List<Pair<Int, String>> = buildList {
+        add(0 to stringResource(R.string.profile_tab_notes))
+        add(1 to stringResource(R.string.profile_tab_replies))
+        if (showConversationTab) add(8 to stringResource(R.string.profile_tab_conversation))
+        add(2 to stringResource(R.string.profile_tab_gallery))
+        add(3 to stringResource(R.string.profile_tab_media))
+        add(4 to stringResource(R.string.profile_tab_following))
+        add(5 to stringResource(R.string.profile_tab_followers))
+        add(6 to stringResource(R.string.profile_tab_groups))
+        add(7 to stringResource(R.string.profile_tab_relays))
+    }
+
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    val selectedTabId = profileTabs.getOrNull(selectedTab)?.first ?: 0
     var showSortDropdown by remember { mutableStateOf(false) }
 
-    if (selectedTab == 5) {
+    if (selectedTabId == 5) {
         LaunchedEffect(Unit) { viewModel.loadFollowers() }
+    }
+
+    // Conversation tab: profile replies that tag the current user
+    val conversationNotes = remember(replies, userPubkey, showConversationTab) {
+        if (!showConversationTab) emptyList()
+        else replies.filter { event ->
+            event.tags.any { tag -> tag.size >= 2 && tag[0] == "p" && tag[1] == userPubkey }
+        }
     }
 
     var blockedContentRevealed by remember { mutableStateOf(false) }
     var fullScreenMediaImageUrl by remember { mutableStateOf<String?>(null) }
     var fullScreenMediaVideoUrl by remember { mutableStateOf<String?>(null) }
-    val tabTitles = listOf(
-        stringResource(R.string.profile_tab_notes),
-        stringResource(R.string.profile_tab_replies),
-        stringResource(R.string.profile_tab_gallery),
-        stringResource(R.string.profile_tab_media),
-        stringResource(R.string.profile_tab_following),
-        stringResource(R.string.profile_tab_followers),
-        stringResource(R.string.profile_tab_groups),
-        stringResource(R.string.profile_tab_relays)
-    )
 
     if (fullScreenMediaImageUrl != null) {
         FullScreenImageViewer(
@@ -498,8 +525,8 @@ fun UserProfileScreen(
         }
     ) { padding ->
         val galleryPosts by viewModel.galleryPosts.collectAsState()
-        val mediaItems = remember(rootNotes.size, replies.size, selectedTab) {
-            if (selectedTab != 3) emptyList()
+        val mediaItems = remember(rootNotes.size, replies.size, selectedTabId) {
+            if (selectedTabId != 3) emptyList()
             else (rootNotes + replies)
                 .sortedByDescending { it.created_at }
                 .flatMap { event ->
@@ -519,7 +546,7 @@ fun UserProfileScreen(
         val listState = rememberLazyListState()
 
         // Auto-load more media when scrolling near the bottom of the grid
-        if (selectedTab == 3 && mediaItems.isNotEmpty()) {
+        if (selectedTabId == 3 && mediaItems.isNotEmpty()) {
             LaunchedEffect(listState) {
                 snapshotFlow {
                     val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
@@ -540,6 +567,55 @@ fun UserProfileScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
+            val showSort = selectedTabId == 0 || selectedTabId == 1
+            val currentSortMode = if (selectedTabId == 0) notesSortMode else repliesSortMode
+            val sortButtonContent: (@Composable RowScope.() -> Unit)? = if (showSort) {
+                {
+                    Box {
+                        Surface(
+                            onClick = { showSortDropdown = true },
+                            shape = RoundedCornerShape(20.dp),
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    stringResource(currentSortMode.labelResId),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Icon(
+                                    Icons.Default.ArrowDropDown,
+                                    contentDescription = "Sort",
+                                    modifier = Modifier.size(16.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                        DropdownMenu(
+                            expanded = showSortDropdown,
+                            onDismissRequest = { showSortDropdown = false }
+                        ) {
+                            ProfileSortMode.entries.forEach { mode ->
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(mode.labelResId)) },
+                                    onClick = {
+                                        showSortDropdown = false
+                                        if (selectedTabId == 0) viewModel.setNotesSortMode(mode)
+                                        else viewModel.setRepliesSortMode(mode)
+                                    },
+                                    trailingIcon = if (currentSortMode == mode) {{
+                                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    }} else null
+                                )
+                            }
+                        }
+                    }
+                }
+            } else null
+
             item {
                 @Suppress("UNUSED_EXPRESSION")
                 nip05Version
@@ -556,77 +632,82 @@ fun UserProfileScreen(
                     onSendDm = onSendDm,
                     onZapClick = if (onZapProfile != null) { { showProfileZapDialog = true } } else null,
                     followingCount = followList.size,
+                    followerCount = followers.size.takeIf { followers.isNotEmpty() },
                     followedBy = followedBy,
                     followsYou = !isOwnProfile && userPubkey != null && followList.any { it.pubkey == userPubkey },
-                    isBlocked = isBlocked
+                    isBlocked = isBlocked,
+                    onMuteUser = onMuteUser,
+                    onUnmuteUser = onUnblockUser,
+                    sortContent = sortButtonContent
                 )
             }
 
             stickyHeader {
-                ScrollableTabRow(
-                    selectedTabIndex = selectedTab,
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    edgePadding = 16.dp
-                ) {
-                    tabTitles.forEachIndexed { index, title ->
-                        Tab(
-                            selected = selectedTab == index,
-                            onClick = { selectedTab = index },
-                            text = { Text(title) }
-                        )
-                    }
-                }
-            }
-
-            if (selectedTab == 0 || selectedTab == 1) {
-                item {
-                    val currentSortMode = if (selectedTab == 0) notesSortMode else repliesSortMode
+                val surfaceColor = MaterialTheme.colorScheme.surface
+                Column {
                     Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(MaterialTheme.colorScheme.surface)
-                            .padding(vertical = 6.dp),
-                        contentAlignment = Alignment.Center
+                        modifier = Modifier.background(surfaceColor).drawWithContent {
+                            drawContent()
+                            drawRect(
+                                brush = androidx.compose.ui.graphics.Brush.horizontalGradient(
+                                    colors = listOf(
+                                        surfaceColor.copy(alpha = 0f),
+                                        surfaceColor
+                                    ),
+                                    startX = size.width - 48.dp.toPx(),
+                                    endX = size.width
+                                )
+                            )
+                        }
                     ) {
-                        Box {
-                            Surface(
-                                onClick = { showSortDropdown = true },
-                                shape = RoundedCornerShape(20.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(stringResource(currentSortMode.labelResId), style = MaterialTheme.typography.labelLarge)
-                                    Spacer(Modifier.width(2.dp))
-                                    Icon(Icons.Default.ArrowDropDown, contentDescription = "Sort", modifier = Modifier.size(16.dp))
+                        ScrollableTabRow(
+                            selectedTabIndex = selectedTab,
+                            containerColor = surfaceColor,
+                            edgePadding = 0.dp,
+                            divider = {},
+                            indicator = { tabPositions ->
+                                if (selectedTab < tabPositions.size) {
+                                    val pos = tabPositions[selectedTab]
+                                    Box(modifier = Modifier.fillMaxSize()) {
+                                        Box(
+                                            modifier = Modifier
+                                                .align(Alignment.BottomStart)
+                                                .offset(x = pos.left + 6.dp)
+                                                .width(pos.width - 12.dp)
+                                                .height(2.dp)
+                                                .background(
+                                                    MaterialTheme.colorScheme.primary,
+                                                    RoundedCornerShape(topStart = 2.dp, topEnd = 2.dp)
+                                                )
+                                        )
+                                    }
                                 }
                             }
-                            DropdownMenu(
-                                expanded = showSortDropdown,
-                                onDismissRequest = { showSortDropdown = false }
-                            ) {
-                                ProfileSortMode.entries.forEach { mode ->
-                                    DropdownMenuItem(
-                                        text = { Text(stringResource(mode.labelResId)) },
-                                        onClick = {
-                                            showSortDropdown = false
-                                            if (selectedTab == 0) viewModel.setNotesSortMode(mode)
-                                            else viewModel.setRepliesSortMode(mode)
-                                        },
-                                        trailingIcon = if (currentSortMode == mode) {{
-                                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
-                                        }} else null
+                        ) {
+                            profileTabs.forEachIndexed { index, (_, title) ->
+                                val selected = selectedTab == index
+                                Box(
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier
+                                        .height(34.dp)
+                                        .clickable { selectedTab = index }
+                                        .padding(horizontal = 10.dp)
+                                ) {
+                                    Text(
+                                        text = title,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = if (selected) MaterialTheme.colorScheme.primary
+                                                else MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                             }
                         }
                     }
+                    Spacer(Modifier.height(12.dp))
                 }
             }
 
-            when (selectedTab) {
+            when (selectedTabId) {
                 0 -> if (isBlocked && !blockedContentRevealed) {
                     item { BlockedContentOverlay(onReveal = { blockedContentRevealed = true }) }
                 } else {
@@ -772,6 +853,7 @@ fun UserProfileScreen(
                                 event = event,
                                 profile = if (repostPubkey != null) eventRepo?.getProfileData(event.pubkey) else profile,
                                 onReply = { onReply(event) },
+                                onProfileClick = { onNavigateToProfile?.invoke(event.pubkey) },
                                 onNavigateToProfile = onNavigateToProfile,
                                 onNoteClick = { onNoteClick(event) },
                                 onQuotedNoteClick = onQuotedNoteClick,
@@ -1013,6 +1095,55 @@ fun UserProfileScreen(
                         }
                     }
                 }
+                8 -> {
+                    if (conversationNotes.isEmpty()) {
+                        item { EmptyTabContent(stringResource(R.string.profile_no_conversation)) }
+                    } else {
+                        items(items = conversationNotes, key = { it.id }) { event ->
+                            val likeCount = reactionVersion.let { eventRepo?.getReactionCount(event.id) ?: 0 }
+                            val replyCount = replyCountVersion.let { eventRepo?.getReplyCount(event.id) ?: 0 }
+                            val repostCount = repostVersion.let { eventRepo?.getRepostCount(event.id) ?: 0 }
+                            val zapSats = zapVersion.let { eventRepo?.getZapSats(event.id) ?: 0L }
+                            val userEmojis = reactionVersion.let { userPubkey?.let { eventRepo?.getUserReactionEmojis(event.id, it) } ?: emptySet() }
+                            val hasUserReposted = eventRepo?.hasUserReposted(event.id) == true
+                            val hasUserZapped = zapVersion.let { eventRepo?.hasUserZapped(event.id) == true }
+                            val convTranslationState = remember(translationVersion, event.id) {
+                                translationRepo?.getState(event.id) ?: com.wisp.app.repo.TranslationState()
+                            }
+                            PostCard(
+                                event = event,
+                                profile = profile,
+                                onReply = { onReply(event) },
+                                onNavigateToProfile = onNavigateToProfile,
+                                onNoteClick = { onNoteClick(event) },
+                                onQuotedNoteClick = onQuotedNoteClick,
+                                onReact = { emoji -> onReact(event, emoji) },
+                                onRepost = { onRepost(event) },
+                                onQuote = { onQuote(event) },
+                                userReactionEmojis = userEmojis,
+                                hasUserReposted = hasUserReposted,
+                                onZap = { zapTargetEvent = event },
+                                hasUserZapped = hasUserZapped,
+                                likeCount = likeCount,
+                                replyCount = replyCount,
+                                repostCount = repostCount,
+                                zapSats = zapSats,
+                                isZapAnimating = event.id in zapAnimatingIds,
+                                isZapInProgress = event.id in zapInProgressIds,
+                                eventRepo = eventRepo,
+                                isOwnEvent = event.pubkey == userPubkey,
+                                nip05Repo = nip05Repo,
+                                translationState = convTranslationState,
+                                onTranslate = { translationRepo?.translate(event.id, event.content) },
+                                autoTranslate = autoTranslate,
+                                resolvedEmojis = resolvedEmojis,
+                                unicodeEmojis = unicodeEmojis,
+                                onOpenEmojiLibrary = onOpenEmojiLibrary,
+                                noteActions = invoiceNoteActions
+                            )
+                        }
+                    }
+                }
                 3 -> {
                     if (mediaItems.isEmpty()) {
                         item { EmptyTabContent(stringResource(R.string.profile_no_media)) }
@@ -1120,6 +1251,12 @@ fun UserProfileScreen(
     }
 }
 
+private fun formatFollowCount(count: Int): String = when {
+    count >= 1_000_000 -> "${count / 1_000_000}.${(count % 1_000_000) / 100_000}M"
+    count >= 1_000 -> "${count / 1_000}.${(count % 1_000) / 100}k"
+    else -> "$count"
+}
+
 @Composable
 private fun ProfileHeader(
     profile: ProfileData?,
@@ -1134,9 +1271,13 @@ private fun ProfileHeader(
     onSendDm: (() -> Unit)? = null,
     onZapClick: (() -> Unit)? = null,
     followingCount: Int = 0,
+    followerCount: Int? = null,
     followedBy: List<String> = emptyList(),
     followsYou: Boolean = false,
-    isBlocked: Boolean = false
+    isBlocked: Boolean = false,
+    onMuteUser: (() -> Unit)? = null,
+    onUnmuteUser: (() -> Unit)? = null,
+    sortContent: (@Composable RowScope.() -> Unit)? = null
 ) {
     var fullScreenImageUrl by remember { mutableStateOf<String?>(null) }
     val canSign = LocalCanSign.current
@@ -1185,44 +1326,91 @@ private fun ProfileHeader(
             )
             Spacer(Modifier.weight(1f))
             if (canSign && isOwnProfile) {
-                OutlinedButton(onClick = onEditProfile) {
-                    Text(stringResource(R.string.profile_edit))
+                androidx.compose.material3.Button(
+                    onClick = onEditProfile,
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    ),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                ) {
+                    Text(stringResource(R.string.profile_edit), style = MaterialTheme.typography.labelMedium)
                 }
             } else if (canSign) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     if (onSendDm != null) {
-                        IconButton(onClick = onSendDm) {
+                        Surface(
+                            onClick = onSendDm,
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier.size(40.dp)
+                        ) {
                             Icon(
                                 Icons.AutoMirrored.Filled.Send,
                                 contentDescription = stringResource(R.string.profile_send_message),
-                                tint = MaterialTheme.colorScheme.primary
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(10.dp)
                             )
                         }
                     }
                     if (profile?.lud16 != null && onZapClick != null) {
                         val useZapBolt = com.wisp.app.ui.util.useBoltIcon()
-                        IconButton(onClick = onZapClick) {
+                        Surface(
+                            onClick = onZapClick,
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier.size(40.dp)
+                        ) {
                             if (useZapBolt) {
                                 Icon(
                                     painter = painterResource(R.drawable.ic_bolt),
                                     contentDescription = "Zap",
                                     tint = Color(0xFFFFC107),
-                                    modifier = Modifier.size(22.dp)
+                                    modifier = Modifier.padding(11.dp)
                                 )
                             } else {
                                 Icon(
                                     Icons.Outlined.CurrencyBitcoin,
                                     contentDescription = "Zap",
                                     tint = Color(0xFFFFC107),
-                                    modifier = Modifier.size(22.dp)
+                                    modifier = Modifier.padding(10.dp)
                                 )
                             }
                         }
                     }
-                    FollowButton(
-                        isFollowing = isFollowing,
-                        onClick = onToggleFollow
-                    )
+                    // Follow circle button
+                    Surface(
+                        onClick = onToggleFollow,
+                        shape = CircleShape,
+                        color = if (isFollowing) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isFollowing) Icons.Default.PersonRemove else Icons.Default.PersonAdd,
+                            contentDescription = if (isFollowing) "Unfollow" else "Follow",
+                            tint = if (isFollowing) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.padding(9.dp)
+                        )
+                    }
+                    // Mute circle button
+                    if (onMuteUser != null || onUnmuteUser != null) {
+                        Surface(
+                            onClick = { if (isBlocked) onUnmuteUser?.invoke() else onMuteUser?.invoke() },
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isBlocked) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
+                                contentDescription = if (isBlocked) "Unmute" else "Mute",
+                                tint = if (isBlocked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(9.dp)
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -1256,24 +1444,65 @@ private fun ProfileHeader(
                 nip05 = nip05,
                 pubkey = pubkey,
                 nip05Repo = nip05Repo,
-                verifiedTint = Color(0xFFFF8C00)
+                verifiedTint = Color(0xFFFF8C00),
+                iconLeading = true
             )
         }
 
         profile?.about?.let { about ->
-            val emojiMap = remember(pubkey) { Nip30.parseEmojiTags(emptyList()) } // Profiles use inline or alternate tags usually not available here easily without event
+            val emojiMap = remember(pubkey) { Nip30.parseEmojiTags(emptyList()) }
             val imetaMap = remember(pubkey) { parseImetaTags(emptyList()) }
+            val bioIsLong = remember(about) { about.length > 180 || about.contains('\n') }
+            var bioExpanded by remember(pubkey) { mutableStateOf(false) }
             Spacer(Modifier.height(8.dp))
-            RichContent(
-                content = about,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                plainLinks = true,
-                emojiMap = emojiMap,
-                imetaMap = imetaMap,
-                eventRepo = eventRepo,
-                onProfileClick = onNavigateToProfile
-            )
+            if (bioIsLong && !bioExpanded) {
+                // Clip to ~5 lines of bodyMedium; RichContent renders mentions/hashtags correctly
+                Box(modifier = Modifier.heightIn(max = 100.dp).clipToBounds()) {
+                    RichContent(
+                        content = about,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        plainLinks = true,
+                        emojiMap = emojiMap,
+                        imetaMap = imetaMap,
+                        eventRepo = eventRepo,
+                        onProfileClick = onNavigateToProfile
+                    )
+                }
+                androidx.compose.material3.TextButton(
+                    onClick = { bioExpanded = true },
+                    contentPadding = PaddingValues(horizontal = 0.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        "Read more",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            } else {
+                RichContent(
+                    content = about,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    plainLinks = true,
+                    emojiMap = emojiMap,
+                    imetaMap = imetaMap,
+                    eventRepo = eventRepo,
+                    onProfileClick = onNavigateToProfile
+                )
+                if (bioIsLong) {
+                    androidx.compose.material3.TextButton(
+                        onClick = { bioExpanded = false },
+                        contentPadding = PaddingValues(horizontal = 0.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            "Show less",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
         }
 
         profile?.lud16?.let { lightning ->
@@ -1312,39 +1541,40 @@ private fun ProfileHeader(
             }
         }
 
-        // Following / Followers in your network counts
-        if (followingCount > 0 || followedBy.isNotEmpty()) {
-            Spacer(Modifier.height(10.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (followingCount > 0) {
-                    Text(
-                        text = "$followingCount",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Spacer(Modifier.width(3.dp))
-                    Text(
-                        text = "Following",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                if (followingCount > 0 && followedBy.isNotEmpty()) {
-                    Spacer(Modifier.width(16.dp))
-                }
-                if (followedBy.isNotEmpty()) {
-                    Text(
-                        text = "${followedBy.size}",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Spacer(Modifier.width(3.dp))
-                    Text(
-                        text = "Followers in your network",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+        // Following / Followers counts row — sort button sits on the right
+        Spacer(Modifier.height(10.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            if (followingCount > 0) {
+                Text(
+                    text = formatFollowCount(followingCount),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(Modifier.width(3.dp))
+                Text(
+                    text = "Following",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.width(16.dp))
+            }
+            Text(
+                text = if (followerCount != null) formatFollowCount(followerCount) else "∞",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(Modifier.width(3.dp))
+            Text(
+                text = "Followers",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (sortContent != null) {
+                Spacer(Modifier.weight(1f))
+                sortContent()
             }
         }
 
@@ -1379,7 +1609,7 @@ private fun ProfileHeader(
             }
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(8.dp))
     }
 }
 

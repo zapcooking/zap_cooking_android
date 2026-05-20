@@ -1067,7 +1067,7 @@ fun QuotedNote(
     // Cap nesting: depth >= 1 means we're already inside a quoted note,
     // so force compact preview to avoid squashed action bars
     val effectiveActions = if (quoteDepth >= 1) null else noteActions
-    val effectiveNoteClick = effectiveActions?.onNoteClick ?: noteActions?.onNoteClick ?: onNoteClick
+    val effectiveNoteClick = onNoteClick ?: effectiveActions?.onNoteClick ?: noteActions?.onNoteClick
 
     // Fetch poll votes when quoted event is a poll
     LaunchedEffect(event?.id, event?.kind) {
@@ -1130,6 +1130,10 @@ fun QuotedNote(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(vertical = 6.dp)
+                .then(
+                    if (effectiveNoteClick != null) Modifier.clickable { effectiveNoteClick(eventId) }
+                    else Modifier
+                )
         ) {
             if (isGalleryEvent(event)) {
                 GalleryCard(
@@ -1178,7 +1182,7 @@ fun QuotedNote(
                     onReply = { effectiveActions.onReply(event) },
                     onProfileClick = { effectiveActions.onProfileClick(event.pubkey) },
                     onNavigateToProfile = effectiveActions.onProfileClick,
-                    onNoteClick = { effectiveNoteClick?.invoke(eventId) },
+                    onNoteClick = null,
                     onReact = { emoji -> effectiveActions.onReact(event, emoji) },
                     userReactionEmojis = userEmojis,
                     onRepost = { effectiveActions.onRepost(event) },

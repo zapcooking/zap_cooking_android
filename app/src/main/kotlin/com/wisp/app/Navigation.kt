@@ -1215,7 +1215,8 @@ fun WispNavHost(
                 isEmojiSetAdded = { pk, dTag ->
                     val ref = com.wisp.app.nostr.Nip30.buildSetReference(pk, dTag)
                     feedViewModel.customEmojiRepo.userEmojiList.value?.setReferences?.contains(ref) ?: false
-                }
+                },
+                onMuteUser = if (!isOwnProfile) { { feedViewModel.blockUser(pubkey) } } else null
             )
             if (showProfileEmojiLibrary) {
                 com.wisp.app.ui.component.EmojiLibrarySheet(

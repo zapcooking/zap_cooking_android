@@ -10,6 +10,9 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -118,7 +121,7 @@ fun PostCard(
     onReply: () -> Unit,
     onProfileClick: () -> Unit = {},
     onNavigateToProfile: ((String) -> Unit)? = null,
-    onNoteClick: () -> Unit = {},
+    onNoteClick: (() -> Unit)? = null,
     onReact: (String) -> Unit = {},
     userReactionEmojis: Set<String> = emptySet(),
     onRepost: () -> Unit = {},
@@ -230,7 +233,20 @@ fun PostCard(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .clickable(onClick = onNoteClick)
+            .then(if (onNoteClick != null) Modifier.pointerInput(onNoteClick) {
+                awaitEachGesture {
+                    // Observe DOWN without consuming so children can still process it
+                    val downEvent = awaitPointerEvent(PointerEventPass.Initial)
+                    if (downEvent.changes.none { it.pressed && !it.previousPressed }) return@awaitEachGesture
+                    // Wait for UP in Final pass — after all children have had a chance to consume
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Final)
+                        val change = event.changes.firstOrNull() ?: return@awaitEachGesture
+                        if (change.isConsumed) return@awaitEachGesture // child handled it
+                        if (!change.pressed) { onNoteClick(); return@awaitEachGesture }
+                    }
+                }
+            } else Modifier)
             .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
         if (repostPubkeys.isNotEmpty()) {
@@ -1302,6 +1318,7 @@ internal fun Nip05Badge(
     onClick: (() -> Unit)? = null,
     maxLines: Int = 1,
     verifiedTint: Color = MaterialTheme.colorScheme.primary,
+    iconLeading: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     if (nip05.isBlank()) return
@@ -1330,6 +1347,33 @@ internal fun Nip05Badge(
             }
         )
     ) {
+        if (iconLeading) {
+            if (status == Nip05Status.VERIFIED) {
+                Icon(
+                    Icons.Default.CheckCircle,
+                    contentDescription = "Verified",
+                    tint = verifiedTint,
+                    modifier = Modifier.size(14.dp)
+                )
+                Spacer(Modifier.width(4.dp))
+            } else if (isImpersonator) {
+                Icon(
+                    Icons.Default.Cancel,
+                    contentDescription = "Impersonator",
+                    tint = Color.Red,
+                    modifier = Modifier.size(14.dp)
+                )
+                Spacer(Modifier.width(4.dp))
+            } else if (isError) {
+                Icon(
+                    Icons.Default.Refresh,
+                    contentDescription = "Retry verification",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.size(14.dp)
+                )
+                Spacer(Modifier.width(4.dp))
+            }
+        }
         Text(
             text = Nip05.formatForDisplay(nip05),
             style = MaterialTheme.typography.bodySmall,
@@ -1338,32 +1382,34 @@ internal fun Nip05Badge(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f, fill = false)
         )
-        if (status == Nip05Status.VERIFIED) {
-            Spacer(Modifier.width(4.dp))
-            Icon(
-                Icons.Default.CheckCircle,
-                contentDescription = "Verified",
-                tint = verifiedTint,
-                modifier = Modifier.size(14.dp)
-            )
-        }
-        if (isImpersonator) {
-            Spacer(Modifier.width(4.dp))
-            Icon(
-                Icons.Default.Cancel,
-                contentDescription = "Impersonator",
-                tint = Color.Red,
-                modifier = Modifier.size(14.dp)
-            )
-        }
-        if (isError) {
-            Spacer(Modifier.width(4.dp))
-            Icon(
-                Icons.Default.Refresh,
-                contentDescription = "Retry verification",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                modifier = Modifier.size(14.dp)
-            )
+        if (!iconLeading) {
+            if (status == Nip05Status.VERIFIED) {
+                Spacer(Modifier.width(4.dp))
+                Icon(
+                    Icons.Default.CheckCircle,
+                    contentDescription = "Verified",
+                    tint = verifiedTint,
+                    modifier = Modifier.size(14.dp)
+                )
+            }
+            if (isImpersonator) {
+                Spacer(Modifier.width(4.dp))
+                Icon(
+                    Icons.Default.Cancel,
+                    contentDescription = "Impersonator",
+                    tint = Color.Red,
+                    modifier = Modifier.size(14.dp)
+                )
+            }
+            if (isError) {
+                Spacer(Modifier.width(4.dp))
+                Icon(
+                    Icons.Default.Refresh,
+                    contentDescription = "Retry verification",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.size(14.dp)
+                )
+            }
         }
     }
 }

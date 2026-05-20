@@ -572,6 +572,7 @@
     <string name="safety_wot_compute_now">Compute now</string>
     <string name="safety_wot_recompute">Recompute</string>
     <string name="safety_wot_inactive">Filter is inactive until graph is computed</string>
+    <string name="thread_no_replies">No replies yet</string>
     <string name="thread_hidden_spam">%d hidden replies from likely spam accounts</string>
     <string name="thread_tap_to_show">Show</string>
     <string name="thread_tap_to_hide">Hide</string>
@@ -656,6 +657,7 @@
     <!-- Profile -->
     <string name="profile_tab_notes">Notes</string>
     <string name="profile_tab_replies">Replies</string>
+    <string name="profile_tab_conversation">Conversation</string>
     <string name="profile_tab_gallery">Gallery</string>
     <string name="profile_tab_media">Media</string>
     <string name="profile_tab_following">Following</string>
@@ -675,6 +677,7 @@
     <string name="profile_unblock">Unblock</string>
     <string name="profile_no_notes">No notes yet</string>
     <string name="profile_no_replies">No replies yet</string>
+    <string name="profile_no_conversation">No shared threads yet</string>
     <string name="profile_no_gallery">No gallery posts yet</string>
     <string name="profile_no_media">No media yet</string>
     <string name="profile_not_following">Not following anyone</string>

@@ -50,6 +50,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import android.widget.Toast
@@ -401,6 +403,32 @@ fun ThreadScreen(
                                     userZapPollVote = userZapPollVote,
                                     onZapPollVote = { idx -> onZapPollVote(event.id, idx) },
                                     modifier = Modifier.padding(start = (clampedDepth * indentDp).dp)
+                                )
+                            }
+                        }
+                    }
+
+                    // Show "no replies" state when loading is done and only the root exists
+                    val hasReplies = flatThread.any { (_, depth) -> depth > 0 }
+                    if (!isLoading && flatThread.isNotEmpty() && !hasReplies && spamThread.isEmpty()) {
+                        item(key = "no_replies") {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = androidx.compose.ui.Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 32.dp)
+                            ) {
+                                androidx.compose.foundation.Image(
+                                    painter = painterResource(R.drawable.ic_no_replies),
+                                    contentDescription = null,
+                                    modifier = androidx.compose.ui.Modifier.size(72.dp),
+                                    colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f))
+                                )
+                                Text(
+                                    stringResource(R.string.thread_no_replies),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f)
                                 )
                             }
                         }
