@@ -45,6 +45,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -80,6 +81,7 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.QrCode
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.filled.Receipt
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -95,6 +97,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
@@ -587,85 +590,162 @@ private fun WalletConnectionContent(
     onDisconnect: () -> Unit
 ) {
     val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
     val isConnecting = walletState is WalletState.Connecting
+    var showScanner by remember { mutableStateOf(false) }
 
+    // iOS 1:1 layout — centered NWC logo + title + subtitle, paste/scan
+    // card, helper text, full-width Connect button. The Recommended
+    // wallets stack is removed: NWC ecosystem links live on a separate
+    // discovery surface; this screen is purely "paste your string and
+    // connect."
+    val accent = WispThemeColors.zapColor
+    Spacer(Modifier.height(24.dp))
+
+    Box(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center
+    ) {
+        Image(
+            painter = painterResource(R.drawable.ic_nwc_logo),
+            contentDescription = null,
+            modifier = Modifier.height(56.dp)
+        )
+    }
     Spacer(Modifier.height(16.dp))
-
     Text(
         stringResource(R.string.wallet_nwc_title),
-        style = MaterialTheme.typography.headlineSmall,
-        color = MaterialTheme.colorScheme.onSurface
+        style = MaterialTheme.typography.titleLarge,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.onSurface,
+        textAlign = TextAlign.Center,
+        modifier = Modifier.fillMaxWidth()
     )
     Spacer(Modifier.height(8.dp))
     Text(
-        stringResource(R.string.wallet_connect_lightning),
+        stringResource(R.string.wallet_nwc_paste_prompt),
         style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
     )
 
     Spacer(Modifier.height(24.dp))
 
-    Text(
-        stringResource(R.string.wallet_recommended),
-        style = MaterialTheme.typography.titleMedium,
-        color = MaterialTheme.colorScheme.onSurface
-    )
-    Spacer(Modifier.height(12.dp))
-
-    val wallets = listOf(
-        "rizful.com" to "Rizful",
-        "coinos.io" to "Coinos",
-        "getalby.com" to "Alby",
-        "cashu.me" to "Cashu.me",
-        "minibits.cash" to "Minibits"
-    )
-
-    wallets.forEach { (domain, name) ->
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 4.dp)
-                .clickable {
-                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://$domain"))
-                    context.startActivity(intent)
-                },
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant
-            )
-        ) {
+    // Paste / Scan card — top half displays the pasted string (or
+    // stays empty while the user hasn't pasted anything); bottom row
+    // splits a Paste button and a Scan QR button with a vertical
+    // divider. Matches iOS 1:1 — no separate text field, no trailing
+    // icon, no Recommended-wallets stack.
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(140.dp)
+                    .padding(14.dp)
+            ) {
+                if (connectionString.isBlank()) {
+                    Text(
+                        "nostr+walletconnect://…",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+                    )
+                } else {
+                    Text(
+                        connectionString,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 6,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(12.dp),
+                    .height(IntrinsicSize.Min),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                AsyncImage(
-                    model = "https://$domain/favicon.ico",
-                    contentDescription = name,
-                    modifier = Modifier.size(24.dp)
-                )
-                Spacer(Modifier.width(12.dp))
-                Text(
-                    name,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable(enabled = !isConnecting) {
+                            val pasted = clipboardManager.getText()?.text.orEmpty()
+                            if (pasted.isNotBlank()
+                                && !NsecPasteGuard.blockIfNsec(connectionString, pasted)
+                            ) {
+                                onConnectionStringChange(pasted.trim())
+                            }
+                        }
+                        .padding(vertical = 14.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Default.ContentPaste,
+                        contentDescription = null,
+                        tint = accent,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        stringResource(R.string.wallet_paste),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = accent
+                    )
+                }
+                VerticalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable(enabled = !isConnecting) { showScanner = true }
+                        .padding(vertical = 14.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Default.QrCode,
+                        contentDescription = null,
+                        tint = accent,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        stringResource(R.string.wallet_scan_qr),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = accent
+                    )
+                }
             }
         }
     }
 
-    Spacer(Modifier.height(24.dp))
-
-    OutlinedTextField(
-        value = connectionString,
-        onValueChange = { new -> if (!NsecPasteGuard.blockIfNsec(connectionString, new)) onConnectionStringChange(new) },
-        label = { Text(stringResource(R.string.wallet_nwc_connection_string)) },
-        placeholder = { Text("nostr+walletconnect://...") },
-        modifier = Modifier.fillMaxWidth(),
-        singleLine = false,
-        maxLines = 3,
-        enabled = !isConnecting
-    )
+    Spacer(Modifier.height(12.dp))
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Icon(
+            Icons.Outlined.Info,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(14.dp)
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            stringResource(R.string.wallet_nwc_connection_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
 
     if (walletState is WalletState.Error) {
         Spacer(Modifier.height(8.dp))
@@ -676,11 +756,14 @@ private fun WalletConnectionContent(
         )
     }
 
-    Spacer(Modifier.height(16.dp))
+    Spacer(Modifier.height(20.dp))
 
     Button(
         onClick = onConnect,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(52.dp),
+        shape = RoundedCornerShape(14.dp),
         enabled = connectionString.isNotBlank() && !isConnecting
     ) {
         if (isConnecting) {
@@ -720,6 +803,47 @@ private fun WalletConnectionContent(
     }
 
     Spacer(Modifier.height(32.dp))
+
+    if (showScanner) {
+        // Reuses the existing QrScanner dialog pattern from the send-
+        // payment flow. Successful scan populates the connection
+        // string field directly; user can then tap Connect.
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = { showScanner = false }
+        ) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surface,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        stringResource(R.string.wallet_scan_qr_code),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    com.wisp.app.ui.component.QrScanner(
+                        onResult = { value ->
+                            showScanner = false
+                            onConnectionStringChange(value.trim())
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(320.dp),
+                        promptText = stringResource(R.string.wallet_point_camera)
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    TextButton(onClick = { showScanner = false }) {
+                        Text(stringResource(R.string.btn_cancel))
+                    }
+                }
+            }
+        }
+    }
 }
 
 // --- Home screen ---
