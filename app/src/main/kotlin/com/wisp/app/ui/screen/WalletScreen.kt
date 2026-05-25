@@ -145,6 +145,7 @@ import com.google.zxing.qrcode.QRCodeWriter
 import com.wisp.app.BuildConfig
 import com.wisp.app.R
 import com.wisp.app.repo.BalanceUnit
+import com.wisp.app.repo.WalletBalanceDisplayMode
 import com.wisp.app.repo.FiatPreferences
 import com.wisp.app.repo.WalletMode
 import com.wisp.app.repo.WalletTransaction
@@ -348,6 +349,7 @@ fun WalletScreen(
                             recentTransactions = viewModel.transactions.collectAsState().value,
                             profileLookup = remember(profileKey) { { viewModel.getProfileData(it) } },
                             nwcNodeAlias = viewModel.nwcNodeAlias.collectAsState().value,
+                            pubkey = viewModel.keyRepo.getPubkeyHex(),
                             modifier = Modifier.padding(padding)
                         )
                     }
@@ -453,6 +455,7 @@ fun WalletScreen(
                             onLoadMore = { viewModel.loadMoreTransactions() },
                             profileLookup = { viewModel.getProfileData(it) },
                             profileRefreshKey = profileKey,
+                            pubkey = viewModel.keyRepo.getPubkeyHex(),
                             modifier = Modifier.padding(padding)
                         )
                     }
@@ -566,6 +569,7 @@ fun WalletScreen(
                             recentTransactions = viewModel.transactions.collectAsState().value,
                             profileLookup = remember(profileKey) { { viewModel.getProfileData(it) } },
                             nwcNodeAlias = viewModel.nwcNodeAlias.collectAsState().value,
+                            pubkey = viewModel.keyRepo.getPubkeyHex(),
                             modifier = Modifier.padding(padding)
                         )
                     }
@@ -745,15 +749,23 @@ private fun WalletHomeContent(
     recentTransactions: List<WalletTransaction> = emptyList(),
     profileLookup: (String) -> com.wisp.app.nostr.ProfileData? = { null },
     nwcNodeAlias: String? = null,
+    pubkey: String? = null,
     modifier: Modifier = Modifier
 ) {
     val balanceSats = balanceMsats / 1000
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("wisp_settings", android.content.Context.MODE_PRIVATE) }
-    var balanceHidden by remember { mutableStateOf(prefs.getBoolean("balance_hidden", false)) }
+    // Tri-state balance display (sats / fiat / hidden) — tap the
+    // dashboard balance to cycle. Per-pubkey storage; migrates the
+    // legacy global `balance_hidden` Bool on first read for a given
+    // pubkey. iOS port of feat/wallet-balance-toggle (wisp-ios #166).
+    var balanceDisplay by remember(pubkey) {
+        mutableStateOf(WalletBalanceDisplayMode.read(prefs, pubkey))
+    }
+    val balanceHidden = balanceDisplay == WalletBalanceDisplayMode.HIDDEN
     val fiatPrefs = remember { FiatPreferences.get(context) }
     val fiatMode by fiatPrefs.fiatMode.collectAsState()
-    @Suppress("unused_variable") val fiatCurrency by fiatPrefs.currency.collectAsState()
+    val fiatCurrency by fiatPrefs.currency.collectAsState()
     val clipboard = remember { context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager }
     val accent = WispThemeColors.zapColor
 
@@ -965,46 +977,85 @@ private fun WalletHomeContent(
         Spacer(Modifier.weight(1f))
 
         // ── Balance ─────────────────────────────────────────────────
+        // Tap to cycle sats → fiat → hidden. `fiat` is wallet-screen-
+        // scoped: it renders the balance in the user's currently-set
+        // fiat currency but does NOT flip the app-wide
+        // [FiatPreferences.isFiatMode] flag (still respected by feed
+        // counts / timestamps elsewhere).
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.clickable {
-                balanceHidden = !balanceHidden
-                prefs.edit().putBoolean("balance_hidden", balanceHidden).apply()
+                balanceDisplay = balanceDisplay.next()
+                WalletBalanceDisplayMode.write(prefs, pubkey, balanceDisplay)
             }
         ) {
-            if (balanceHidden) {
-                Text(
-                    "* * * * *",
-                    style = MaterialTheme.typography.displayLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    stringResource(R.string.wallet_tap_to_reveal),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            } else {
-                if (fiatMode) {
+            when (balanceDisplay) {
+                WalletBalanceDisplayMode.HIDDEN -> {
                     Text(
-                        AmountFormatter.formatShort(balanceSats, context),
+                        "* * * * *",
                         style = MaterialTheme.typography.displayLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                } else {
-                    Text(
-                        "%,d".format(balanceSats),
-                        style = MaterialTheme.typography.displayLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        stringResource(R.string.wallet_sats),
-                        style = MaterialTheme.typography.bodyMedium,
+                        stringResource(R.string.wallet_tap_to_reveal),
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
+                WalletBalanceDisplayMode.FIAT -> {
+                    val fiat = AmountFormatter.formatFiat(balanceSats, fiatCurrency)
+                    if (fiat != null) {
+                        Text(
+                            fiat,
+                            style = MaterialTheme.typography.displayLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    } else {
+                        // Exchange-rate cache hasn't loaded yet — fall
+                        // back to the sats display so the dashboard
+                        // doesn't show a blank or a placeholder.
+                        Text(
+                            "%,d".format(balanceSats),
+                            style = MaterialTheme.typography.displayLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            stringResource(R.string.wallet_sats),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                WalletBalanceDisplayMode.SATS -> {
+                    // App-wide fiat mode still wins when the user has
+                    // it on AND the wallet display is in its default
+                    // (sats) state — same behaviour as before this
+                    // tri-state landed.
+                    if (fiatMode) {
+                        Text(
+                            AmountFormatter.formatShort(balanceSats, context),
+                            style = MaterialTheme.typography.displayLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    } else {
+                        Text(
+                            "%,d".format(balanceSats),
+                            style = MaterialTheme.typography.displayLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            stringResource(R.string.wallet_sats),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
         }
@@ -1144,7 +1195,7 @@ private fun WalletHomeContent(
                     color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
                 )
                 recentTransactions.take(1).forEach { tx ->
-                    TransactionRow(tx, profileLookup)
+                    TransactionRow(tx, profileLookup, balanceDisplay)
                 }
             }
         } else {
@@ -2045,8 +2096,16 @@ private fun TransactionHistoryContent(
     onLoadMore: () -> Unit = {},
     profileLookup: (String) -> com.wisp.app.nostr.ProfileData?,
     profileRefreshKey: Int = 0,
+    pubkey: String? = null,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("wisp_settings", android.content.Context.MODE_PRIVATE) }
+    // Mirror the dashboard's tri-state display mode on tx rows so a
+    // HIDDEN state masks both the dashboard balance AND every per-row
+    // amount + fee. iOS port keeps these in lockstep via the same
+    // per-pubkey storage key (`walletBalanceDisplay_<pubkey>`).
+    val displayMode = remember(pubkey) { WalletBalanceDisplayMode.read(prefs, pubkey) }
     Column(
         modifier = modifier.fillMaxSize()
     ) {
@@ -2101,7 +2160,7 @@ private fun TransactionHistoryContent(
             else -> {
                 LazyColumn {
                     items(transactions) { tx ->
-                        TransactionRow(tx, profileLookup)
+                        TransactionRow(tx, profileLookup, displayMode)
                         HorizontalDivider(
                             modifier = Modifier.padding(horizontal = 16.dp),
                             color = MaterialTheme.colorScheme.outlineVariant
@@ -2137,13 +2196,17 @@ private fun TransactionHistoryContent(
 @Composable
 private fun TransactionRow(
     tx: WalletTransaction,
-    profileLookup: (String) -> com.wisp.app.nostr.ProfileData?
+    profileLookup: (String) -> com.wisp.app.nostr.ProfileData?,
+    displayMode: WalletBalanceDisplayMode = WalletBalanceDisplayMode.SATS
 ) {
     val isIncoming = tx.type == "incoming"
     val amountSats = tx.amountMsats / 1000
     val profile = tx.counterpartyPubkey?.let { profileLookup(it) }
     val ctx = LocalContext.current
     val fiatMode by FiatPreferences.get(ctx).fiatMode.collectAsState()
+    val fiatCurrency by FiatPreferences.get(ctx).currency.collectAsState()
+    val isHidden = displayMode == WalletBalanceDisplayMode.HIDDEN
+    val isWalletFiat = displayMode == WalletBalanceDisplayMode.FIAT
 
     Row(
         modifier = Modifier
@@ -2207,35 +2270,76 @@ private fun TransactionRow(
             )
         }
 
-        // Amount + fee
+        // Amount + fee. In HIDDEN mode every number is masked so a
+        // "show my wallet without showing the numbers" screenshot
+        // works. Wallet-screen FIAT mode renders amounts in the user's
+        // selected fiat currency without flipping the app-wide flag.
         Column(horizontalAlignment = Alignment.End) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 val sign = if (isIncoming) "+" else "-"
-                if (fiatMode) {
-                    Text(
+                val signColor = if (isIncoming) Color(0xFF2E7D32) else MaterialTheme.colorScheme.error
+                when {
+                    isHidden -> Text(
+                        "$sign* * *",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = signColor
+                    )
+                    isWalletFiat -> {
+                        val fiat = AmountFormatter.formatFiat(amountSats, fiatCurrency)
+                        if (fiat != null) {
+                            Text(
+                                "$sign$fiat",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = signColor
+                            )
+                        } else {
+                            Text(
+                                "$sign%,d".format(amountSats),
+                                style = MaterialTheme.typography.titleMedium,
+                                color = signColor
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                stringResource(R.string.wallet_sats),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    fiatMode -> Text(
                         "$sign${AmountFormatter.formatFull(amountSats, ctx)}",
                         style = MaterialTheme.typography.titleMedium,
-                        color = if (isIncoming) Color(0xFF2E7D32) else MaterialTheme.colorScheme.error
+                        color = signColor
                     )
-                } else {
-                    Text(
-                        "$sign%,d".format(amountSats),
-                        style = MaterialTheme.typography.titleMedium,
-                        color = if (isIncoming) Color(0xFF2E7D32) else MaterialTheme.colorScheme.error
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        stringResource(R.string.wallet_sats),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    else -> {
+                        Text(
+                            "$sign%,d".format(amountSats),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = signColor
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            stringResource(R.string.wallet_sats),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
             if (!isIncoming && tx.feeMsats > 0) {
                 val feeSats = tx.feeMsats / 1000
+                val feeText = when {
+                    isHidden -> stringResource(R.string.wallet_fee, 0).replace("0", "***")
+                    isWalletFiat -> {
+                        val fiat = AmountFormatter.formatFiat(feeSats, fiatCurrency)
+                        if (fiat != null) stringResource(R.string.wallet_fee_money, fiat)
+                        else stringResource(R.string.wallet_fee, feeSats)
+                    }
+                    fiatMode -> stringResource(R.string.wallet_fee_money, AmountFormatter.formatFull(feeSats, ctx))
+                    else -> stringResource(R.string.wallet_fee, feeSats)
+                }
                 Text(
-                    if (fiatMode) stringResource(R.string.wallet_fee_money, AmountFormatter.formatFull(feeSats, ctx))
-                    else stringResource(R.string.wallet_fee, feeSats),
+                    feeText,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
