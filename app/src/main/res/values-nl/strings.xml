@@ -59,7 +59,7 @@
     <string name="auth_log_in">Inloggen</string>
     <string name="auth_or_log_in_with_key">Of log in met je sleutel</string>
     <string name="auth_nsec_or_npub">nsec of npub…</string>
-    <string name="auth_wisp">wisp</string>
+    <string name="auth_wisp">Zap Cooking</string>
     <string name="auth_tagline">een kleine interface om door posts te scrollen</string>
     <string name="auth_hide_key">Sleutel verbergen</string>
     <string name="auth_show_key">Sleutel tonen</string>

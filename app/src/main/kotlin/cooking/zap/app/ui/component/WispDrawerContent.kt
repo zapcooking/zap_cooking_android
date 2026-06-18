@@ -636,7 +636,7 @@ fun WispDrawerContent(
             )
             Spacer(Modifier.width(6.dp))
             Text(
-                text = "wisp v$versionName",
+                text = "Zap Cooking v$versionName",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
             )

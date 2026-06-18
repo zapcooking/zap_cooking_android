@@ -93,7 +93,7 @@ fun OnboardingFirstPostScreen(
             }
             Spacer(Modifier.height(8.dp))
             Text(
-                text = "Post a short introduction with the #introductions hashtag — a few words about you and how you found wisp is plenty.",
+                text = "Post a short introduction with the #introductions hashtag — a few words about you and how you found Zap Cooking is plenty.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

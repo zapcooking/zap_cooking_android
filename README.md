@@ -177,7 +177,7 @@ Zap Cooking follows an MVVM architecture with clear layer separation:
 ### Project Structure
 
 ```
-app/src/main/kotlin/com/wisp/app/
+app/src/main/kotlin/cooking/zap/app/
 ├── nostr/          # Protocol implementations (NipXX.kt objects)
 ├── relay/          # WebSocket relay, pool, outbox router, scoring
 ├── repo/           # Data repositories, caches, and persistence wrappers

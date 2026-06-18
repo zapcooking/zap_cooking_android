@@ -152,7 +152,7 @@ fun SplashScreen(
                 .align(Alignment.BottomCenter)
                 .padding(bottom = 48.dp, start = 32.dp, end = 32.dp)
         ) {
-            val wispTransition = rememberInfiniteTransition(label = "wisp")
+            val wispTransition = rememberInfiniteTransition(label = "zapCooking")
             val bob by wispTransition.animateFloat(
                 initialValue = 0f,
                 targetValue = -8f,
@@ -196,7 +196,7 @@ fun SplashScreen(
                     }
             )
             Text(
-                text = "wisp",
+                text = "Zap Cooking",
                 style = MaterialTheme.typography.titleLarge.copy(
                     fontFamily = FontFamily.SansSerif,
                     fontSize = 56.sp,

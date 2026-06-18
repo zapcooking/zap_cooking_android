@@ -41,7 +41,7 @@ object Nip78 {
 
         val tags = listOf(
             listOf("d", dTag),
-            listOf("client", "wisp"),
+            listOf("client", "Zap Cooking"),
             listOf("encryption", "nip44")
         )
 
