@@ -282,6 +282,19 @@ Sub-concern breakdown (one PR each, off main, no stacking):
   ~450 stray CLOSE frames per teardown. NOTE (latent RelayPool bug, not
   fixed here): the ephemeral cooldown-failure path doesn't
   `subscriptionTracker.untrackRelay`, leaking tracked subs — separate concern.
+  THROTTLE ROOT CAUSE (logcat-confirmed): `search.nostrarchives.com`
+  rate-limits repeated queries PER CONNECTION — identical filter, same conn,
+  99 events → 0 events ~12s later. Toggling re-queried each switch, so every
+  toggle after the first was throttled to blank. FIX = **per-mode result
+  cache, don't re-query on toggle**: each Mode keeps its own `ModeState`
+  (`seen`/`loaded`/`endReached`/`emptyFollows`); `setMode` swaps `_notes` to
+  the target's cache INSTANTLY with no relay query; a mode is queried once
+  (`loaded=true` on completion regardless of event count, so a legit-0 mode
+  isn't re-throttled). Correctness: `ModeState` captured at `submit()`
+  call-time (mid-flight mode switch can't mis-route), collector touches
+  `_notes` only while its mode is current. **Pull-to-refresh**
+  (`PullToRefreshBox`; empty states live inside the LazyColumn so the gesture
+  works when blank) is the ONLY path that re-queries a loaded mode.
   `OnlyFoodFeedScreen` =
   Global|Following segmented toggle + shared `PostCard` (full inline
   `NoteActions`/zap) + infinite scroll. Reachable via an "OnlyFood" drawer

@@ -21,30 +21,39 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * OnlyFood 🍳 — a kind-1 social food feed over the expanded [FoodHashtags] set
- * (concern 1.6). Two modes (v1): [Mode.GLOBAL] (all matching notes) and
- * [Mode.FOLLOWING] (matching notes from the user's kind-3 contacts, via a
- * server-side `authors` filter). Members + replies are deferred.
+ * (concern 1.6). Modes (v1): [Mode.GLOBAL] and [Mode.FOLLOWING] (server-side
+ * `authors` filter from the kind-3 contacts). Members + replies deferred.
+ * Filtering is mute-only (matches the web + `HashtagFeedViewModel`).
  *
- * Filtering is mute-only (blocked author or muted word) — matching the proven
- * `HashtagFeedViewModel` and the web foodstr feed, neither of which runs a
- * spam classifier (re-adding NSpam correctly is a tracked follow-up).
+ * **Per-mode cache — DON'T re-query on toggle.** `search.nostrarchives.com`
+ * rate-limits repeated queries per connection: the first identical query
+ * returns ~99 events, a repeat ~12s later returns 0. So each mode is queried
+ * **once** and its results cached in a [ModeState]; toggling [setMode] swaps
+ * the visible list to the target mode's cache **instantly, with no relay
+ * query**. The only path that re-queries a loaded mode is explicit
+ * [refresh] (pull-to-refresh). A mode that legitimately returns 0 still gets
+ * `loaded = true`, so it isn't re-queried (and re-throttled) on every toggle.
  *
- * **Subscription discipline (why this isn't a plain REQ/collect/close).** The
- * search relay throttles a churning connection. Three things keep churn down:
- *  1. **One sub at a time, serialized.** Every load — initial, mode toggle,
- *     pagination — goes through [submit], which `cancelAndJoin`s the previous
- *     job (so its teardown CLOSEs run to completion) *before* the next REQ.
- *     No overlapping/orphaned jobs racing the relay.
- *  2. **Close only what was opened.** A teardown CLOSEs exactly the subIds it
- *     sent (1 for global, the real chunk count for following) — not a blind
- *     `base-0..base-39` sweep, each of which `RelayPool` fans to every
- *     connection (~450 stray CLOSE frames/teardown → relay throttle).
- *  3. **Process-wide unique subIds** ([SUB_SEQ]) so an old instance's CLOSE
- *     can never target a new instance's sub.
+ * Churn hygiene (less throttle pressure): all loads serialize through one
+ * [submit] that `cancelAndJoin`s the previous job first, and teardown CLOSEs
+ * only the subIds actually opened.
  */
 class OnlyFoodFeedViewModel : ViewModel() {
 
     enum class Mode { GLOBAL, FOLLOWING }
+
+    private class ModeState {
+        val seen = LinkedHashMap<String, NostrEvent>()
+        var loaded = false
+        var endReached = false
+        var emptyFollows = false
+        fun snapshot(): List<NostrEvent> = seen.values.sortedByDescending { it.created_at }
+    }
+
+    private enum class Load { INITIAL, PAGE, REFRESH }
+
+    private val states = mapOf(Mode.GLOBAL to ModeState(), Mode.FOLLOWING to ModeState())
+    private fun stateOf(mode: Mode) = states.getValue(mode)
 
     private val _notes = MutableStateFlow<List<NostrEvent>>(emptyList())
     val notes: StateFlow<List<NostrEvent>> = _notes
@@ -58,14 +67,14 @@ class OnlyFoodFeedViewModel : ViewModel() {
     private val _isPaging = MutableStateFlow(false)
     val isPaging: StateFlow<Boolean> = _isPaging
 
-    /** No follows in FOLLOWING mode → screen shows a "follow people" prompt. */
+    private val _isRefreshing = MutableStateFlow(false)
+    val isRefreshing: StateFlow<Boolean> = _isRefreshing
+
     private val _emptyFollows = MutableStateFlow(false)
     val emptyFollows: StateFlow<Boolean> = _emptyFollows
 
-    private val seen = LinkedHashMap<String, NostrEvent>()
     private var deps: Deps? = null
     private var activeJob: Job? = null
-    private var endReached = false
 
     private class Deps(
         val relayPool: RelayPool,
@@ -82,71 +91,91 @@ class OnlyFoodFeedViewModel : ViewModel() {
     ) {
         if (deps != null) return
         deps = Deps(relayPool, eventRepo, muteRepo, contactRepo)
-        reload()
+        val st = stateOf(_mode.value)
+        if (!st.loaded) submit(_mode.value, st, Load.INITIAL, since = null, until = null)
     }
 
+    /** Instant cache swap. Queries the target mode only if it's never loaded. */
     fun setMode(mode: Mode) {
         if (_mode.value == mode) return
         _mode.value = mode
-        reload()
+        val st = stateOf(mode)
+        _notes.value = st.snapshot()
+        _emptyFollows.value = st.emptyFollows
+        _isPaging.value = false
+        _isRefreshing.value = false
+        if (st.loaded) {
+            _isLoading.value = false
+        } else {
+            submit(mode, st, Load.INITIAL, since = null, until = null)
+        }
     }
 
-    /** Infinite-scroll hook: page one window further back in time. */
+    /** The ONLY path that re-queries a loaded mode. Merges newest into cache. */
+    fun refresh() {
+        val mode = _mode.value
+        submit(mode, stateOf(mode), Load.REFRESH, since = null, until = null)
+    }
+
+    /** Infinite-scroll: page one window further back, appending to the cache. */
     fun loadMore() {
-        if (_isLoading.value || _isPaging.value || endReached) return
-        val oldest = seen.values.minOfOrNull { it.created_at } ?: return
+        val mode = _mode.value
+        val st = stateOf(mode)
+        if (_isLoading.value || _isPaging.value || _isRefreshing.value || st.endReached) return
+        val oldest = st.seen.values.minOfOrNull { it.created_at } ?: return
         val until = oldest - 1
-        // reset=false → append older notes to the existing feed.
-        submit(reset = false, initial = false, since = until - windowSeconds(), until = until)
-    }
-
-    /** Fresh load (initial / mode switch): no `since` floor — newest 100. */
-    private fun reload() {
-        endReached = false
-        submit(reset = true, initial = true, since = null, until = null)
+        submit(mode, st, Load.PAGE, since = until - windowSeconds(mode), until = until)
     }
 
     /**
-     * The single serialized entry point. Chains off the previous job and
-     * `cancelAndJoin`s it first, so the prior subscription's CLOSEs finish
-     * before this one's REQ — deterministic teardown, no connection churn.
+     * Single serialized entry point. Captures [mode]/[state] at call-time (so
+     * a mid-flight mode switch can't mis-route results), `cancelAndJoin`s the
+     * previous job before the next REQ, and merges results into [state]'s
+     * cache — updating the visible [_notes] only while [mode] is current.
      */
-    private fun submit(reset: Boolean, initial: Boolean, since: Long?, until: Long?) {
+    private fun submit(mode: Mode, state: ModeState, load: Load, since: Long?, until: Long?) {
         val previous = activeJob
         activeJob = viewModelScope.launch {
             previous?.cancelAndJoin()
             val d = deps ?: return@launch
 
-            val follows: Set<String>? = if (_mode.value == Mode.FOLLOWING) {
+            val follows: Set<String>? = if (mode == Mode.FOLLOWING) {
                 d.contactRepo.getFollowList().map { it.pubkey }.toSet()
             } else null
             if (follows != null && follows.isEmpty()) {
-                if (reset) { seen.clear(); _notes.value = emptyList() }
-                _emptyFollows.value = true
-                _isLoading.value = false
-                _isPaging.value = false
+                state.loaded = true
+                state.emptyFollows = true
+                if (_mode.value == mode) {
+                    _emptyFollows.value = true
+                    clearIndicators()
+                }
                 return@launch
             }
-            _emptyFollows.value = false
-            if (reset) { seen.clear(); _notes.value = emptyList() }
-            if (initial) _isLoading.value = true else _isPaging.value = true
+            state.emptyFollows = false
+            if (_mode.value == mode) {
+                _emptyFollows.value = false
+                when (load) {
+                    Load.INITIAL -> _isLoading.value = true
+                    Load.PAGE -> _isPaging.value = true
+                    Load.REFRESH -> _isRefreshing.value = true
+                }
+            }
 
             val base = "onlyfood-${SUB_SEQ.incrementAndGet()}"
             val opened = mutableListOf<String>()
             var received = 0
-
             try {
                 val collector = launch {
                     d.relayPool.relayEvents.collect { relayEvent ->
                         if (!relayEvent.subscriptionId.startsWith(base)) return@collect
                         val event = relayEvent.event
-                        if (event.kind != 1 || event.id in seen) return@collect
+                        if (event.kind != 1 || event.id in state.seen) return@collect
                         if (!accept(event, d, follows)) return@collect
                         received++
-                        seen[event.id] = event
+                        state.seen[event.id] = event
                         d.eventRepo.cacheEvent(event)
                         d.eventRepo.requestProfileIfMissing(event.pubkey)
-                        publish()
+                        if (_mode.value == mode) _notes.value = state.snapshot()
                     }
                 }
                 val filter = Filter(
@@ -163,9 +192,6 @@ class OnlyFoodFeedViewModel : ViewModel() {
                         ClientMessage.req(base, filter),
                     )
                 } else {
-                    // Server-side authors filter. A REQ replaces any same-subId
-                    // sub on a relay, so each author chunk gets its own subId
-                    // under the shared `base` prefix the collector matches.
                     follows.toList().chunked(AUTHOR_CHUNK).forEachIndexed { i, chunk ->
                         val subId = "$base-$i"
                         opened.add(subId)
@@ -176,9 +202,12 @@ class OnlyFoodFeedViewModel : ViewModel() {
                     }
                 }
                 withTimeoutOrNull(8_000) { d.relayPool.eoseSignals.first { it.startsWith(base) } }
-                if (!initial && received == 0) endReached = true
-                _isLoading.value = false
-                _isPaging.value = false
+                state.loaded = true // loaded even on 0 events → no re-query on toggle
+                if (load == Load.PAGE && received == 0) state.endReached = true
+                if (_mode.value == mode) {
+                    _notes.value = state.snapshot()
+                    clearIndicators()
+                }
                 delay(6_000) // collect stragglers, then tear down
                 collector.cancel()
             } finally {
@@ -188,6 +217,12 @@ class OnlyFoodFeedViewModel : ViewModel() {
         }
     }
 
+    private fun clearIndicators() {
+        _isLoading.value = false
+        _isPaging.value = false
+        _isRefreshing.value = false
+    }
+
     private fun accept(event: NostrEvent, d: Deps, follows: Set<String>?): Boolean {
         if (follows != null && event.pubkey !in follows) return false
         if (d.muteRepo.isBlocked(event.pubkey)) return false
@@ -195,12 +230,8 @@ class OnlyFoodFeedViewModel : ViewModel() {
         return true
     }
 
-    private fun publish() {
-        _notes.value = seen.values.sortedByDescending { it.created_at }
-    }
-
-    private fun windowSeconds(): Long =
-        if (_mode.value == Mode.FOLLOWING) THREE_DAYS else SEVEN_DAYS
+    private fun windowSeconds(mode: Mode): Long =
+        if (mode == Mode.FOLLOWING) THREE_DAYS else SEVEN_DAYS
 
     override fun onCleared() {
         super.onCleared()

@@ -18,6 +18,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
@@ -60,6 +61,7 @@ fun OnlyFoodFeedScreen(
     val mode by viewModel.mode.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val isPaging by viewModel.isPaging.collectAsState()
+    val isRefreshing by viewModel.isRefreshing.collectAsState()
     val emptyFollows by viewModel.emptyFollows.collectAsState()
 
     val listState = rememberLazyListState()
@@ -106,33 +108,54 @@ fun OnlyFoodFeedScreen(
                 ) { Text("Following") }
             }
 
-            when {
-                emptyFollows -> CenteredMessage(
-                    "Follow some food people to see their posts here.",
-                )
-                notes.isEmpty() && isLoading -> Box(
-                    Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center,
-                ) { CircularProgressIndicator(color = MaterialTheme.colorScheme.primary) }
-                notes.isEmpty() -> CenteredMessage("No food posts in this window yet.")
-                else -> LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
-                    items(notes.size, key = { notes[it].id }) { index ->
-                        OnlyFoodNote(
-                            event = notes[index],
-                            eventRepo = eventRepo,
-                            userPubkey = userPubkey,
-                            noteActions = noteActions,
-                            zapAnimatingIds = zapAnimatingIds,
-                            zapInProgressIds = zapInProgressIds,
-                        )
-                        HorizontalDivider()
-                    }
-                    if (isPaging) {
-                        item(key = "paging") {
-                            Box(
-                                Modifier.fillMaxWidth().padding(16.dp),
-                                contentAlignment = Alignment.Center,
-                            ) { CircularProgressIndicator(color = MaterialTheme.colorScheme.primary) }
+            // Pull-to-refresh is the only path that re-queries a loaded mode
+            // (toggling swaps caches without a relay query). Empty states live
+            // inside the LazyColumn so the pull gesture works even when blank
+            // — the recovery path for a mode the relay throttled to 0.
+            PullToRefreshBox(
+                isRefreshing = isRefreshing,
+                onRefresh = { viewModel.refresh() },
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+            ) {
+                LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+                    when {
+                        emptyFollows -> item(key = "empty-follows") {
+                            FullPageMessage(
+                                "Follow some food people to see their posts here.",
+                                Modifier.fillParentMaxSize(),
+                            )
+                        }
+                        notes.isEmpty() && isLoading -> item(key = "loading") {
+                            Box(Modifier.fillParentMaxSize(), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                        notes.isEmpty() -> item(key = "empty") {
+                            FullPageMessage(
+                                "No food posts yet — pull down to refresh.",
+                                Modifier.fillParentMaxSize(),
+                            )
+                        }
+                        else -> {
+                            items(notes.size, key = { notes[it].id }) { index ->
+                                OnlyFoodNote(
+                                    event = notes[index],
+                                    eventRepo = eventRepo,
+                                    userPubkey = userPubkey,
+                                    noteActions = noteActions,
+                                    zapAnimatingIds = zapAnimatingIds,
+                                    zapInProgressIds = zapInProgressIds,
+                                )
+                                HorizontalDivider()
+                            }
+                            if (isPaging) {
+                                item(key = "paging") {
+                                    Box(
+                                        Modifier.fillMaxWidth().padding(16.dp),
+                                        contentAlignment = Alignment.Center,
+                                    ) { CircularProgressIndicator(color = MaterialTheme.colorScheme.primary) }
+                                }
+                            }
                         }
                     }
                 }
@@ -142,8 +165,8 @@ fun OnlyFoodFeedScreen(
 }
 
 @Composable
-private fun CenteredMessage(text: String) {
-    Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
+private fun FullPageMessage(text: String, modifier: Modifier = Modifier) {
+    Box(modifier.padding(32.dp), contentAlignment = Alignment.Center) {
         Text(
             text = text,
             style = MaterialTheme.typography.bodyLarge,
