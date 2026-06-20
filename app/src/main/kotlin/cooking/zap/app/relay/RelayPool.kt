@@ -188,7 +188,7 @@ class RelayPool(private val prefs: SharedPreferences? = null) {
 
     private val _closedSignals = MutableSharedFlow<Pair<String, String>>(extraBufferCapacity = 64)
     /** Emits (subscriptionId, message) for each relay CLOSED frame. Used by
-     *  [authedRead] to detect "auth-required" and re-auth + re-send. */
+     *  [AuthedRelayReader] to detect "auth-required" and re-auth + re-send. */
     val closedSignals: SharedFlow<Pair<String, String>> = _closedSignals
 
     /** Event IDs that failed async signature verification and should be removed from UI. */

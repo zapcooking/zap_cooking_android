@@ -37,8 +37,6 @@ import java.util.concurrent.atomic.AtomicLong
  */
 class AuthedRelayReader(private val relayPool: RelayPool) {
 
-    private val seq = AtomicLong(0)
-
     suspend fun read(
         url: String,
         filter: Filter,
@@ -51,7 +49,8 @@ class AuthedRelayReader(private val relayPool: RelayPool) {
         try {
             repeat(maxAttempts) {
                 val gen = relayPool.reconnectGeneration
-                val sub = "authread-${seq.incrementAndGet()}"
+                // Process-wide unique subId so concurrent reader instances can't collide.
+                val sub = "authread-${SEQ.incrementAndGet()}"
                 val events = ArrayList<NostrEvent>()
                 var outcome: Outcome? = null
                 try {
@@ -59,7 +58,10 @@ class AuthedRelayReader(private val relayPool: RelayPool) {
                         val collector = launch {
                             relayPool.relayEvents.collect { if (it.subscriptionId == sub) events.add(it.event) }
                         }
-                        relayPool.sendToRelayOrEphemeral(url, ClientMessage.req(sub, filter))
+                        // autoReconnect=true: the read must survive a transient drop of the
+                        // ephemeral socket (the whole point) — without it the socket would
+                        // never come back and retries would stall.
+                        relayPool.sendToRelayOrEphemeral(url, ClientMessage.req(sub, filter), autoReconnect = true)
                         outcome = withTimeoutOrNull(queryTimeoutMs) {
                             merge(
                                 relayPool.eoseSignals.filter { it == sub }.map { Outcome.EOSE },
@@ -68,6 +70,9 @@ class AuthedRelayReader(private val relayPool: RelayPool) {
                                     .map { Outcome.AUTH_CLOSED },
                             ).first()
                         }
+                        // events and EOSE arrive on separate SharedFlows — a brief grace so
+                        // the last event(s) land before we stop collecting (no dropped results).
+                        if (outcome == Outcome.EOSE) delay(STRAGGLER_MS)
                         collector.cancelAndJoin()
                     }
                 } finally {
@@ -103,5 +108,8 @@ class AuthedRelayReader(private val relayPool: RelayPool) {
 
     companion object {
         private const val POLL_MS = 100L
+        private const val STRAGGLER_MS = 300L
+        /** Process-wide subId sequence — unique across all reader instances. */
+        private val SEQ = AtomicLong(0)
     }
 }
