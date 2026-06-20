@@ -4,7 +4,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cooking.zap.app.api.ZapCookingApi
 import cooking.zap.app.api.ZapCookingApiException
+import cooking.zap.app.nostr.NostrSigner
 import cooking.zap.app.nostr.RecipeParser
+import cooking.zap.app.repo.RecipePublisher
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -27,6 +29,17 @@ class SousChefViewModel : ViewModel() {
 
     private val _state = MutableStateFlow<State>(State.Idle)
     val state: StateFlow<State> = _state
+
+    /** Save (publish) overlay state, distinct from the import [state]. */
+    sealed interface SaveState {
+        data object Idle : SaveState
+        data object Saving : SaveState
+        data class Saved(val author: String, val dTag: String) : SaveState
+        data class Error(val message: String) : SaveState
+    }
+
+    private val _saveState = MutableStateFlow<SaveState>(SaveState.Idle)
+    val saveState: StateFlow<SaveState> = _saveState
 
     fun import(rawUrl: String, api: ZapCookingApi) {
         val url = rawUrl.trim()
@@ -57,7 +70,36 @@ class SousChefViewModel : ViewModel() {
         }
     }
 
+    /**
+     * Publish the previewed recipe to the user's account (Sous Chef Save).
+     * Categories come from the imported recipe's tags (mapped into
+     * `recipe.hashtags` by `toRecipePreview`). Requires a signing key.
+     */
+    fun save(publisher: RecipePublisher, signer: NostrSigner?, clientTagEnabled: Boolean) {
+        val preview = _state.value as? State.Preview ?: return
+        if (_saveState.value == SaveState.Saving) return
+        if (signer == null) {
+            _saveState.value = SaveState.Error("Sign in to save recipes.")
+            return
+        }
+        _saveState.value = SaveState.Saving
+        viewModelScope.launch {
+            _saveState.value = when (
+                val r = publisher.publish(
+                    recipe = preview.recipe,
+                    categories = preview.recipe.hashtags,
+                    signer = signer,
+                    includeClientTag = clientTagEnabled,
+                )
+            ) {
+                is RecipePublisher.Result.Published -> SaveState.Saved(r.author, r.dTag)
+                is RecipePublisher.Result.Error -> SaveState.Error(r.message)
+            }
+        }
+    }
+
     fun reset() {
         _state.value = State.Idle
+        _saveState.value = SaveState.Idle
     }
 }

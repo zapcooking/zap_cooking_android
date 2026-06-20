@@ -27,6 +27,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -55,11 +56,20 @@ import cooking.zap.app.viewmodel.SousChefViewModel.State
 fun SousChefScreen(
     viewModel: SousChefViewModel,
     onImport: (String) -> Unit,
+    onSave: () -> Unit,
+    onSaved: (author: String, dTag: String) -> Unit,
+    canSign: Boolean,
     onBack: () -> Unit,
 ) {
     val state by viewModel.state.collectAsState()
+    val saveState by viewModel.saveState.collectAsState()
     val clipboard = LocalClipboardManager.current
     var url by remember { mutableStateOf("") }
+
+    // Optimistic: navigate to the just-published (locally-cached) recipe.
+    LaunchedEffect(saveState) {
+        (saveState as? SousChefViewModel.SaveState.Saved)?.let { onSaved(it.author, it.dTag) }
+    }
 
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -130,15 +140,28 @@ fun SousChefScreen(
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
-                is State.Preview -> RecipePreview(s)
+                is State.Preview -> RecipePreview(
+                    preview = s,
+                    canSign = canSign,
+                    saveState = saveState,
+                    onSave = onSave,
+                )
             }
         }
     }
 }
 
 @Composable
-private fun RecipePreview(preview: State.Preview) {
+private fun RecipePreview(
+    preview: State.Preview,
+    canSign: Boolean,
+    saveState: SousChefViewModel.SaveState,
+    onSave: () -> Unit,
+) {
     var multiplier by remember(preview.recipe) { mutableStateOf(1.0) }
+    val hasImage = preview.recipe.image?.isNotBlank() == true
+    val saving = saveState is SousChefViewModel.SaveState.Saving
+
     LazyColumn(Modifier.fillMaxSize()) {
         // Read-only: no byline/engagement slots — an imported recipe has no event yet.
         recipeBody(
@@ -146,7 +169,7 @@ private fun RecipePreview(preview: State.Preview) {
             multiplier = multiplier,
             onMultiplierChange = { multiplier = it },
         )
-        item(key = "save-hint") {
+        item(key = "save") {
             Column(
                 Modifier.fillMaxWidth().padding(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -154,12 +177,40 @@ private fun RecipePreview(preview: State.Preview) {
             ) {
                 HorizontalDivider()
                 Spacer(Modifier.height(4.dp))
-                Text(
-                    text = "Saving imported recipes to your account is coming soon.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Button(onClick = {}, enabled = false) { Text("Save to my recipes") }
+                // Block reasons surfaced explicitly (not a silent disabled button).
+                val reason = when {
+                    !canSign -> "Sign in to save this recipe to your account."
+                    !hasImage -> "Add an image to publish this recipe."
+                    else -> null
+                }
+                reason?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                (saveState as? SousChefViewModel.SaveState.Error)?.let {
+                    Text(
+                        text = it.message,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                Button(
+                    onClick = onSave,
+                    enabled = canSign && hasImage && !saving,
+                ) {
+                    if (saving) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.height(18.dp),
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        Text("Save to my recipes")
+                    }
+                }
             }
         }
         item(key = "footer") { Spacer(Modifier.height(32.dp)) }

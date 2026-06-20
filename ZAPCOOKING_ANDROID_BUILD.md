@@ -408,22 +408,42 @@ membership link-out, `MembershipRepository` (Phase 3).
   Suite 63/0/0/0. ⚠️ PRE-SHIP: the drawer mark is a placeholder
   (`AutoAwesome`) — port the real Sous Chef SVG for symbol parity before
   release.
-- **2.2** Recipe-create pipeline — `RecipeSerializer` (2.2a, pure+tested) →
-  kind-30023 publish + image upload reuse (2.2b) → wire Sous Chef preview to
-  **Save** (2.2c, needs a signing key). The create pipeline you need anyway.
+- **2.2** ✅ Recipe-create pipeline (one PR; the spine the manual-create modal
+  reuses). `nostr/RecipeSerializer` — `RecipeParser.Recipe → 30023 content+tags`,
+  mirrors web `createMarkdown` + `create/+page.svelte`: `d=slug(title)`
+  (lowercase+spaces→hyphens ONLY; parens/slashes kept), `t:zapcooking` +
+  `t:zapcooking-<slug>` + `t:zapcooking-<category>`, image tags, **no
+  published_at**; **round-trip-tested** (serialize→parse→equals) vs the real
+  Tuscan Peposo. `repo/RecipePublisher` — re-host the cover image via Blossom
+  (fetch→`uploadMedia`, **fallback to source URL** so Save never blocks) →
+  `signer.signEvent(30023)` → `cacheEvent` (optimistic) → `sendToWriteRelays`
+  **+ broadcast to `ARTICLES_RELAYS`** (so it shows in the Recipes feed).
+  Gated on a signing key (READ_ONLY can't). Sous Chef "Save" is now live:
+  no-image/READ_ONLY block with an explicit reason; after Save, optimistic nav
+  to the just-cached recipe (no relay round-trip). Suite 69/0/0/0.
 - **2.3** Cheffy chat — member-gated chat screen → `/api/zappy` (chat/hungry);
   scan (vision) as 2.3b. Heaviest branding (port `CheffyIcon`/`CheffyAvatar`).
   Recipe-format output can deep-link into 2.2 create.
 - **2.4** Nourish (sub-phased): **2.4a READ** — query pantry for the kind-30078
-  score, render 8 dimensions on RecipeDetail (no membership to read); **2.4b
-  COMPUTE** — member-gated `/api/nourish` on miss; **2.4c flag** a score.
+  score, render 8 dimensions on RecipeDetail. ⚠️ CORRECTION (live-confirmed):
+  pantry requires **NIP-42 AUTH** on every read (`["AUTH",…]` →
+  `["CLOSED","auth-required"]`, even kind 1), so this is **NOT "ungated"** — it
+  needs a NIP-42-authed pantry connection and therefore a **signing key**
+  (READ_ONLY can't auth). Infra exists (`RelayPool.setAuthSigner` wired in
+  FeedViewModel; `autoApproveRelayAuth(url)` pre-approves a first-party relay
+  for silent AUTH). OPEN QUESTION (device-test answers it): does a non-member
+  signing account auth-and-read pantry (share-once-read-many implies yes), or
+  does pantry restrict reads to active members (→ Nourish read becomes
+  member-gated)? **2.4b COMPUTE** — member-gated `/api/nourish` on miss;
+  **2.4c flag** a score.
 - **2.5** Cookbook intro — **DEFERRED** (blocked on a Recipe Packs feature
   not in scope).
 
 **Recommended order & dependencies:** 2.0 → **2.1** (fastest demoable, free
 URL path, preview-only) → **2.2** (enables Save; serializer is the create
-pipeline) → **2.4a** (high-value, read-only, no membership) → **2.3** (member-
-gated, big branding) → **2.4b/c** → 2.5 deferred. Cross-cutting: Phase 2
+pipeline) → **2.4a** (high-value read; needs pantry NIP-42 AUTH + a signing
+key — not "no membership" as first thought) → **2.3** (member-gated, big
+branding) → **2.4b/c** → 2.5 deferred. Cross-cutting: Phase 2
 features gate on membership, but the endpoints enforce it server-side — Android
 can be optimistic (send pubkey, **handle 403 gracefully** with a "membership
 required" + link-out), so the full `MembershipRepository`/Custom-Tab is Phase 3;

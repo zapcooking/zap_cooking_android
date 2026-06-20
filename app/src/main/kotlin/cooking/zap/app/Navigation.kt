@@ -2686,6 +2686,20 @@ fun WispNavHost(
             SousChefScreen(
                 viewModel = sousChefViewModel,
                 onImport = { url -> sousChefViewModel.import(url, feedViewModel.zapCookingApi) },
+                onSave = {
+                    sousChefViewModel.save(
+                        publisher = feedViewModel.recipePublisher,
+                        signer = feedViewModel.signer,
+                        clientTagEnabled = feedViewModel.interfacePrefs.isClientTagEnabled(),
+                    )
+                },
+                onSaved = { author, dTag ->
+                    navController.navigate(Routes.recipe(author, dTag)) {
+                        // Replace the importer in the back stack — back returns to the feed.
+                        popUpTo(Routes.SOUS_CHEF) { inclusive = true }
+                    }
+                },
+                canSign = feedViewModel.signer != null,
                 onBack = { navController.popBackStack() },
             )
         }
