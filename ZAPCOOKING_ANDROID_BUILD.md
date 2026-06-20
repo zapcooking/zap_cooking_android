@@ -439,7 +439,22 @@ membership link-out, `MembershipRepository` (Phase 3).
   error. Wired via `RecipeDetailViewModel.load` (independent of recipe load).
   Suite 77/0/0/0. ⚠️ PRE-SHIP: Nourish visual is placeholder — port the web
   styling. OPEN (device-resolves): does a non-member signing account auth-read
-  pantry, or is it member-gated? ⚠️ CORRECTION (live-confirmed):
+  pantry, or is it member-gated?
+  AUTH FIX (device-confirmed CLOSED auth-required + stale isAuthenticated):
+  two bugs — (1) `authenticatedRelays` was never cleared on a transient
+  disconnect, so `isAuthenticated(pantry)` stayed stale-true and the query
+  fired onto an unauthed live socket; (2) `resyncSubscriptions` re-sent the
+  tracked REQ on reconnect before the fresh socket's AUTH. Fix: RelayPool now
+  `authenticatedRelays.remove(url)` on `connectionState=false` (auth is
+  per-connection — also fixes latent DM/group stale-auth) + a `closedSignals`
+  flow + a permanent pantry/auth CLOSED logcat line + `pinEphemeral` (exclude
+  pinned URLs from LRU eviction). New reusable `relay/AuthedRelayReader`:
+  send REQ → on `CLOSED auth-required` wait for auto-AUTH + re-send (bounded 3,
+  tied to `reconnectGeneration`) → collect to EOSE; pins the relay for the
+  read. `NourishRepository.fetchScore` now uses it (dropped the one-shot
+  `ensureAuthenticated` short-circuit). READ_ONLY/no-key returns null without
+  attempting auth. Nourish compute (2.4b) + future member reads reuse
+  `AuthedRelayReader`. ⚠️ CORRECTION (live-confirmed):
   pantry requires **NIP-42 AUTH** on every read (`["AUTH",…]` →
   `["CLOSED","auth-required"]`, even kind 1), so this is **NOT "ungated"** — it
   needs a NIP-42-authed pantry connection and therefore a **signing key**
