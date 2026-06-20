@@ -12,6 +12,7 @@ import cooking.zap.app.repo.BlossomRepository
 import cooking.zap.app.repo.RecipePublisher
 import cooking.zap.app.ui.util.MediaCompressor
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -147,10 +148,14 @@ class RecipeComposeViewModel : ViewModel() {
         signer: NostrSigner?,
     ) {
         if (signer == null) return
-        for (uri in uris) {
-            val id = nextId()
-            _images.update { it + ImageItem(id, ImageItem.Status.Uploading) }
-            viewModelScope.launch {
+        // Enqueue all placeholders synchronously (UI shows them + publish is
+        // blocked immediately), then read/compress/upload sequentially from a
+        // single IO coroutine — never read bytes or sniff MIME on the Main
+        // thread, and never fan out N parallel uploads at once (resource spike).
+        val pending = uris.map { uri -> nextId() to uri }
+        _images.update { list -> list + pending.map { (id, _) -> ImageItem(id, ImageItem.Status.Uploading) } }
+        viewModelScope.launch(Dispatchers.IO) {
+            for ((id, uri) in pending) {
                 val status = try {
                     val rawBytes = contentResolver.openInputStream(uri)?.use { it.readBytes() }
                         ?: throw IllegalStateException("Couldn't read the selected image.")
@@ -221,8 +226,12 @@ class RecipeComposeViewModel : ViewModel() {
             _publishState.value = PublishState.Error(reason)
             return
         }
+        // Snapshot every field once, up front — the user could keep editing
+        // while the async publish runs; the built Recipe and the signed tags
+        // must agree.
         val title = _title.value.trim()
         val imageUrls = hostedImageUrls
+        val categories = _categories.value
         val recipe = RecipeParser.Recipe(
             id = "",
             author = signer.pubkeyHex,
@@ -232,7 +241,7 @@ class RecipeComposeViewModel : ViewModel() {
             summary = _summary.value.trim().ifBlank { null },
             publishedAt = 0L,
             hashtags = emptyList(),
-            categories = _categories.value,
+            categories = categories,
             content = RecipeParser.RecipeContent(
                 chefNotes = _chefNotes.value.trim().ifBlank { null },
                 details = RecipeParser.RecipeDetails(
@@ -250,7 +259,7 @@ class RecipeComposeViewModel : ViewModel() {
             _publishState.value = when (
                 val r = publisher.publish(
                     recipe = recipe,
-                    categories = _categories.value,
+                    categories = categories,
                     imageUrls = imageUrls,
                     signer = signer,
                     includeClientTag = clientTagEnabled,
