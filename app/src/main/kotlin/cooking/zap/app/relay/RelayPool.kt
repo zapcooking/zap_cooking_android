@@ -106,6 +106,11 @@ class RelayPool(private val prefs: SharedPreferences? = null) {
         userApprovedAuthRelays.add(url)
     }
 
+    /** Ephemeral URLs protected from LRU eviction (e.g. pantry during an authed read). */
+    private val protectedEphemeralUrls: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    fun pinEphemeral(url: String) { protectedEphemeralUrls.add(url) }
+    fun unpinEphemeral(url: String) { protectedEphemeralUrls.remove(url) }
+
     @Volatile var appIsActive = false
         set(value) {
             field = value
@@ -180,6 +185,11 @@ class RelayPool(private val prefs: SharedPreferences? = null) {
 
     private val _eoseSignals = MutableSharedFlow<String>(extraBufferCapacity = 64)
     val eoseSignals: SharedFlow<String> = _eoseSignals
+
+    private val _closedSignals = MutableSharedFlow<Pair<String, String>>(extraBufferCapacity = 64)
+    /** Emits (subscriptionId, message) for each relay CLOSED frame. Used by
+     *  [AuthedRelayReader] to detect "auth-required" and re-auth + re-send. */
+    val closedSignals: SharedFlow<Pair<String, String>> = _closedSignals
 
     /** Event IDs that failed async signature verification and should be removed from UI. */
     private val _invalidEvents = MutableSharedFlow<String>(extraBufferCapacity = 64)
@@ -473,6 +483,12 @@ class RelayPool(private val prefs: SharedPreferences? = null) {
                             type = ConsoleLogType.NOTICE,
                             message = "CLOSED [${msg.subscriptionId}]: ${msg.message}"
                         ))
+                        _closedSignals.tryEmit(msg.subscriptionId to msg.message)
+                        // Permanent: pantry/auth-relay CLOSED frames to logcat — the
+                        // decisive signal for any future pantry-auth debugging.
+                        if (relay.config.url == RelayConfig.MEMBERS_RELAY || msg.message.contains("auth", ignoreCase = true)) {
+                            Log.d("RLC", "[Pool] CLOSED sub=${msg.subscriptionId} relay=${relay.config.url} msg=${msg.message}")
+                        }
                         if (DiagnosticLogger.isEnabled &&
                             (msg.subscriptionId.startsWith("notif") || msg.subscriptionId == "dms")) {
                             DiagnosticLogger.log("CLOSED", "sub=${msg.subscriptionId} relay=${relay.config.url} " +
@@ -507,6 +523,13 @@ class RelayPool(private val prefs: SharedPreferences? = null) {
                 } else {
                     if (appIsActive && !isReconnecting) healthTracker?.closeSession(relay.config.url)
                     subscriptionTracker.untrackRelay(relay.config.url)
+                    // NIP-42 auth is per-connection: a dropped socket's auth is
+                    // genuinely invalid. Clearing it here makes isAuthenticated()
+                    // reflect the LIVE socket — without this it stays stale-true
+                    // across reconnects and a query fires onto an unauthed socket
+                    // (the Nourish/pantry read bug). Also fixes the same latent
+                    // stale-auth for DM/group relays.
+                    authenticatedRelays.remove(relay.config.url)
                 }
             }
         }
@@ -886,7 +909,11 @@ class RelayPool(private val prefs: SharedPreferences? = null) {
         // connections (relay feed, thread views) shouldn't fail because stale outbox
         // routing connections filled the pool.
         if (!ephemeralRelays.containsKey(url) && ephemeralRelays.size >= MAX_EPHEMERAL) {
-            val lruEntry = ephemeralLastUsed.minByOrNull { it.value }
+            // Don't evict a pinned URL (e.g. pantry mid-authed-read) — recycling
+            // it would drop the auth and restart the read.
+            val lruEntry = ephemeralLastUsed.entries
+                .filter { it.key !in protectedEphemeralUrls }
+                .minByOrNull { it.value }
             if (lruEntry != null) {
                 val evictUrl = lruEntry.key
                 Log.d("RLC", "[Pool] ephemeral cap reached — evicting LRU ephemeral $evictUrl")
