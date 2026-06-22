@@ -87,7 +87,6 @@ fun ActionBar(
     onZapDisabledTap: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    val fiatMode = cooking.zap.app.ui.util.isFiatMode()
     var showEmojiPicker by remember { mutableStateOf(false) }
     var showRepostMenu by remember { mutableStateOf(false) }
 
@@ -218,20 +217,15 @@ fun ActionBar(
                 }
                 if (isZapInProgress) {
                     LightningAnimation(modifier = Modifier.size(width = 14.dp, height = 22.dp))
-                } else if (fiatMode) {
-                    // Fiat mode keeps the coin — the app-wide "amounts shown in
-                    // fiat" indicator (also used by zap receipts, notifications,
-                    // etc.). Intentionally NOT replaced here.
-                    Icon(
-                        painter = painterResource(R.drawable.ic_coin_stack),
-                        contentDescription = stringResource(R.string.cd_zaps),
-                        tint = zapTint,
-                        modifier = Modifier.size(22.dp)
-                    )
                 } else {
-                    // ⚡ is the resting default for the zap action (replaces the
-                    // former ₿ symbol). The zapped/active state is shown by the
-                    // zapColor tint above; the in-progress state animates.
+                    // ⚡ rests in BOTH fiat and sats modes. Currency stays
+                    // unambiguous because the amount label carries the symbol
+                    // (AmountFormatter.renderCurrency → "$1.23"); when there's no
+                    // amount yet (zapSats == 0) there's nothing to disambiguate.
+                    // The coin=fiat indicator is kept on the amount-display
+                    // surfaces (ZapDialog, zap receipts, notifications, etc.).
+                    // The zapped/active state is shown by the zapColor tint
+                    // above; the in-progress state animates.
                     Icon(
                         painter = painterResource(R.drawable.ic_bolt),
                         contentDescription = stringResource(R.string.cd_zaps),
