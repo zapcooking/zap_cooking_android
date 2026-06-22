@@ -58,7 +58,16 @@ class RecipeRepository(
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
+    private val _isLoadingMore = MutableStateFlow(false)
+    /** A follow-up (older) page is in flight. */
+    val isLoadingMore: StateFlow<Boolean> = _isLoadingMore.asStateFlow()
+
+    private val _exhausted = MutableStateFlow(false)
+    /** True once a full-EOSE page returned nothing older — stop paging. */
+    val exhausted: StateFlow<Boolean> = _exhausted.asStateFlow()
+
     private var loadJob: Job? = null
+    private var loadMoreJob: Job? = null
     private var subCounter = 0
 
     /**
@@ -68,6 +77,10 @@ class RecipeRepository(
      */
     fun loadFeed(limit: Int = 100) {
         loadJob?.cancel()
+        // A fresh feed resets pagination state.
+        loadMoreJob?.cancel()
+        _isLoadingMore.value = false
+        _exhausted.value = false
         val subId = "recipe-feed-${subCounter++}"
         _isLoading.value = true
         loadJob = scope.launch(processingContext) {
@@ -99,6 +112,69 @@ class RecipeRepository(
                 collector.cancel()
                 subManager.closeSubscription(subId) // closeOnAllRelays — no leaked sub
                 _isLoading.value = false
+            }
+        }
+    }
+
+    /**
+     * Page backwards in time: fetch recipes older than the oldest currently
+     * loaded (`until = oldestCreatedAt - 1`) and append. Single-flight (guarded
+     * by [isLoadingMore]); a no-op once [exhausted] or while no recipes are
+     * loaded yet. New events funnel through the SAME [acceptEvent]/[emitRecipes]
+     * path as [loadFeed], so coordinate/format dedup is identical.
+     *
+     * Exhaustion is slow-relay-safe: it flips [exhausted] ONLY when a full EOSE
+     * round (every queried relay replied) added zero new recipes. A timeout
+     * (partial EOSE) with zero new does NOT exhaust — a slow relay may still
+     * hold older recipes — so the next scroll retries.
+     */
+    fun loadMore(pageSize: Int = 50) {
+        if (_isLoadingMore.value || _exhausted.value) return
+        // Cursor = the oldest event created_at we hold (NIP-01 `until` is on the
+        // event timestamp, not the display `publishedAt`). No data yet → nothing
+        // to page from.
+        val oldest = byCoordinate.values.minOfOrNull { it.created_at } ?: return
+        val until = oldest - 1
+        val subId = "recipe-more-${subCounter++}"
+        _isLoadingMore.value = true
+        loadMoreJob = scope.launch(processingContext) {
+            // Under an `until` filter every returned event is older than anything
+            // loaded, so acceptEvent() == true marks a genuinely new coordinate.
+            var newCoordinates = 0
+            val seenIds = mutableSetOf<String>()
+            val collector = launch {
+                relayPool.relayEvents.collect { relayEvent ->
+                    if (relayEvent.subscriptionId != subId) return@collect
+                    val event = relayEvent.event
+                    if (event.id in seenIds) return@collect
+                    if (RecipeFormats.forEvent(event) == null) return@collect
+                    seenIds.add(event.id)
+                    eventRepo.cacheEvent(event)
+                    eventRepo.requestProfileIfMissing(event.pubkey)
+                    if (acceptEvent(event)) {
+                        newCoordinates++
+                        emitRecipes()
+                    }
+                }
+            }
+            val filters = RecipeFormats.active.map { it.feedFilter(pageSize, until) }
+            val req = ClientMessage.req(subId, filters)
+            var sent = 0
+            for (url in RelayConfig.ARTICLES_RELAYS) {
+                if (relayPool.sendToRelayOrEphemeral(url, req)) sent++
+            }
+            val expected = sent.coerceAtLeast(1)
+            try {
+                val eoseCount = subManager.awaitEoseCount(subId, expectedCount = expected, timeoutMs = 8_000)
+                // Full round (all relays EOSE'd) with nothing new ⇒ exhausted.
+                // Partial (timeout) ⇒ leave the trigger live to retry.
+                if (eoseCount >= expected && newCoordinates == 0) {
+                    _exhausted.value = true
+                }
+            } finally {
+                collector.cancel()
+                subManager.closeSubscription(subId)
+                _isLoadingMore.value = false
             }
         }
     }
@@ -160,9 +236,12 @@ class RecipeRepository(
     /** Drop the in-memory feed (e.g. on account switch). */
     fun clear() {
         loadJob?.cancel()
+        loadMoreJob?.cancel()
         byCoordinate.clear()
         _recipes.value = emptyList()
         _isLoading.value = false
+        _isLoadingMore.value = false
+        _exhausted.value = false
     }
 
     /** Merge [event] into [byCoordinate]; return true iff it became the winner. */
