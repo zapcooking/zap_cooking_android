@@ -11,6 +11,7 @@ import cooking.zap.app.relay.SubscriptionManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -43,12 +44,22 @@ import kotlin.coroutines.CoroutineContext
  * until EOSE (or timeout), then close on ALL relays in a `finally` — no
  * persistent live tail is held.
  */
+/**
+ * Grace window kept open after a newest-window query reaches EOSE (or times
+ * out) — lets a slow aggregator's recent recipes still land before the
+ * collector is cancelled. Collection-window only; does NOT affect paging or
+ * exhaustion (those live in [RecipeRepository.loadMore]).
+ */
+private const val EOSE_GRACE_MS = 2_000L
+
 class RecipeRepository(
     private val relayPool: RelayPool,
     private val eventRepo: EventRepository,
     private val subManager: SubscriptionManager,
     private val scope: CoroutineScope,
     private val processingContext: CoroutineContext = Dispatchers.Default,
+    /** Resolves the signed-in user's kind-10002 READ relays for the read union. */
+    private val userReadRelaysProvider: () -> List<String> = { emptyList() },
 ) {
     /** Newest event per addressable coordinate ("kind:author:dTag"). */
     private val byCoordinate = LinkedHashMap<String, NostrEvent>()
@@ -76,24 +87,52 @@ class RecipeRepository(
     /** True once a full-EOSE page returned nothing older — stop paging. */
     val exhausted: StateFlow<Boolean> = _exhausted.asStateFlow()
 
+    private val _isRefreshing = MutableStateFlow(false)
+    /** A pull-to-refresh (newest-window re-pull) is in flight. */
+    val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
+
     private var loadJob: Job? = null
     private var loadMoreJob: Job? = null
+    private var refreshJob: Job? = null
+    /**
+     * Bumped on every reload/refresh. A [loadMore] started under a previous
+     * epoch must NOT flip [exhausted] after a refresh has reset it.
+     */
+    private var epoch = 0L
     private var subCounter = 0
 
     /**
-     * Fan out the recipe feed filter to the `articles` relay union, collect
-     * matching 30023 recipes until EOSE/timeout, dedup by coordinate, and
-     * publish to [recipes]. Cancels any in-flight load first.
+     * The widened recipe read union (coverage). Recipes are discovered by
+     * hashtag — not author write relays; the web does the same — so we fan the
+     * SAME registry feedFilter to a UNION of:
+     *   - [RelayConfig.ARTICLES_RELAYS] — the curated article aggregators
+     *   - [RelayConfig.DEFAULT_INDEXER_RELAYS] — broad discovery/indexer relays
+     *   - [RelayConfig.DEFAULTS] read relays — where recipes commonly land
+     *   - the signed-in user's own kind-10002 READ relays
+     * De-duplicated (trailing slash normalized) so no relay is queried twice.
+     * Only WHERE we read widens — paging, dedup, and display are unchanged.
      */
-    fun loadFeed(limit: Int = 100) {
-        loadJob?.cancel()
-        // A fresh feed resets pagination state.
-        loadMoreJob?.cancel()
-        _isLoadingMore.value = false
-        _exhausted.value = false
+    private fun readRelays(): List<String> {
+        val union = LinkedHashSet<String>()
+        fun add(url: String) { union.add(url.trim().trimEnd('/')) }
+        RelayConfig.ARTICLES_RELAYS.forEach(::add)
+        RelayConfig.DEFAULT_INDEXER_RELAYS.forEach(::add)
+        RelayConfig.DEFAULTS.filter { it.read }.forEach { add(it.url) }
+        userReadRelaysProvider().forEach(::add)
+        return union.toList()
+    }
+
+    /**
+     * Shared "newest window" query used by [loadFeed] and [refresh]: fan the
+     * feedFilter (no `until`) to [readRelays], collect through the SAME
+     * acceptEvent/emitRecipes path, and — for newest-window completeness — keep
+     * collecting for a short [EOSE_GRACE_MS] grace after EOSE/timeout so a slow
+     * aggregator's recent recipes still land.
+     */
+    private fun launchNewestWindowQuery(limit: Int, loadingFlag: MutableStateFlow<Boolean>): Job {
         val subId = "recipe-feed-${subCounter++}"
-        _isLoading.value = true
-        loadJob = scope.launch(processingContext) {
+        loadingFlag.value = true
+        return scope.launch(processingContext) {
             val seenIds = mutableSetOf<String>()
             val collector = launch {
                 relayPool.relayEvents.collect { relayEvent ->
@@ -109,23 +148,61 @@ class RecipeRepository(
                     }
                 }
             }
-            // One filter per active format (NIP-23 only today). A single REQ
-            // carries them all; with one format this is byte-identical to the
-            // previous single-filter REQ.
+            // One filter per active format (NIP-23 only today); fanned to the
+            // widened union. No `until` — this is the newest window.
             val filters = RecipeFormats.active.map { it.feedFilter(limit) }
             val req = ClientMessage.req(subId, filters)
             var sent = 0
-            for (url in RelayConfig.ARTICLES_RELAYS) {
+            for (url in readRelays()) {
                 if (relayPool.sendToRelayOrEphemeral(url, req)) sent++
             }
             try {
-                subManager.awaitEoseCount(subId, expectedCount = sent.coerceAtLeast(1), timeoutMs = 8_000)
+                if (sent > 0) {
+                    subManager.awaitEoseCount(subId, expectedCount = sent, timeoutMs = 8_000)
+                    // Don't hard-cancel the instant EOSE is hit — give a slow
+                    // aggregator's recent recipes a short grace to arrive.
+                    delay(EOSE_GRACE_MS)
+                }
             } finally {
                 collector.cancel()
                 subManager.closeSubscription(subId) // closeOnAllRelays — no leaked sub
-                _isLoading.value = false
+                loadingFlag.value = false
             }
         }
+    }
+
+    /**
+     * Fan the recipe feed filter to the widened read union ([readRelays]),
+     * collect the newest window, dedup by coordinate, and publish to [recipes].
+     * Cancels any in-flight load/refresh/page and resets pagination.
+     */
+    fun loadFeed(limit: Int = 100) {
+        loadJob?.cancel()
+        refreshJob?.cancel()
+        // A fresh feed resets pagination state and invalidates any in-flight page.
+        loadMoreJob?.cancel()
+        epoch++
+        _isLoadingMore.value = false
+        _isRefreshing.value = false
+        _exhausted.value = false
+        loadJob = launchNewestWindowQuery(limit, _isLoading)
+    }
+
+    /**
+     * Pull-to-refresh: re-pull the newest window (no `until`) WITHOUT clearing
+     * the grid. New recipes merge in via [byCoordinate] (newest-wins) and
+     * surface at the top after the publishedAt sort. Bumps [epoch] so a stale
+     * in-flight [loadMore] can't flip [exhausted] after the reset, and cancels
+     * any in-flight page.
+     */
+    fun refresh(limit: Int = 100) {
+        if (_isRefreshing.value) return
+        refreshJob?.cancel()
+        loadMoreJob?.cancel()
+        epoch++
+        _isLoadingMore.value = false
+        _exhausted.value = false
+        refreshJob = launchNewestWindowQuery(limit, _isRefreshing)
     }
 
     /**
@@ -143,8 +220,11 @@ class RecipeRepository(
     fun loadMore(pageSize: Int = 50) {
         // Don't overlap the initial load (it shares byCoordinate), don't
         // double-page, and stop once exhausted.
-        if (_isLoading.value || _isLoadingMore.value || _exhausted.value) return
+        if (_isLoading.value || _isRefreshing.value || _isLoadingMore.value || _exhausted.value) return
         _isLoadingMore.value = true
+        // Snapshot the epoch: if a refresh bumps it mid-flight, this page must
+        // not flip exhausted afterwards (its EOSE round is stale).
+        val startedEpoch = epoch
         val subId = "recipe-more-${subCounter++}"
         loadMoreJob = scope.launch(processingContext) {
             // Cursor = the oldest event created_at we hold (NIP-01 `until` is on
@@ -177,10 +257,11 @@ class RecipeRepository(
                     }
                 }
             }
+            // Page over the SAME widened union as the newest-window query.
             val filters = RecipeFormats.active.map { it.feedFilter(pageSize, until) }
             val req = ClientMessage.req(subId, filters)
             var sent = 0
-            for (url in RelayConfig.ARTICLES_RELAYS) {
+            for (url in readRelays()) {
                 if (relayPool.sendToRelayOrEphemeral(url, req)) sent++
             }
             try {
@@ -188,10 +269,13 @@ class RecipeRepository(
                 // EOSEs that can't arrive; just clean up and let the next scroll
                 // retry. Don't exhaust — we never actually asked.
                 if (sent > 0) {
+                    // NOTE: no grace window here — paging keeps the exact EOSE
+                    // semantics, so exhaustion stays a real full-EOSE signal.
                     val eoseCount = subManager.awaitEoseCount(subId, expectedCount = sent, timeoutMs = 8_000)
                     // Full round (all relays EOSE'd) with nothing new ⇒ exhausted.
-                    // Partial (timeout) ⇒ leave the trigger live to retry.
-                    if (eoseCount >= sent && newCoordinates == 0) {
+                    // Partial (timeout) ⇒ leave the trigger live to retry. The
+                    // epoch guard drops a page invalidated by an interleaved refresh.
+                    if (epoch == startedEpoch && eoseCount >= sent && newCoordinates == 0) {
                         _exhausted.value = true
                     }
                 }
@@ -261,10 +345,13 @@ class RecipeRepository(
     fun clear() {
         loadJob?.cancel()
         loadMoreJob?.cancel()
+        refreshJob?.cancel()
+        epoch++
         byCoordinate.clear()
         _recipes.value = emptyList()
         _isLoading.value = false
         _isLoadingMore.value = false
+        _isRefreshing.value = false
         _exhausted.value = false
     }
 

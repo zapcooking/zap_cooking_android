@@ -33,6 +33,9 @@ class RecipeFeedViewModel : ViewModel() {
     private val _exhausted = MutableStateFlow(false)
     val exhausted: StateFlow<Boolean> = _exhausted
 
+    private val _isRefreshing = MutableStateFlow(false)
+    val isRefreshing: StateFlow<Boolean> = _isRefreshing
+
     private var repo: RecipeRepository? = null
     private var started = false
 
@@ -44,6 +47,7 @@ class RecipeFeedViewModel : ViewModel() {
         viewModelScope.launch { recipeRepo.isLoading.collect { _isLoading.value = it } }
         viewModelScope.launch { recipeRepo.isLoadingMore.collect { _isLoadingMore.value = it } }
         viewModelScope.launch { recipeRepo.exhausted.collect { _exhausted.value = it } }
+        viewModelScope.launch { recipeRepo.isRefreshing.collect { _isRefreshing.value = it } }
         recipeRepo.loadFeed()
     }
 
@@ -54,5 +58,10 @@ class RecipeFeedViewModel : ViewModel() {
      */
     fun loadMore() {
         repo?.loadMore()
+    }
+
+    /** Pull-to-refresh: re-pull the newest window; new recipes surface at top. */
+    fun refresh() {
+        repo?.refresh()
     }
 }

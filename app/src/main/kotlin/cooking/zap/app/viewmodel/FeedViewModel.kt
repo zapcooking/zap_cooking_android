@@ -282,7 +282,10 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
     // `articles` relay union, not DEFAULTS — see RecipeRepository. Owns the
     // recipe feed flow shared by the home feed + recipe-detail screens.
     val recipeRepo = cooking.zap.app.repo.RecipeRepository(
-        relayPool, eventRepo, subManager, viewModelScope, processingDispatcher
+        relayPool, eventRepo, subManager, viewModelScope, processingDispatcher,
+        // Widen the recipe read union with the signed-in user's own kind-10002
+        // READ relays (coverage), de-duped inside the repo.
+        userReadRelaysProvider = { pubkeyHex?.let { relayListRepo.getReadRelays(it) } ?: emptyList() },
     )
 
     /** zap.cooking backend client (membership today; Phase 2 AI endpoints). */

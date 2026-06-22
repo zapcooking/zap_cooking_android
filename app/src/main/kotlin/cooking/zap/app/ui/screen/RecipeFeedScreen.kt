@@ -26,6 +26,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -74,6 +75,7 @@ fun RecipeFeedScreen(
     val recipes by viewModel.recipes.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val isLoadingMore by viewModel.isLoadingMore.collectAsState()
+    val isRefreshing by viewModel.isRefreshing.collectAsState()
     val gridState = rememberLazyGridState()
 
     // Scroll-end pagination: when the last visible tile nears the end of the
@@ -134,11 +136,16 @@ fun RecipeFeedScreen(
         val columns = GridCells.Adaptive(minSize = 160.dp)
         val contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp)
         val spacing = Arrangement.spacedBy(12.dp)
+        PullToRefreshBox(
+            isRefreshing = isRefreshing,
+            onRefresh = { viewModel.refresh() },
+            modifier = Modifier.fillMaxSize(),
+        ) {
         when {
             recipes.isEmpty() && isLoading -> {
                 LazyVerticalGrid(
                     columns = columns,
-                    modifier = Modifier.fillMaxSize().padding(padding),
+                    modifier = Modifier.fillMaxSize(),
                     contentPadding = contentPadding,
                     horizontalArrangement = spacing,
                     verticalArrangement = spacing,
@@ -149,7 +156,7 @@ fun RecipeFeedScreen(
                 }
             }
             recipes.isEmpty() -> {
-                Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(text = "🍳", style = MaterialTheme.typography.displaySmall)
                         Spacer(Modifier.height(8.dp))
@@ -165,7 +172,7 @@ fun RecipeFeedScreen(
                 LazyVerticalGrid(
                     state = gridState,
                     columns = columns,
-                    modifier = Modifier.fillMaxSize().padding(padding),
+                    modifier = Modifier.fillMaxSize(),
                     contentPadding = contentPadding,
                     horizontalArrangement = spacing,
                     verticalArrangement = spacing,
@@ -190,6 +197,7 @@ fun RecipeFeedScreen(
                     }
                 }
             }
+        }
         }
     }
 }
