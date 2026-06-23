@@ -104,15 +104,21 @@ class RecipeRepository(
      */
     @Volatile
     private var epoch = 0L
-    private var subCounter = 0
+    /**
+     * Subscription-id sequence. `AtomicInteger` because ids are minted from
+     * multiple dispatchers — [collectRecipePage] runs on [processingContext]
+     * while [loadFeed]/[loadMore] mint from the main thread — and a plain `++`
+     * across threads is a data race that can yield duplicate (mis-routed) ids.
+     */
+    private val subCounter = java.util.concurrent.atomic.AtomicInteger(0)
 
     /**
      * Single-flight guard for [preloadCatalog]: the background deep fill runs at
-     * most once per process (recipe search triggers it). `@Volatile` so the
-     * once-check, read off the calling thread, sees the writer's flip.
+     * most once per process (recipe search triggers it). `AtomicBoolean` so the
+     * check-and-flip is atomic — two concurrent callers can't both observe
+     * `false` and each launch a job.
      */
-    @Volatile
-    private var catalogPreloaded = false
+    private val catalogPreloaded = java.util.concurrent.atomic.AtomicBoolean(false)
     private var preloadJob: Job? = null
 
     /**
@@ -144,7 +150,7 @@ class RecipeRepository(
      * aggregator's recent recipes still land.
      */
     private fun launchNewestWindowQuery(limit: Int, loadingFlag: MutableStateFlow<Boolean>): Job {
-        val subId = "recipe-feed-${subCounter++}"
+        val subId = "recipe-feed-${subCounter.getAndIncrement()}"
         loadingFlag.value = true
         return scope.launch(processingContext) {
             val seenIds = mutableSetOf<String>()
@@ -243,7 +249,7 @@ class RecipeRepository(
         // Snapshot the epoch: if a refresh bumps it mid-flight, this page must
         // not flip exhausted afterwards (its EOSE round is stale).
         val startedEpoch = epoch
-        val subId = "recipe-more-${subCounter++}"
+        val subId = "recipe-more-${subCounter.getAndIncrement()}"
         loadMoreJob = scope.launch(processingContext) {
             // Cursor = the oldest event created_at we hold (NIP-01 `until` is on
             // the event timestamp, not the display `publishedAt`). Read under the
@@ -315,7 +321,7 @@ class RecipeRepository(
         findRecipeEvent(author, dTag)?.let { cached ->
             return RecipeFormats.forEvent(cached)?.parse(cached)
         }
-        val subId = "recipe-one-${subCounter++}"
+        val subId = "recipe-one-${subCounter.getAndIncrement()}"
         val matches = mutableListOf<NostrEvent>()
         val collector = scope.launch(processingContext) {
             relayPool.relayEvents.collect { relayEvent ->
@@ -398,9 +404,10 @@ class RecipeRepository(
      * the feed [recipes] flow also fills in as pages land.
      */
     fun preloadCatalog(maxPages: Int = 40, perPage: Int = 100) {
-        if (catalogPreloaded) return
-        if (preloadJob?.isActive == true) return
-        catalogPreloaded = true
+        // Atomic check-and-flip: the first caller wins and launches; any
+        // concurrent or later caller sees `true` and returns. Never reset, so
+        // the deep fill runs exactly once per process.
+        if (!catalogPreloaded.compareAndSet(false, true)) return
         preloadJob = scope.launch(processingContext) {
             var consecutiveEmpty = 0
             var pages = 0
@@ -425,7 +432,7 @@ class RecipeRepository(
 
     /** One backward page for [preloadCatalog]; same accept/emit path as [loadMore]. */
     private suspend fun collectRecipePage(until: Long?, pageSize: Int): PageResult {
-        val subId = "recipe-preload-${subCounter++}"
+        val subId = "recipe-preload-${subCounter.getAndIncrement()}"
         var newCoordinates = 0
         val seenIds = mutableSetOf<String>()
         val collector = scope.launch(processingContext) {
