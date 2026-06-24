@@ -11,6 +11,7 @@ import cooking.zap.app.repo.RecipeRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 class RecipePackDetailViewModel : ViewModel() {
@@ -78,17 +79,19 @@ class RecipePackDetailViewModel : ViewModel() {
 
             // Cache-first (event cache + ObjectBox), then network fill missing coordinates.
             for (coord in coordinates) {
+                if (loadedKey != key || !kotlin.coroutines.coroutineContext.isActive) return@launch
                 val event = recipeRepo.findRecipeEventByCoordinate(coord.kind, coord.author, coord.dTag)
                 val parsed = event?.let { RecipeFormats.forEvent(it)?.parse(it) }
                 if (parsed != null) {
                     resolvedByKey[coordinateKey(coord)] = parsed
                 }
             }
+            if (loadedKey != key || !kotlin.coroutines.coroutineContext.isActive) return@launch
             emitResolved()
 
             val unresolved = coordinates.filter { coordinateKey(it) !in resolvedByKey }
             for (coord in unresolved) {
-                if (loadedKey != key) return@launch
+                if (loadedKey != key || !kotlin.coroutines.coroutineContext.isActive) return@launch
                 val event = recipeRepo.requestRecipeEventByCoordinate(coord.kind, coord.author, coord.dTag)
                 val parsed = event?.let { RecipeFormats.forEvent(it)?.parse(it) }
                 if (parsed != null) {
@@ -96,6 +99,7 @@ class RecipePackDetailViewModel : ViewModel() {
                 } else {
                     _failedCount.value = _failedCount.value + 1
                 }
+                if (loadedKey != key || !kotlin.coroutines.coroutineContext.isActive) return@launch
                 emitResolved()
             }
 

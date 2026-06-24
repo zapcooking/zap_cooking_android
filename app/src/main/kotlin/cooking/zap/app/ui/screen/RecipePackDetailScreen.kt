@@ -37,6 +37,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -61,7 +62,6 @@ fun RecipePackDetailScreen(
 ) {
     val pack by viewModel.pack.collectAsState()
     val recipes by viewModel.recipes.collectAsState()
-    val isLoading by viewModel.isLoading.collectAsState()
     val pendingCount by viewModel.pendingCount.collectAsState()
     val failedCount by viewModel.failedCount.collectAsState()
     val notFound by viewModel.notFound.collectAsState()
@@ -97,18 +97,7 @@ fun RecipePackDetailScreen(
         }
     ) { padding ->
         when {
-            isLoading && pack == null -> {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(padding),
-                    contentAlignment = Alignment.Center
-                ) {
-                    CircularProgressIndicator()
-                }
-            }
-
-            notFound || pack == null -> {
+            notFound -> {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -120,6 +109,17 @@ fun RecipePackDetailScreen(
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+            }
+
+            pack == null -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(padding),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator()
                 }
             }
 
@@ -249,7 +249,11 @@ private fun PackHeader(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = "${pack.recipeCount} ${if (pack.recipeCount == 1) "recipe" else "recipes"}",
+                text = pluralStringResource(
+                    id = R.plurals.recipe_count_label,
+                    count = pack.recipeCount,
+                    pack.recipeCount
+                ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

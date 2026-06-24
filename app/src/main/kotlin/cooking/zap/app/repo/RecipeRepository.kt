@@ -378,12 +378,17 @@ class RecipeRepository(
      * Falls back to ObjectBox author+kind scan to recover cold-start events.
      */
     fun findRecipeEventByCoordinate(kind: Int, author: String, dTag: String): NostrEvent? {
-        eventRepo.findAddressableEvent(kind, author, dTag)?.let { cached ->
+        val normalizedAuthor = author.trim()
+        val normalizedDTag = dTag.trim()
+        if (normalizedAuthor.isBlank() || normalizedDTag.isBlank()) return null
+        if (RecipeFormats.active.none { it.kind == kind }) return null
+
+        eventRepo.findAddressableEvent(kind, normalizedAuthor, normalizedDTag)?.let { cached ->
             if (RecipeFormats.forEvent(cached) != null) return cached
         }
         val persistence = eventRepo.eventPersistence ?: return null
-        val fromDb = persistence.getEventsByAuthorAndKind(author, kind, limit = 200)
-            .filter { eventHasDTag(it, dTag) }
+        val fromDb = persistence.getEventsByAuthorAndKind(normalizedAuthor, kind, limit = 200)
+            .filter { eventHasDTag(it, normalizedDTag) }
         return dedupeNewestPerCoordinate(fromDb).firstOrNull()
     }
 
