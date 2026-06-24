@@ -55,11 +55,12 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.res.stringResource
 import cooking.zap.app.R
+import cooking.zap.app.nostr.RecipeTag
 import cooking.zap.app.nostr.RecipeTagCatalog
 import cooking.zap.app.repo.EventRepository
 import cooking.zap.app.repo.RecipePackSummary
@@ -332,7 +333,7 @@ fun RecipeFeedScreen(
 
 @Composable
 private fun RecipeTagChip(
-    tag: cooking.zap.app.nostr.RecipeTag,
+    tag: RecipeTag,
     onClick: () -> Unit,
 ) {
     FilterChip(
