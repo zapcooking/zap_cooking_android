@@ -114,6 +114,11 @@ fun WispDrawerContent(
     onCustomEmojis: () -> Unit = {},
     onConsole: () -> Unit = {},
     onRelayHealth: () -> Unit = {},
+    // Network diagnostics relocated from the Feed top-bar chips (PR 3).
+    connectedRelayCount: Int = 0,
+    onlineCount: Int = 0,
+    onNetworkStatus: () -> Unit = {},
+    onOnlineNow: () -> Unit = {},
     onRelaySettings: () -> Unit,
     onInterfaceSettings: () -> Unit = {},
     onLogout: () -> Unit,
@@ -592,6 +597,38 @@ fun WispDrawerContent(
                             label = { Text(stringResource(R.string.drawer_relay_health)) },
                             selected = false,
                             onClick = onRelayHealth,
+                            modifier = Modifier.height(48.dp).padding(start = 56.dp, end = 12.dp)
+                        )
+                        // Network Status — the relay-count diagnostic relocated
+                        // from the Feed top bar. Taps through to Relay Health.
+                        NavigationDrawerItem(
+                            icon = { Icon(Icons.Outlined.Hub, contentDescription = null) },
+                            label = { Text(stringResource(R.string.drawer_network_status)) },
+                            badge = {
+                                Text(
+                                    stringResource(R.string.relay_count_format, connectedRelayCount),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            },
+                            selected = false,
+                            onClick = onNetworkStatus,
+                            modifier = Modifier.height(48.dp).padding(start = 56.dp, end = 12.dp)
+                        )
+                        // Online Now — the online-count chip's new home; taps open
+                        // the relocated members sheet (avatars → profiles).
+                        NavigationDrawerItem(
+                            icon = { Icon(Icons.Outlined.Person, contentDescription = null) },
+                            label = { Text(stringResource(R.string.online_now)) },
+                            badge = {
+                                Text(
+                                    "$onlineCount",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            },
+                            selected = false,
+                            onClick = onOnlineNow,
                             modifier = Modifier.height(48.dp).padding(start = 56.dp, end = 12.dp)
                         )
                         NavigationDrawerItem(
