@@ -657,10 +657,10 @@
     <string name="nourish_hub_hero_body">Nourish gives a gentle, non-judgmental snapshot of a recipe using our green-island profile card.</string>
     <string name="nourish_hub_deferred_hint">Scanner inputs and ranked Nourish discovery are coming in a later update.</string>
     <string name="nourish_hub_pick_title">Pick a recipe</string>
-    <string name="nourish_hub_pick_body">Open a recipe from the Recipes surfaces, then return here to see its Nourish profile.</string>
+    <string name="nourish_hub_pick_body">Open a recipe from the Recipes tab, then return here to see its Nourish profile.</string>
     <string name="nourish_hub_pick_action">Browse recipes</string>
     <string name="nourish_hub_loading_recipe">Loading recipe…</string>
-    <string name="nourish_hub_selected_body">Using your selected recipe for Pantry read/compute.</string>
+    <string name="nourish_hub_selected_body">Using your selected recipe to fetch or compute its Nourish profile.</string>
     <string name="nourish_hub_open_recipe">Open recipe details</string>
     <string name="nourish_hub_explore_title">Explore analyzed recipes</string>
     <string name="nourish_hub_explore_body">For now, browse the Recipes feed while we prepare a dedicated Nourish explore surface.</string>

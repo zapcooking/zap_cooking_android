@@ -18,7 +18,6 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -36,6 +35,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import cooking.zap.app.R
 import cooking.zap.app.ui.component.NourishCard
+import cooking.zap.app.ui.component.NourishComputePanel
+import cooking.zap.app.ui.component.NourishMessagePanel
 import cooking.zap.app.viewmodel.RecipeDetailViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -180,7 +181,10 @@ fun NourishHubScreen(
                     }
 
                     recipe == null -> item(key = "missing") {
-                        NourishMessage(stringResource(R.string.error_recipe_not_found))
+                        NourishMessagePanel(
+                            message = stringResource(R.string.error_recipe_not_found),
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+                        )
                     }
 
                     else -> when (val n = nourishUi) {
@@ -188,19 +192,47 @@ fun NourishHubScreen(
                             item(key = "score") { NourishCard(n.score) }
 
                         RecipeDetailViewModel.NourishUi.NotScored ->
-                            item(key = "compute") { NourishCompute(onComputeNourish, computing = false) }
+                            item(key = "compute") {
+                                NourishComputePanel(
+                                    onCompute = onComputeNourish,
+                                    computing = false,
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+                                )
+                            }
 
                         RecipeDetailViewModel.NourishUi.Computing ->
-                            item(key = "computing") { NourishCompute(onComputeNourish, computing = true) }
+                            item(key = "computing") {
+                                NourishComputePanel(
+                                    onCompute = onComputeNourish,
+                                    computing = true,
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+                                )
+                            }
 
                         RecipeDetailViewModel.NourishUi.MembersOnly ->
-                            item(key = "members-only") { NourishMessage(stringResource(R.string.nourish_members_only)) }
+                            item(key = "members-only") {
+                                NourishMessagePanel(
+                                    message = stringResource(R.string.nourish_members_only),
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+                                )
+                            }
 
                         is RecipeDetailViewModel.NourishUi.Error ->
-                            item(key = "error") { NourishMessage(n.message, retry = onComputeNourish) }
+                            item(key = "error") {
+                                NourishMessagePanel(
+                                    message = n.message,
+                                    retry = onComputeNourish,
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+                                )
+                            }
 
                         RecipeDetailViewModel.NourishUi.Hidden ->
-                            if (!canSign) item(key = "readonly") { NourishMessage(stringResource(R.string.nourish_signing_required)) }
+                            if (!canSign) item(key = "readonly") {
+                                NourishMessagePanel(
+                                    message = stringResource(R.string.nourish_signing_required),
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+                                )
+                            }
 
                         RecipeDetailViewModel.NourishUi.Loading ->
                             item(key = "score-loading") {
@@ -250,55 +282,3 @@ fun NourishHubScreen(
     }
 }
 
-@Composable
-private fun NourishCompute(onCompute: () -> Unit, computing: Boolean) {
-    Column(Modifier.padding(horizontal = 4.dp, vertical = 4.dp)) {
-        HorizontalDivider(Modifier.padding(vertical = 8.dp))
-        Text(
-            text = stringResource(R.string.nourish_title),
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            text = stringResource(R.string.nourish_compute_body),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(8.dp))
-        Button(onClick = onCompute, enabled = !computing) {
-            if (computing) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(18.dp),
-                    color = MaterialTheme.colorScheme.onPrimary,
-                    strokeWidth = 2.dp,
-                )
-                Spacer(Modifier.size(8.dp))
-                Text(stringResource(R.string.nourish_compute_loading))
-            } else {
-                Text(stringResource(R.string.nourish_compute_action))
-            }
-        }
-    }
-}
-
-@Composable
-private fun NourishMessage(message: String, retry: (() -> Unit)? = null) {
-    Column(Modifier.padding(horizontal = 4.dp, vertical = 4.dp)) {
-        HorizontalDivider(Modifier.padding(vertical = 8.dp))
-        Text(
-            text = stringResource(R.string.nourish_title),
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            text = message,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        if (retry != null) {
-            TextButton(onClick = retry) { Text(stringResource(R.string.btn_retry)) }
-        }
-    }
-}

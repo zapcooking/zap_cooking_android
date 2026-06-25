@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -45,6 +44,8 @@ import cooking.zap.app.repo.EventRepository
 import cooking.zap.app.viewmodel.RecipeDetailViewModel
 import cooking.zap.app.ui.component.ActionBar
 import cooking.zap.app.ui.component.NourishCard
+import cooking.zap.app.ui.component.NourishComputePanel
+import cooking.zap.app.ui.component.NourishMessagePanel
 import cooking.zap.app.ui.component.ProfilePicture
 import cooking.zap.app.ui.component.recipeBody
 
@@ -178,13 +179,13 @@ fun RecipeDetailScreen(
                         is RecipeDetailViewModel.NourishUi.Scored ->
                             item(key = "nourish") { NourishCard(n.score) }
                         RecipeDetailViewModel.NourishUi.NotScored ->
-                            item(key = "nourish") { NourishCompute(onComputeNourish, computing = false) }
+                            item(key = "nourish") { NourishComputePanel(onComputeNourish, computing = false, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
                         RecipeDetailViewModel.NourishUi.Computing ->
-                            item(key = "nourish") { NourishCompute(onComputeNourish, computing = true) }
+                            item(key = "nourish") { NourishComputePanel(onComputeNourish, computing = true, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
                         RecipeDetailViewModel.NourishUi.MembersOnly ->
-                            item(key = "nourish") { NourishMessage("Nourish scoring is a Zap Cooking members feature.") }
+                            item(key = "nourish") { NourishMessagePanel(stringResource(R.string.nourish_members_only), modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
                         is RecipeDetailViewModel.NourishUi.Error ->
-                            item(key = "nourish") { NourishMessage(n.message, retry = onComputeNourish) }
+                            item(key = "nourish") { NourishMessagePanel(n.message, retry = onComputeNourish, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
                         RecipeDetailViewModel.NourishUi.Loading,
                         RecipeDetailViewModel.NourishUi.Hidden -> Unit
                     }
@@ -245,57 +246,3 @@ fun RecipeDetailScreen(
     }
 }
 
-/** "Get Nourish score" affordance — a signing account with no cached score (2.4b). */
-@Composable
-private fun NourishCompute(onCompute: () -> Unit, computing: Boolean) {
-    Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-        HorizontalDivider(Modifier.padding(vertical = 8.dp))
-        Text(
-            text = "Nourish",
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            text = "See this recipe's health score across 8 dimensions.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(8.dp))
-        Button(onClick = onCompute, enabled = !computing) {
-            if (computing) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(18.dp),
-                    color = MaterialTheme.colorScheme.onPrimary,
-                    strokeWidth = 2.dp,
-                )
-                Spacer(Modifier.width(8.dp))
-                Text("Scoring… (this can take a moment)")
-            } else {
-                Text("Get Nourish score")
-            }
-        }
-    }
-}
-
-/** Nourish info/error message (members-only, or an error with optional retry). */
-@Composable
-private fun NourishMessage(message: String, retry: (() -> Unit)? = null) {
-    Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-        HorizontalDivider(Modifier.padding(vertical = 8.dp))
-        Text(
-            text = "Nourish",
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            text = message,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        if (retry != null) {
-            TextButton(onClick = retry) { Text("Try again") }
-        }
-    }
-}
