@@ -1056,9 +1056,9 @@ fun WispNavHost(
                         restoreState = true
                     }
                 },
-                onSousChef = { navController.navigate(Routes.SOUS_CHEF) },
-                onCheffy = { navController.navigate(Routes.CHEFFY) },
-                onNourish = { navController.navigate(Routes.nourish()) },
+                onSousChef = { navController.navigate(Routes.SOUS_CHEF) { launchSingleTop = true } },
+                onCheffy = { navController.navigate(Routes.CHEFFY) { launchSingleTop = true } },
+                onNourish = { navController.navigate(Routes.nourish()) { launchSingleTop = true } },
                 onSocialGraph = {
                     navController.navigate(Routes.SOCIAL_GRAPH)
                 },
@@ -2793,9 +2793,9 @@ fun WispNavHost(
                         restoreState = true
                     }
                 },
-                onSousChef = { navController.navigate(Routes.SOUS_CHEF) },
-                onCheffy = { navController.navigate(Routes.CHEFFY) },
-                onNourish = { navController.navigate(Routes.nourish()) },
+                onSousChef = { navController.navigate(Routes.SOUS_CHEF) { launchSingleTop = true } },
+                onCheffy = { navController.navigate(Routes.CHEFFY) { launchSingleTop = true } },
+                onNourish = { navController.navigate(Routes.nourish()) { launchSingleTop = true } },
                 userAvatarUrl = recipesAvatarUrl,
                 // READ_ONLY can't sign → no compose entry point.
                 onCreateRecipe = if (signingMode == SigningMode.READ_ONLY) null else {

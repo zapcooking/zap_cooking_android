@@ -154,7 +154,7 @@ fun RecipeFeedScreen(
                     IconButton(onClick = onSearch) {
                         Icon(
                             Icons.Outlined.Search,
-                            contentDescription = "Search",
+                            contentDescription = stringResource(R.string.title_search),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
