@@ -121,6 +121,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -129,6 +132,9 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.compose.ui.text.font.FontFamily
@@ -138,6 +144,7 @@ import androidx.compose.ui.text.style.TextAlign
 import cooking.zap.app.ui.theme.WispThemeColors
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
@@ -157,6 +164,7 @@ import cooking.zap.app.ui.component.SatsNumpad
 import cooking.zap.app.ui.util.AmountFormatter
 import cooking.zap.app.viewmodel.AutoCheckState
 import cooking.zap.app.viewmodel.FeeState
+import cooking.zap.app.viewmodel.NwcRestoreState
 import cooking.zap.app.viewmodel.BackupStatus
 import cooking.zap.app.viewmodel.DeleteBackupStatus
 import cooking.zap.app.viewmodel.RelayBackupInfo
@@ -269,9 +277,11 @@ fun WalletScreen(
                                 walletState = walletState,
                                 connectionString = viewModel.connectionString.collectAsState().value,
                                 statusLines = viewModel.statusLines.collectAsState().value,
+                                nwcRestoreState = viewModel.nwcRestoreState.collectAsState().value,
                                 onConnectionStringChange = { viewModel.updateConnectionString(it) },
                                 onConnect = { viewModel.connectNwcWallet() },
                                 onDisconnect = { viewModel.disconnectWallet() },
+                                onRestoreNwc = { viewModel.acceptNwcRestore() },
                                 onClose = { viewModel.navigateHome() }
                             )
                             is WalletPage.SparkSetup -> SparkSetupContent(
@@ -604,9 +614,11 @@ private fun WalletConnectionContent(
     walletState: WalletState,
     connectionString: String,
     statusLines: List<String>,
+    nwcRestoreState: NwcRestoreState = NwcRestoreState.Idle,
     onConnectionStringChange: (String) -> Unit,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
+    onRestoreNwc: () -> Unit = {},
     onClose: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -673,6 +685,67 @@ private fun WalletConnectionContent(
     )
 
     Spacer(Modifier.height(24.dp))
+
+    AnimatedVisibility(
+        visible = nwcRestoreState is NwcRestoreState.Found || nwcRestoreState is NwcRestoreState.Checking,
+        enter = expandVertically() + fadeIn(),
+        exit = shrinkVertically() + fadeOut()
+    ) {
+        Column {
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = accent.copy(alpha = 0.12f),
+                border = BorderStroke(1.dp, accent.copy(alpha = 0.35f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                if (nwcRestoreState is NwcRestoreState.Checking) {
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            color = accent,
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            stringResource(R.string.wallet_nwc_checking_backup),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                } else {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            stringResource(R.string.wallet_nwc_backup_found_title),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            stringResource(R.string.wallet_nwc_backup_found_body),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        Button(
+                            onClick = onRestoreNwc,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                                containerColor = accent
+                            )
+                        ) {
+                            Text(stringResource(R.string.wallet_nwc_restore))
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+        }
+    }
 
     // Paste / Scan card — top half displays the pasted string (or
     // stays empty while the user hasn't pasted anything); bottom row
@@ -2521,60 +2594,53 @@ private fun WalletModeSelectionContent(
 ) {
     val accent = WispThemeColors.zapColor
 
-    // Use a Column with weighted spacers so logo+copy sit upper-middle
-    // and the two mode rows are bottom-anchored — mirrors the iOS layout.
     Column(modifier = Modifier.fillMaxSize()) {
         Spacer(Modifier.weight(1f))
 
-        // Logo + title + subtitle
+        // Icon + title + body
         Column(
             modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier
-                    .size(52.dp)
-                    .background(accent, CircleShape)
-            ) {
-                Icon(
-                    Icons.Outlined.Bolt,
-                    contentDescription = null,
-                    tint = Color.Black,
-                    modifier = Modifier.size(32.dp)
-                )
-            }
+            WelcomeBoltIcon()
             Spacer(Modifier.height(16.dp))
             Text(
                 stringResource(R.string.wallet_connect_title),
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.Center
             )
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(12.dp))
             Text(
-                stringResource(R.string.wallet_connect_subtitle),
-                style = MaterialTheme.typography.bodyMedium,
+                buildAnnotatedString {
+                    append(stringResource(R.string.wallet_connect_body1_pre))
+                    append(" ")
+                    withStyle(SpanStyle(color = accent, fontWeight = FontWeight.SemiBold)) {
+                        append("#Nostrichefs")
+                    }
+                    append(" ")
+                    append(stringResource(R.string.wallet_connect_body1_post))
+                },
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(horizontal = 24.dp)
+                modifier = Modifier.padding(horizontal = 4.dp)
             )
         }
 
-        Spacer(Modifier.weight(2f))
+        Spacer(Modifier.height(24.dp))
 
-        // Mode rows
-        WalletModeRow(
+        WalletPrimaryRow(
             leadingIcon = {
                 Image(
                     painter = painterResource(R.drawable.ic_spark_logo),
                     contentDescription = null,
                     modifier = Modifier.size(28.dp),
-                    colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(accent)
+                    colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.White)
                 )
             },
             title = stringResource(R.string.wallet_spark_title),
-            subtitle = stringResource(R.string.wallet_spark_subtitle),
+            subtitle = stringResource(R.string.wallet_spark_subtitle_recommended),
             onClick = onSelectSpark
         )
         Spacer(Modifier.height(12.dp))
@@ -2590,7 +2656,139 @@ private fun WalletModeSelectionContent(
             subtitle = stringResource(R.string.wallet_nwc_subtitle),
             onClick = onSelectNwc
         )
-        Spacer(Modifier.height(24.dp))
+
+        Spacer(Modifier.weight(1f))
+    }
+}
+
+/**
+ * Amber circle with the custom bolt shape and a diagonal shine sweep.
+ * Matches the web app's welcome-bolt animation exactly:
+ *   0–55 % of the 2.8 s cycle → fast crossing sweep (left → right)
+ *   55–100 % → pause (band stays off-screen right, invisible)
+ */
+@Composable
+private fun WelcomeBoltIcon() {
+    val amber = Color(0xFFFBBF24)
+    val infiniteTransition = rememberInfiniteTransition(label = "bolt-shine")
+    // 1 400 ms total: 0–55 % = fast sweep, 55–100 % = pause off-screen
+    val shineProgress by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 2200, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "shine"
+    )
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .size(64.dp)
+            .clip(CircleShape)
+    ) {
+        Canvas(modifier = Modifier.matchParentSize()) {
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        Color(0xFFF59E0B).copy(alpha = 0.30f),
+                        Color(0xFFEA580C).copy(alpha = 0.10f)
+                    )
+                )
+            )
+            // Only draw during the sweep phase; pause = no drawing = invisible
+            if (shineProgress < 0.55f) {
+                val t = shineProgress / 0.55f
+                val cx = (t * 2.2f - 1.1f) * size.width
+                val cy = size.height * 0.5f
+                // CSS 120 ° unit direction: (sin 120°, −cos 120°) = (0.866, 0.5)
+                // halfLen sets the gradient extent; white lives at the 40–60 % stops
+                val halfLen = size.width * 0.65f
+                drawRect(
+                    brush = Brush.linearGradient(
+                        colorStops = arrayOf(
+                            0.00f to Color.Transparent,
+                            0.35f to Color.Transparent,
+                            0.50f to Color.White.copy(alpha = 0.28f),
+                            0.65f to Color.Transparent,
+                            1.00f to Color.Transparent
+                        ),
+                        start = Offset(cx - 0.866f * halfLen, cy - 0.5f * halfLen),
+                        end   = Offset(cx + 0.866f * halfLen, cy + 0.5f * halfLen)
+                    )
+                )
+            }
+        }
+        // Custom bolt matching the Phosphor lightning shape used on the web
+        Icon(
+            painter = painterResource(R.drawable.ic_bolt),
+            contentDescription = null,
+            tint = amber,
+            modifier = Modifier.size(26.dp)
+        )
+    }
+}
+
+/**
+ * Primary mode-picker row — full-bleed accent fill, white text, layered
+ * shadow glow underneath. Used for the Spark wallet row on the mode picker.
+ *
+ * Glow is two stacked shadows (tight 55% / wide 35%) both in zapColor.
+ */
+@Composable
+private fun WalletPrimaryRow(
+    leadingIcon: @Composable () -> Unit,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit
+) {
+    val accent = WispThemeColors.zapColor
+    val shape = RoundedCornerShape(14.dp)
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .shadow(elevation = 24.dp, shape = shape, spotColor = accent, ambientColor = accent)
+            .shadow(elevation = 10.dp, shape = shape, spotColor = accent, ambientColor = accent)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onClick),
+            color = accent,
+            shape = shape
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp)
+            ) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier.size(36.dp)
+                ) { leadingIcon() }
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        title,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.White.copy(alpha = 0.85f)
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Icon(
+                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.9f),
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
     }
 }
 

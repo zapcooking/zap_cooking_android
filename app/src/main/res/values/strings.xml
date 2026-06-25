@@ -773,14 +773,23 @@
     <string name="logout_warning">Make sure you\'ve backed up your private key before logging out. You can find it in Keys settings. Without it, you won\'t be able to recover your account.</string>
 
     <!-- Wallet -->
-    <string name="wallet_connect_title">Connect a wallet</string>
+    <string name="wallet_connect_title">Zap Cooking is better with zaps!</string>
     <string name="wallet_connect_subtitle">Send and receive Lightning payments, and zap anyone on Nostr.</string>
-    <string name="wallet_spark_title">Spark wallet</string>
+    <string name="wallet_connect_body1_pre">Connect a Lightning wallet to send value directly to creators and help</string>
+    <string name="wallet_connect_body1_post">keep publishing great recipes, tips, and stories.</string>
+    <string name="wallet_connect_body2">If you don\'t have a wallet yet, you can create your first one right now.</string>
+    <string name="wallet_section_embedded">Embedded Wallets</string>
+    <string name="wallet_spark_title">Breez Spark (Self-Custodial)</string>
     <string name="wallet_spark_subtitle">Self-custody, embedded. Use your default wallet or restore from seed/relays.</string>
-    <string name="wallet_nwc_title">Nostr Wallet Connect</string>
-    <string name="wallet_nwc_subtitle">Paste a connection string from Alby, Zeus, Rizful, Minibits, etc.</string>
+    <string name="wallet_spark_subtitle_recommended">Built-in wallet &#8211; simplest for new users</string>
+    <string name="wallet_nwc_title">NWC (Nostr Wallet Connect)</string>
+    <string name="wallet_nwc_subtitle">Connect any NWC-compatible wallet</string>
     <string name="wallet_nwc_paste_prompt">Paste the connection string from your NWC-compatible wallet.</string>
     <string name="wallet_nwc_connection_hint">Connection string starts with nostr+walletconnect://</string>
+    <string name="wallet_nwc_checking_backup">Checking for saved wallet…</string>
+    <string name="wallet_nwc_backup_found_title">Wallet backup found</string>
+    <string name="wallet_nwc_backup_found_body">A wallet connection you saved on Zap Cooking was found on your relays.</string>
+    <string name="wallet_nwc_restore">Restore</string>
     <string name="spark_setup_subtitle">Self-custodial Lightning, powered by Spark and Breez.</string>
     <string name="wallet_create_title">Create new wallet</string>
     <string name="wallet_create_subtitle">Generate a fresh 12-word seed phrase</string>
