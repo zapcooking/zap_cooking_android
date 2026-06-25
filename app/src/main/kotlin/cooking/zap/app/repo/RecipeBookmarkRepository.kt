@@ -221,21 +221,28 @@ class RecipeBookmarkRepository(
      * recognized recipe ([RecipeFormats]), and batch-adds their a-coordinates to
      * the canonical list in a single republish. **ADD-ONLY** — does not touch the
      * legacy 10003 list (PR 1's read-union dedups by coordinate, so nothing
-     * double-displays and no bookmark can be stranded). Returns the coordinates
-     * newly added.
+     * double-displays and no bookmark can be stranded).
+     *
+     * Returns a [MigrationOutcome]. **`complete` is false when relays were
+     * unreachable for ids that weren't already cached** — the caller must NOT
+     * persist the one-shot flag in that case, so the migration retries on a
+     * later launch instead of permanently stranding un-backfilled bookmarks.
      */
-    suspend fun migrateLegacyBookmarks(legacyEventIds: Set<String>): Set<String> {
-        if (legacyEventIds.isEmpty()) return emptySet()
-        if (signerProvider() == null) return emptySet()
-        val resolved = resolveEventsByIds(legacyEventIds)
+    suspend fun migrateLegacyBookmarks(legacyEventIds: Set<String>): MigrationOutcome {
+        if (legacyEventIds.isEmpty()) return MigrationOutcome(added = emptySet(), complete = true)
+        if (signerProvider() == null) return MigrationOutcome(added = emptySet(), complete = false)
+        val resolution = resolveEventsByIds(legacyEventIds)
         // coordinateForEvent returns null for non-recipe events, so non-recipe
         // and unresolved e-ids are naturally skipped (never lost — they stay in
         // the legacy 10003 list untouched).
-        val coords = resolved
+        val coords = resolution.events
             .mapNotNull { coordinateForEvent(it) }
             .toCollection(LinkedHashSet())
-        if (coords.isEmpty()) return emptySet()
-        return addCoordinates(coords)
+        // Publish whatever we could resolve now (idempotent); if relays were
+        // unreachable for the still-missing ids, complete=false so the caller
+        // leaves the flag unset and retries on a later launch.
+        val added = if (coords.isEmpty()) emptySet() else addCoordinates(coords)
+        return MigrationOutcome(added = added, complete = resolution.complete)
     }
 
     fun reset() {
@@ -248,41 +255,55 @@ class RecipeBookmarkRepository(
         _bookmarkedCoordinates.value = emptySet()
     }
 
-    /** Resolve events by id, cache-first then a single broadened-union relay REQ. */
-    private suspend fun resolveEventsByIds(ids: Set<String>): List<NostrEvent> = withContext(processingContext) {
-        if (ids.isEmpty()) return@withContext emptyList()
+    /**
+     * Resolve events by id, cache-first then a single broadened-union relay REQ.
+     * [ResolveResult.complete] is false when there were uncached ids but no relay
+     * acknowledged the query (EOSE), i.e. the network was effectively unreachable
+     * and the result can't be trusted as exhaustive.
+     */
+    private suspend fun resolveEventsByIds(ids: Set<String>): ResolveResult = withContext(processingContext) {
+        if (ids.isEmpty()) return@withContext ResolveResult(events = emptyList(), complete = true)
         val resolved = LinkedHashMap<String, NostrEvent>()
         ids.forEach { id -> eventRepo.getEvent(id)?.let { resolved[id] = it } }
         val missing = ids.filterNot { it in resolved }.toSet()
-        if (missing.isNotEmpty()) {
-            val subId = "recipe-bm-migrate-${subCounter.getAndIncrement()}"
-            val collector = scope.launch(processingContext) {
-                relayPool.relayEvents.collect { relayEvent ->
-                    if (relayEvent.subscriptionId != subId) return@collect
-                    val event = relayEvent.event
-                    if (event.id !in missing || event.id in resolved) return@collect
-                    resolved[event.id] = event
-                    eventRepo.cacheEvent(event)
-                }
-            }
-            val req = ClientMessage.req(subId, Filter(ids = missing.toList()))
-            val targetedRelays = mutableSetOf<String>()
-            for (url in readRelays()) {
-                if (relayPool.sendToRelayOrEphemeral(url, req)) targetedRelays.add(url)
-            }
-            val expectedEose = targetedRelays.count { relayPool.healthTracker?.isBad(it) != true }
-            try {
-                if (expectedEose > 0) {
-                    subManager.awaitEoseCount(subId, expectedCount = expectedEose, timeoutMs = 8_000)
-                    delay(EOSE_GRACE_MS)
-                }
-            } finally {
-                collector.cancelAndJoin()
-                subManager.closeSubscription(subId)
+        if (missing.isEmpty()) return@withContext ResolveResult(events = resolved.values.toList(), complete = true)
+
+        val subId = "recipe-bm-migrate-${subCounter.getAndIncrement()}"
+        val collector = scope.launch(processingContext) {
+            relayPool.relayEvents.collect { relayEvent ->
+                if (relayEvent.subscriptionId != subId) return@collect
+                val event = relayEvent.event
+                if (event.id !in missing || event.id in resolved) return@collect
+                resolved[event.id] = event
+                eventRepo.cacheEvent(event)
             }
         }
-        resolved.values.toList()
+        val req = ClientMessage.req(subId, Filter(ids = missing.toList()))
+        val targetedRelays = mutableSetOf<String>()
+        for (url in readRelays()) {
+            if (relayPool.sendToRelayOrEphemeral(url, req)) targetedRelays.add(url)
+        }
+        val expectedEose = targetedRelays.count { relayPool.healthTracker?.isBad(it) != true }
+        var eoseCount = 0
+        try {
+            if (expectedEose > 0) {
+                eoseCount = subManager.awaitEoseCount(subId, expectedCount = expectedEose, timeoutMs = 8_000)
+                delay(EOSE_GRACE_MS)
+            }
+        } finally {
+            collector.cancelAndJoin()
+            subManager.closeSubscription(subId)
+        }
+        // A fair shot at the network requires at least one relay to have answered.
+        // No EOSE (offline / all targets timed out) => not exhaustive => retry later.
+        val complete = resolved.keys.containsAll(missing) || eoseCount > 0
+        ResolveResult(events = resolved.values.toList(), complete = complete)
     }
+
+    /** Result of [migrateLegacyBookmarks]: coordinates added + whether the run was exhaustive. */
+    data class MigrationOutcome(val added: Set<String>, val complete: Boolean)
+
+    private data class ResolveResult(val events: List<NostrEvent>, val complete: Boolean)
 
     private suspend fun queryList(
         subPrefix: String,

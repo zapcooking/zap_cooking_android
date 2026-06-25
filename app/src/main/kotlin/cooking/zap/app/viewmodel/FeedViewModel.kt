@@ -539,9 +539,15 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
                 kotlinx.coroutines.delay(2_000)
                 val legacyIds = bookmarkRepo.getBookmarkedIds()
                 if (legacyIds.isNotEmpty()) {
-                    val added = recipeBookmarkRepo.migrateLegacyBookmarks(legacyIds)
-                    if (added.isNotEmpty()) {
-                        Log.d("FeedVM", "Recipe bookmark migration: added ${added.size} canonical coordinate(s)")
+                    val outcome = recipeBookmarkRepo.migrateLegacyBookmarks(legacyIds)
+                    if (outcome.added.isNotEmpty()) {
+                        Log.d("FeedVM", "Recipe bookmark migration: added ${outcome.added.size} canonical coordinate(s)")
+                    }
+                    // Don't burn the one-shot flag if relays were unreachable for
+                    // un-cached ids — retry on a later launch so nothing is stranded.
+                    if (!outcome.complete) {
+                        Log.d("FeedVM", "Recipe bookmark migration incomplete (relays unreachable); will retry next launch")
+                        return@launch
                     }
                 }
                 prefs.edit().putBoolean("recipe_bookmarks_migrated_v1", true).apply()
