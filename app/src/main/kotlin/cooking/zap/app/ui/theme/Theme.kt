@@ -5,15 +5,11 @@ import androidx.compose.material3.SwitchColors
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
-import androidx.compose.material3.Typography
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.sp
 import androidx.core.graphics.ColorUtils
 
 val LocalWispColors = androidx.compose.runtime.staticCompositionLocalOf {
@@ -47,24 +43,6 @@ fun wispSwitchColors(): SwitchColors = SwitchDefaults.colors(
     uncheckedThumbColor = MaterialTheme.colorScheme.onSurfaceVariant,
     uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant,
     uncheckedBorderColor = MaterialTheme.colorScheme.outline
-)
-
-private val WispTypography = Typography(
-    titleLarge = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.Bold),
-    titleMedium = TextStyle(fontSize = 16.sp, fontWeight = FontWeight.SemiBold),
-    bodyLarge = TextStyle(fontSize = 15.sp, lineHeight = 22.sp),
-    bodyMedium = TextStyle(fontSize = 14.sp),
-    bodySmall = TextStyle(fontSize = 12.sp),
-    labelSmall = TextStyle(fontSize = 11.sp)
-)
-
-private val WispTypographyLarge = Typography(
-    titleLarge = TextStyle(fontSize = 22.sp, fontWeight = FontWeight.Bold),
-    titleMedium = TextStyle(fontSize = 18.sp, fontWeight = FontWeight.SemiBold),
-    bodyLarge = TextStyle(fontSize = 17.sp, lineHeight = 24.sp),
-    bodyMedium = TextStyle(fontSize = 16.sp),
-    bodySmall = TextStyle(fontSize = 14.sp),
-    labelSmall = TextStyle(fontSize = 13.sp)
 )
 
 private fun lightenColor(color: Color, fraction: Float = 0.3f): Color {
@@ -224,7 +202,7 @@ fun WispTheme(
 
     MaterialTheme(
         colorScheme = colorScheme,
-        typography = if (isLargeText) WispTypographyLarge else WispTypography,
+        typography = buildWispTypography(isLargeText),
         content = {
             CompositionLocalProvider(LocalWispColors provides wispColors) {
                 content()

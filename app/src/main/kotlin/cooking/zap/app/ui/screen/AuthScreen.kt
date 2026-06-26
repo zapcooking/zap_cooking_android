@@ -122,7 +122,7 @@ fun AuthScreen(
         Text(
             text = stringResource(R.string.auth_wisp),
             style = MaterialTheme.typography.titleLarge.copy(
-                fontFamily = FontFamily.SansSerif,
+                fontFamily = cooking.zap.app.ui.theme.WispBodyFont,
                 fontSize = 36.sp,
                 fontWeight = FontWeight.W500
             ),

@@ -277,7 +277,7 @@ fun SplashScreen(
             Text(
                 text = stringResource(R.string.auth_tagline),
                 style = MaterialTheme.typography.bodyMedium.copy(
-                    fontFamily = FontFamily.SansSerif,
+                    fontFamily = cooking.zap.app.ui.theme.WispBodyFont,
                     fontWeight = FontWeight.Bold,
                     fontSize = 17.sp
                 ),
@@ -309,7 +309,7 @@ fun SplashScreen(
                 Text(
                     text = stringResource(R.string.splash_continue_with_google),
                     style = MaterialTheme.typography.labelLarge.copy(
-                        fontFamily = FontFamily.SansSerif,
+                        fontFamily = cooking.zap.app.ui.theme.WispBodyFont,
                         fontWeight = FontWeight.Medium,
                         fontSize = 15.sp
                     )
@@ -340,7 +340,7 @@ fun SplashScreen(
                 Text(
                     text = stringResource(R.string.splash_continue_with_nostr),
                     style = MaterialTheme.typography.labelLarge.copy(
-                        fontFamily = FontFamily.SansSerif,
+                        fontFamily = cooking.zap.app.ui.theme.WispBodyFont,
                         fontWeight = FontWeight.Medium,
                         fontSize = 15.sp
                     )
