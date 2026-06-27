@@ -42,7 +42,11 @@ import cooking.zap.app.nostr.Nip19
 import cooking.zap.app.nostr.NostrUriData
 import cooking.zap.app.nostr.NostrEvent
 import cooking.zap.app.nostr.ProfileData
+import android.app.Activity
 import cooking.zap.app.nostr.LocalSigner
+import cooking.zap.app.nostr.RemoteSigner
+import cooking.zap.app.nostr.SignResult
+import cooking.zap.app.nostr.SignerIntentBridge
 import cooking.zap.app.repo.SigningMode
 import android.content.Context
 import androidx.compose.runtime.rememberCoroutineScope
@@ -308,6 +312,7 @@ fun WispNavHost(
     val dmListViewModel: DmListViewModel = viewModel()
     val groupListViewModel: cooking.zap.app.viewmodel.GroupListViewModel = viewModel()
     val blossomServersViewModel: BlossomServersViewModel = viewModel()
+    val appContentResolver = LocalContext.current.contentResolver
     val walletViewModel: WalletViewModel = viewModel(
         factory = object : androidx.lifecycle.ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
@@ -319,6 +324,7 @@ fun WispNavHost(
                     feedViewModel.eventRepo,
                     feedViewModel.relayPool,
                     feedViewModel.keyRepo,
+                    contentResolver = appContentResolver,
                 ) as T
             }
         }
@@ -334,8 +340,7 @@ fun WispNavHost(
 
     relayViewModel.relayPool = feedViewModel.relayPool
 
-    // Signer for the active account: LOCAL → LocalSigner; READ_ONLY (or signed out) → null.
-    // Reactive: recomposes on login, logout, and account switch.
+    // Signer for the active account — reactive on login/logout/account-switch.
     val context = LocalContext.current
     val signingMode by authViewModel.signingModeFlow.collectAsState()
     val npub by authViewModel.npub.collectAsState()
@@ -344,8 +349,39 @@ fun WispNavHost(
             SigningMode.LOCAL -> {
                 authViewModel.keyRepo.getKeypair()?.let { LocalSigner(it.privkey, it.pubkey) }
             }
+            SigningMode.REMOTE -> {
+                val pubkeyHex = authViewModel.keyRepo.getPubkeyHex()
+                val pkg = authViewModel.keyRepo.getSignerPackage()
+                if (pubkeyHex != null && pkg != null) RemoteSigner(pubkeyHex, context.contentResolver, pkg)
+                else null
+            }
             SigningMode.READ_ONLY -> null
             null -> null
+        }
+    }
+
+    // NIP-55 intent-based signing fallback — launches signer UI when ContentResolver fails
+    val signerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { activityResult ->
+        if (activityResult.resultCode == Activity.RESULT_OK) {
+            val data = activityResult.data
+            val signature = data?.getStringExtra("signature") ?: data?.getStringExtra("result") ?: ""
+            val event = data?.getStringExtra("event")
+            if (signature.isNotEmpty() || !event.isNullOrBlank()) {
+                SignerIntentBridge.deliverResult(SignResult.Success(signature, event))
+            } else {
+                SignerIntentBridge.deliverResult(SignResult.Rejected)
+            }
+        } else {
+            SignerIntentBridge.deliverResult(SignResult.Cancelled)
+        }
+    }
+
+    val pendingSignRequest by SignerIntentBridge.pendingRequest.collectAsState()
+    LaunchedEffect(pendingSignRequest) {
+        pendingSignRequest?.let { request ->
+            signerLauncher.launch(request.intent)
         }
     }
 
@@ -928,7 +964,21 @@ fun WispNavHost(
                 },
                 onContinueWithGoogle = {
                     navController.navigate(Routes.GOOGLE_AUTH)
-                }
+                },
+                onCancel = if (authViewModel.isAddingAccount) {
+                    {
+                        authViewModel.isAddingAccount = false
+                        feedViewModel.reloadForNewAccount()
+                        relayViewModel.reload()
+                        blossomServersViewModel.reload()
+                        composeViewModel.reloadBlossomRepo()
+                        feedViewModel.initRelays()
+                        walletViewModel.refreshState()
+                        navController.navigate(Routes.LOADING) {
+                            popUpTo(0) { inclusive = true }
+                        }
+                    }
+                } else null
             )
         }
 

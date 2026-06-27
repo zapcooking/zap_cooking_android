@@ -100,6 +100,7 @@
     <!-- Auth Screen -->
     <string name="auth_sign_up">Sign Up</string>
     <string name="auth_log_in">Log In</string>
+    <string name="auth_login_with_signer">Login with Signer</string>
     <string name="auth_or_log_in_with_key">Or log in with your key</string>
     <string name="auth_nsec_or_npub">nsec or npub…</string>
     <string name="auth_wisp">Zap Cooking</string>
@@ -133,6 +134,8 @@
     <string name="content_marked_nsfw">Marked as NSFW</string>
     <string name="btn_post_now">Post now</string>
     <string name="btn_cancel">Cancel</string>
+    <string name="keys_remote_signer_info">Signing is handled by a connected signer app. No private key is stored on this device.</string>
+    <string name="keys_read_only_info">No private key is stored on this device.</string>
     <string name="btn_save">Save</string>
     <string name="btn_delete">Delete</string>
     <string name="btn_create">Create</string>

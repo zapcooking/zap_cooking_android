@@ -168,6 +168,18 @@ class AuthViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun loginWithSigner(pubkeyHex: String, signerPackage: String?) {
+        try {
+            keyRepo.savePubkeyOnly(pubkeyHex, signerPackage)
+            keyRepo.reloadPrefs(pubkeyHex)
+            _npub.value = Nip19.npubEncode(pubkeyHex.hexToByteArray())
+            _signingMode.value = SigningMode.REMOTE
+            _error.value = null
+        } catch (e: Exception) {
+            _error.value = "Signer login failed: ${e.message}"
+        }
+    }
+
     /**
      * Re-sync npub/signing-mode flows after another component (e.g. GoogleAuthViewModel)
      * has saved a keypair directly through KeyRepository. Without this, the

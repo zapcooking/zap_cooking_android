@@ -11,6 +11,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -23,6 +24,7 @@ import cooking.zap.app.R
 import cooking.zap.app.nostr.Nip19
 import cooking.zap.app.nostr.hexToByteArray
 import cooking.zap.app.repo.KeyRepository
+import cooking.zap.app.repo.SigningMode
 import cooking.zap.app.ui.component.PrivateKeyRevealSection
 import cooking.zap.app.ui.component.PublicKeyCard
 
@@ -80,19 +82,32 @@ fun KeysScreen(
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
-            if (keyRepository.isReadOnly()) {
-                Text(
-                    text = "No private key is stored on this device.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            } else {
-                PrivateKeyRevealSection(
-                    keypair = keypair,
-                    avatarUrl = avatarUrl
-                )
+            when (keyRepository.getSigningMode()) {
+                SigningMode.REMOTE -> {
+                    OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = stringResource(R.string.keys_remote_signer_info),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(12.dp)
+                        )
+                    }
+                }
+                SigningMode.READ_ONLY -> {
+                    Text(
+                        text = stringResource(R.string.keys_read_only_info),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                SigningMode.LOCAL -> {
+                    PrivateKeyRevealSection(
+                        keypair = keypair,
+                        avatarUrl = avatarUrl
+                    )
+                }
             }
         }
     }
