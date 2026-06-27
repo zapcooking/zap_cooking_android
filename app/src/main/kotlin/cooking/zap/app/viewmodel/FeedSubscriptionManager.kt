@@ -335,7 +335,20 @@ class FeedSubscriptionManager(
             return
         }
         resubscribeFeed()
-        if (isRelayBackedFeed()) restartRelayFeed(clear = true)
+        if (isRelayBackedFeed()) {
+            // Resume/reconnect: OnlyFood must mirror the cold-start landing — paint from
+            // cache and merge fresh on top (clear=false) — so it doesn't blank while
+            // relays reconnect. Only paint when the relay feed is actually empty: with
+            // clear=false the generation isn't bumped, so an unconditional paint would
+            // re-scan the whole eventCache on every resume and could overlap an in-flight
+            // paint. A non-empty list already has content to show, so skip the scan.
+            if (_feedType.value == FeedType.ONLY_FOOD) {
+                if (eventRepo.relayFeed.value.isEmpty()) eventRepo.paintOnlyFoodFromCache()
+                restartRelayFeed(clear = false)
+            } else {
+                restartRelayFeed(clear = true)
+            }
+        }
     }
 
     /**
