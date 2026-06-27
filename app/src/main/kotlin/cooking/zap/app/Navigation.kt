@@ -2950,9 +2950,16 @@ fun WispNavHost(
             val dTag = java.net.URLDecoder.decode(encodedDTag, "UTF-8")
             val collectionDetailViewModel: RecipePackDetailViewModel = viewModel()
             val cookbookLists by feedViewModel.recipeBookmarkRepo.lists.collectAsState()
+            val listsLoading by feedViewModel.recipeBookmarkRepo.isLoading.collectAsState()
             val list = remember(cookbookLists, dTag) { cookbookLists.firstOrNull { it.dTag == dTag } }
-            LaunchedEffect(list?.event?.id) {
-                list?.let { collectionDetailViewModel.loadCollection(it, feedViewModel.recipeRepo) }
+            val currentList = list
+            LaunchedEffect(currentList?.event?.id, listsLoading) {
+                when {
+                    currentList != null -> collectionDetailViewModel.loadCollection(currentList, feedViewModel.recipeRepo)
+                    // Lists finished loading and the d-tag isn't among them (stale
+                    // deep link / deleted list) — show not-found instead of spinning.
+                    !listsLoading -> collectionDetailViewModel.markNotFound()
+                }
             }
             RecipePackDetailScreen(
                 viewModel = collectionDetailViewModel,

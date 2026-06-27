@@ -109,10 +109,28 @@ class RecipePackDetailViewModel : ViewModel() {
                 title = list.title,
                 description = list.summary.orEmpty(),
                 image = cover,
-                recipeCount = list.coordinates.size,
+                // Count the parsed coordinates (not the raw a-tags) so the header
+                // matches what the grid can actually resolve — a malformed `a` tag
+                // would otherwise inflate the count past the resolvable recipes.
+                recipeCount = coordinates.size,
             )
             resolveCoordinates(key, coordinates, recipeRepo)
         }
+    }
+
+    /**
+     * Render the not-found state (used when a cookbook-collection deep link
+     * resolves to a list that no longer exists). Cancels any in-flight load so a
+     * late result can't flip the screen back to a spinner.
+     */
+    fun markNotFound() {
+        loadJob?.cancel()
+        loadedKey = null
+        _pack.value = null
+        _recipes.value = emptyList()
+        _pendingCount.value = 0
+        _isLoading.value = false
+        _notFound.value = true
     }
 
     /**

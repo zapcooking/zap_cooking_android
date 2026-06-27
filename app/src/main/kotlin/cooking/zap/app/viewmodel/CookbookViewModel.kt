@@ -30,6 +30,14 @@ class CookbookViewModel : ViewModel() {
     private var bound = false
 
     /**
+     * `d`-tags with an in-flight cover resolution. Guards against a fresh `lists`
+     * emission launching a duplicate coroutine (and duplicate relay fetch) for a
+     * cover that's still resolving. Only touched on the viewModelScope (main)
+     * dispatcher, so a plain set is safe.
+     */
+    private val resolvingCovers = mutableSetOf<String>()
+
+    /**
      * Mirror [bookmarkRepo]'s lists into [lists] and resolve covers as they
      * arrive. Idempotent — safe to call from a `LaunchedEffect` on every entry.
      */
@@ -45,15 +53,22 @@ class CookbookViewModel : ViewModel() {
     }
 
     /**
-     * Resolve [list]'s cover once. Re-attempts only when the prior result was
-     * null (e.g. the cover recipe wasn't cached yet) so a later relay-fill can
-     * still surface it, without re-fetching covers that already resolved.
+     * Resolve [list]'s cover. Skips if a URL already resolved, or if a resolution
+     * for this `d`-tag is already in-flight (so a re-emission of `lists` can't
+     * launch a duplicate coroutine / relay fetch). A prior null result is allowed
+     * to re-attempt — a later relay-fill of the cover recipe can then surface it.
      */
     private fun resolveCover(list: CookbookList, recipeRepo: RecipeRepository) {
-        if (_covers.value[list.dTag] != null) return
+        val dTag = list.dTag
+        if (_covers.value[dTag] != null) return
+        if (!resolvingCovers.add(dTag)) return
         viewModelScope.launch {
-            val url = CookbookCovers.resolve(list, recipeRepo)
-            _covers.value = _covers.value + (list.dTag to url)
+            try {
+                val url = CookbookCovers.resolve(list, recipeRepo)
+                _covers.value = _covers.value + (dTag to url)
+            } finally {
+                resolvingCovers.remove(dTag)
+            }
         }
     }
 }
