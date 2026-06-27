@@ -335,7 +335,17 @@ class FeedSubscriptionManager(
             return
         }
         resubscribeFeed()
-        if (isRelayBackedFeed()) restartRelayFeed(clear = true)
+        if (isRelayBackedFeed()) {
+            // Resume/reconnect: OnlyFood must mirror the cold-start landing — paint from
+            // cache and merge fresh on top (clear=false) — so it doesn't blank while
+            // relays reconnect. Other relay feeds clear first as before.
+            if (_feedType.value == FeedType.ONLY_FOOD) {
+                eventRepo.paintOnlyFoodFromCache()
+                restartRelayFeed(clear = false)
+            } else {
+                restartRelayFeed(clear = true)
+            }
+        }
     }
 
     /**
