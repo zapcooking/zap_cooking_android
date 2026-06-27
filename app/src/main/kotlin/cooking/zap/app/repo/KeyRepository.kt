@@ -13,10 +13,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.encodeToString
 
 enum class SigningMode { LOCAL, REMOTE, READ_ONLY }
@@ -80,65 +76,6 @@ class KeyRepository(private val context: Context) {
     init {
         prefs.registerOnSharedPreferenceChangeListener(prefsListener)
         migrateToMultiAccount()
-    }
-
-    /**
-     * One-time migration that drops every REMOTE-signer account from the registry,
-     * scrubs the per-account signer_package indexed keys, and clears the active
-     * session if it was a REMOTE one. Runs before [migrateToMultiAccount] so the
-     * legacy single-account path also gets cleaned before being wrapped.
-     *
-     * Done in two layers: rewrite the raw `accounts` JSON (parsed as JsonArray so
-     * we never feed the removed enum value to kotlinx.serialization), then patch
-     * the legacy top-level keys. Idempotent via `remote_signer_purged_v1`.
-     */
-    private fun migrateRemoveRemoteSigner() {
-        if (encPrefs.getBoolean("remote_signer_purged_v1", false)) return
-        val editor = encPrefs.edit()
-
-        val removedPubkeys = mutableSetOf<String>()
-        encPrefs.getString("accounts", null)?.let { raw ->
-            runCatching {
-                val arr = json.parseToJsonElement(raw).jsonArray
-                val kept = arr.filter { el ->
-                    val mode = (el.jsonObject["signingMode"] as? JsonPrimitive)?.content
-                    val keep = mode != "REMOTE"
-                    if (!keep) {
-                        (el.jsonObject["pubkeyHex"] as? JsonPrimitive)?.content?.let { removedPubkeys += it }
-                    }
-                    keep
-                }
-                editor.putString("accounts", json.encodeToString(JsonArray(kept)))
-            }
-        }
-
-        removedPubkeys.forEach {
-            editor.remove("signer_package_$it")
-            editor.remove("privkey_$it")
-        }
-
-        val activePubkey = encPrefs.getString("active_pubkey", null)
-        val legacyModeIsRemote = encPrefs.getString("signing_mode", null) == "REMOTE"
-        val activeSessionWasRemote = legacyModeIsRemote || (activePubkey != null && activePubkey in removedPubkeys)
-        if (activeSessionWasRemote) {
-            editor.remove("pubkey")
-                .remove("privkey")
-                .remove("signing_mode")
-                .remove("active_pubkey")
-        }
-
-        editor.remove("signer_package")
-        encPrefs.all.keys.filter { it.startsWith("signer_package_") }.forEach { editor.remove(it) }
-
-        editor.putBoolean("remote_signer_purged_v1", true).apply()
-
-        // Refresh in-memory snapshot from the rewritten JSON.
-        _accounts.value = loadAccountList()
-
-        // Auto-switch to a remaining account if the active session was just cleared.
-        if (activeSessionWasRemote) {
-            _accounts.value.firstOrNull()?.let { switchToAccount(it.pubkeyHex) }
-        }
     }
 
     /**

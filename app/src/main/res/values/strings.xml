@@ -134,6 +134,8 @@
     <string name="content_marked_nsfw">Marked as NSFW</string>
     <string name="btn_post_now">Post now</string>
     <string name="btn_cancel">Cancel</string>
+    <string name="keys_remote_signer_info">Signing is handled by a connected signer app. No private key is stored on this device.</string>
+    <string name="keys_read_only_info">No private key is stored on this device.</string>
     <string name="btn_save">Save</string>
     <string name="btn_delete">Delete</string>
     <string name="btn_create">Create</string>

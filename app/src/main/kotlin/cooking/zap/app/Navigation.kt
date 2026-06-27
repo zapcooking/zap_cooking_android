@@ -351,7 +351,11 @@ fun WispNavHost(
             val data = activityResult.data
             val signature = data?.getStringExtra("signature") ?: data?.getStringExtra("result") ?: ""
             val event = data?.getStringExtra("event")
-            SignerIntentBridge.deliverResult(SignResult.Success(signature, event))
+            if (signature.isNotEmpty() || !event.isNullOrBlank()) {
+                SignerIntentBridge.deliverResult(SignResult.Success(signature, event))
+            } else {
+                SignerIntentBridge.deliverResult(SignResult.Rejected)
+            }
         } else {
             SignerIntentBridge.deliverResult(SignResult.Cancelled)
         }

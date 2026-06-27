@@ -391,7 +391,7 @@ fun SplashScreen(
             ) {
                 Icon(
                     imageVector = Icons.Outlined.Close,
-                    contentDescription = "Cancel",
+                    contentDescription = stringResource(R.string.btn_cancel),
                     tint = Color.White
                 )
             }
@@ -417,8 +417,7 @@ fun SplashScreen(
             },
             onLoginWithSigner = {
                 showNostrSheet = false
-                val permissions = """[{"type":"sign_event","kind":0},{"type":"sign_event","kind":1},{"type":"sign_event","kind":3},{"type":"sign_event","kind":5},{"type":"sign_event","kind":6},{"type":"sign_event","kind":7},{"type":"sign_event","kind":9734},{"type":"sign_event","kind":10000},{"type":"sign_event","kind":10002},{"type":"sign_event","kind":22242},{"type":"sign_event","kind":30000},{"type":"sign_event","kind":30023},{"type":"nip44_encrypt"},{"type":"nip44_decrypt"}]"""
-                signerLauncher.launch(RemoteSignerBridge.buildGetPublicKeyIntent(permissions))
+                signerLauncher.launch(RemoteSignerBridge.buildGetPublicKeyIntent(RemoteSignerBridge.DEFAULT_PERMISSIONS))
             }
         )
     }

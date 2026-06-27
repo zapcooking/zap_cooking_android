@@ -102,8 +102,10 @@ class RemoteSigner(
                 if (!signedJson.isNullOrBlank()) return@withContext NostrEvent.fromJson(signedJson)
             }
 
-            val sig = it.getString(it.getColumnIndex("signature"))
-                ?: it.getString(it.getColumnIndex("result"))
+            val sigIdx = it.getColumnIndex("signature")
+            val resIdx = it.getColumnIndex("result")
+            val sig = (if (sigIdx >= 0) it.getString(sigIdx) else null)
+                ?: (if (resIdx >= 0) it.getString(resIdx) else null)
                 ?: return@withContext null
             return@withContext unsigned.withSignature(sig)
         }
@@ -178,6 +180,9 @@ class RemoteSigner(
  * Helpers for NIP-55 signer discovery and login (intent-based, only used once at login time).
  */
 object RemoteSignerBridge {
+    /** NIP-55 permissions requested at login time for all signing operations used by this app. */
+    const val DEFAULT_PERMISSIONS = """[{"type":"sign_event","kind":0},{"type":"sign_event","kind":1},{"type":"sign_event","kind":3},{"type":"sign_event","kind":5},{"type":"sign_event","kind":6},{"type":"sign_event","kind":7},{"type":"sign_event","kind":9734},{"type":"sign_event","kind":10000},{"type":"sign_event","kind":10002},{"type":"sign_event","kind":22242},{"type":"sign_event","kind":30000},{"type":"sign_event","kind":30023},{"type":"nip44_encrypt"},{"type":"nip44_decrypt"}]"""
+
     fun isSignerAvailable(context: Context): Boolean {
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse("nostrsigner:"))
         return context.packageManager.queryIntentActivities(intent, 0).isNotEmpty()

@@ -195,7 +195,7 @@ fun KeysScreen(
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedCard(modifier = Modifier.fillMaxWidth()) {
                         Text(
-                            text = "Signing is handled by a connected signer app. No private key is stored on this device.",
+                            text = stringResource(R.string.keys_remote_signer_info),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(12.dp)
@@ -210,7 +210,7 @@ fun KeysScreen(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "No private key is stored on this device.",
+                        text = stringResource(R.string.keys_read_only_info),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
