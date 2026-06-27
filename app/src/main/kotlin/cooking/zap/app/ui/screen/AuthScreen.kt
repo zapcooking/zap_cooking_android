@@ -1,5 +1,7 @@
 package cooking.zap.app.ui.screen
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -28,15 +30,20 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import cooking.zap.app.nostr.Nip19
+import cooking.zap.app.nostr.RemoteSignerBridge
+import cooking.zap.app.nostr.toHex
 import cooking.zap.app.ui.component.NsecPasteGuard
 import cooking.zap.app.ui.component.QrScanner
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -59,7 +66,6 @@ import kotlin.math.cos
 import kotlin.math.pow
 import kotlin.math.sign
 import kotlin.math.sin
-import androidx.compose.ui.res.stringResource
 import cooking.zap.app.R
 import cooking.zap.app.viewmodel.AuthViewModel
 
@@ -69,10 +75,37 @@ fun AuthScreen(
     showSignUp: Boolean = true,
     onAuthenticated: (isNewAccount: Boolean) -> Unit
 ) {
+    val context = LocalContext.current
     val nsecInput by viewModel.nsecInput.collectAsState()
     val error by viewModel.error.collectAsState()
     var nsecVisible by remember { mutableStateOf(false) }
     var showQrScanner by remember { mutableStateOf(false) }
+    val signerAvailable = remember { RemoteSignerBridge.isSignerAvailable(context) }
+
+    // Navigate only once the composable is back in RESUMED state — activity result
+    // callbacks fire during STARTED and navigateSafe() silently drops calls then.
+    var signerLoginComplete by remember { mutableStateOf(false) }
+    if (signerLoginComplete) {
+        LaunchedEffect(Unit) {
+            signerLoginComplete = false
+            onAuthenticated(false)
+        }
+    }
+
+    val signerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val data = result.data ?: return@rememberLauncherForActivityResult
+        val pubkeyResult = data.getStringExtra("result") ?: return@rememberLauncherForActivityResult
+        val pkg = data.getStringExtra("package")
+        val pubkeyHex = if (pubkeyResult.startsWith("npub1")) {
+            try { Nip19.npubDecode(pubkeyResult).toHex() } catch (_: Exception) { return@rememberLauncherForActivityResult }
+        } else {
+            pubkeyResult
+        }
+        viewModel.loginWithSigner(pubkeyHex, pkg)
+        signerLoginComplete = true
+    }
 
     if (showQrScanner) {
         QrScanner(
@@ -197,6 +230,22 @@ fun AuthScreen(
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(stringResource(R.string.auth_log_in))
+        }
+
+        if (signerAvailable) {
+            Spacer(Modifier.height(24.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+            Spacer(Modifier.height(24.dp))
+
+            OutlinedButton(
+                onClick = {
+                    val permissions = """[{"type":"sign_event","kind":0},{"type":"sign_event","kind":1},{"type":"sign_event","kind":3},{"type":"sign_event","kind":5},{"type":"sign_event","kind":6},{"type":"sign_event","kind":7},{"type":"sign_event","kind":9734},{"type":"sign_event","kind":10000},{"type":"sign_event","kind":10002},{"type":"sign_event","kind":22242},{"type":"sign_event","kind":30000},{"type":"sign_event","kind":30023},{"type":"nip44_encrypt"},{"type":"nip44_decrypt"}]"""
+                    signerLauncher.launch(RemoteSignerBridge.buildGetPublicKeyIntent(permissions))
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(stringResource(R.string.auth_login_with_signer))
+            }
         }
 
         error?.let {

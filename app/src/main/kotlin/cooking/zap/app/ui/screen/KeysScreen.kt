@@ -69,6 +69,7 @@ import cooking.zap.app.R
 import cooking.zap.app.nostr.Nip19
 import cooking.zap.app.nostr.hexToByteArray
 import cooking.zap.app.repo.KeyRepository
+import cooking.zap.app.repo.SigningMode
 import cooking.zap.app.ui.component.QrCodeDialog
 
 private fun android.content.Context.findFragmentActivity(): FragmentActivity? {
@@ -184,27 +185,46 @@ fun KeysScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            if (keyRepository.isReadOnly()) {
-                Text(
-                    text = stringResource(R.string.settings_private_key),
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "No private key is stored on this device.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            } else {
-                PrivateKeySection(
-                    nsec = nsec,
-                    onReveal = { nsec = it },
-                    keypair = keypair,
-                    revealPrivateKeyTitle = revealPrivateKeyTitle,
-                    revealPrivateKeyDescription = revealPrivateKeyDescription,
-                    avatarUrl = avatarUrl
-                )
+            when (keyRepository.getSigningMode()) {
+                SigningMode.REMOTE -> {
+                    Text(
+                        text = stringResource(R.string.settings_private_key),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = "Signing is handled by a connected signer app. No private key is stored on this device.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(12.dp)
+                        )
+                    }
+                }
+                SigningMode.READ_ONLY -> {
+                    Text(
+                        text = stringResource(R.string.settings_private_key),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "No private key is stored on this device.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                SigningMode.LOCAL -> {
+                    PrivateKeySection(
+                        nsec = nsec,
+                        onReveal = { nsec = it },
+                        keypair = keypair,
+                        revealPrivateKeyTitle = revealPrivateKeyTitle,
+                        revealPrivateKeyDescription = revealPrivateKeyDescription,
+                        avatarUrl = avatarUrl
+                    )
+                }
             }
         }
     }

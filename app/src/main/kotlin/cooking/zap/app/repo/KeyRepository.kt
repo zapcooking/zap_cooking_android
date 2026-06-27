@@ -19,7 +19,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.encodeToString
 
-enum class SigningMode { LOCAL, READ_ONLY }
+enum class SigningMode { LOCAL, REMOTE, READ_ONLY }
 
 @Serializable
 data class AccountInfo(
@@ -79,7 +79,6 @@ class KeyRepository(private val context: Context) {
 
     init {
         prefs.registerOnSharedPreferenceChangeListener(prefsListener)
-        migrateRemoveRemoteSigner()
         migrateToMultiAccount()
     }
 
@@ -170,7 +169,7 @@ class KeyRepository(private val context: Context) {
 
     fun getActivePubkey(): String? = encPrefs.getString("active_pubkey", null)
 
-    fun addAccount(pubkeyHex: String, signingMode: SigningMode, privkeyHex: String? = null) {
+    fun addAccount(pubkeyHex: String, signingMode: SigningMode, privkeyHex: String? = null, signerPackage: String? = null) {
         val accounts = loadAccountList().toMutableList()
         // Remove existing entry for this pubkey (re-login scenario)
         accounts.removeAll { it.pubkeyHex == pubkeyHex }
@@ -184,6 +183,11 @@ class KeyRepository(private val context: Context) {
             editor.putString("privkey_$pubkeyHex", privkeyHex)
         } else {
             editor.remove("privkey_$pubkeyHex")
+        }
+        if (signerPackage != null) {
+            editor.putString("signer_package_$pubkeyHex", signerPackage)
+        } else {
+            editor.remove("signer_package_$pubkeyHex")
         }
         editor.apply()
         _accounts.value = accounts
@@ -203,9 +207,16 @@ class KeyRepository(private val context: Context) {
             SigningMode.LOCAL -> {
                 val privkey = encPrefs.getString("privkey_$pubkeyHex", null)
                 editor.putString("privkey", privkey)
+                editor.remove("signer_package")
+            }
+            SigningMode.REMOTE -> {
+                val signerPkg = encPrefs.getString("signer_package_$pubkeyHex", null)
+                editor.remove("privkey")
+                editor.putString("signer_package", signerPkg)
             }
             SigningMode.READ_ONLY -> {
                 editor.remove("privkey")
+                editor.remove("signer_package")
             }
         }
         editor.apply()
@@ -219,6 +230,7 @@ class KeyRepository(private val context: Context) {
             .putString("accounts", json.encodeToString(accounts))
 
         editor.remove("privkey_$pubkeyHex")
+        editor.remove("signer_package_$pubkeyHex")
 
         // If removing the active account, clear legacy keys
         if (getPubkeyHex() == pubkeyHex) {
@@ -279,6 +291,16 @@ class KeyRepository(private val context: Context) {
         return Keys.Keypair(privHex.hexToByteArray(), pubHex.hexToByteArray())
     }
 
+    fun savePubkeyOnly(pubkeyHex: String, signerPackage: String?) {
+        encPrefs.edit()
+            .putString("pubkey", pubkeyHex)
+            .putString("signing_mode", SigningMode.REMOTE.name)
+            .putString("signer_package", signerPackage)
+            .remove("privkey")
+            .apply()
+        addAccount(pubkeyHex, SigningMode.REMOTE, signerPackage = signerPackage)
+    }
+
     fun savePubkeyReadOnly(pubkeyHex: String) {
         encPrefs.edit()
             .putString("pubkey", pubkeyHex)
@@ -294,6 +316,8 @@ class KeyRepository(private val context: Context) {
     }
 
     fun isReadOnly(): Boolean = getSigningMode() == SigningMode.READ_ONLY
+
+    fun getSignerPackage(): String? = encPrefs.getString("signer_package", null)
 
     fun getPubkeyHex(): String? = encPrefs.getString("pubkey", null)
 
