@@ -2,6 +2,7 @@ package cooking.zap.app.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import cooking.zap.app.nostr.RecipeParser
 import cooking.zap.app.repo.CookbookCovers
 import cooking.zap.app.repo.RecipeBookmarkRepository
 import cooking.zap.app.repo.RecipeBookmarkRepository.CookbookList
@@ -11,10 +12,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 /**
- * Backs the **Cookbook → Saved** sub-tab (A14 PR 3b-i). It does not own the
- * recipe-list data — those live in [RecipeBookmarkRepository] (PR 3a), already
- * loaded at login — it just re-exposes them and lazily resolves a cover image
- * per list via [CookbookCovers] (which reuses the existing recipe lookups).
+ * Backs the **Cookbook** tab's two sub-tabs:
+ *  - **Saved** (PR 3b-i) — re-exposes the user's kind-30001 recipe lists from
+ *    [RecipeBookmarkRepository] (PR 3a, already loaded at login) and lazily
+ *    resolves a cover image per list via [CookbookCovers].
+ *  - **My Recipes** (PR 3b-ii) — the user's OWN published recipes via the LIVE
+ *    author query ([RecipeRepository.loadAuthoredRecipes]); kicked off lazily the
+ *    first time the sub-tab is shown.
  *
  * Read-only: no writes here. List management (rename/delete/cover) is PR 3b-iii.
  */
@@ -27,7 +31,22 @@ class CookbookViewModel : ViewModel() {
     /** Resolved cover URL per list `d`-tag; absent until resolved, null when none resolves. */
     val covers: StateFlow<Map<String, String?>> = _covers
 
+    private val _authoredRecipes = MutableStateFlow<List<RecipeParser.Recipe>>(emptyList())
+    /** The signed-in user's OWN published recipes (My Recipes), mirrored from the repo. */
+    val authoredRecipes: StateFlow<List<RecipeParser.Recipe>> = _authoredRecipes
+
+    private val _isAuthoredLoading = MutableStateFlow(false)
+    val isAuthoredLoading: StateFlow<Boolean> = _isAuthoredLoading
+
     private var bound = false
+
+    // Set on bind() to drive the lazy My Recipes query. The pubkey is read
+    // through a PROVIDER (not captured) so a late sign-in / account switch is
+    // always reflected — bind() can't re-capture a value (collectors set once).
+    private var recipeRepo: RecipeRepository? = null
+    private var userPubkeyProvider: () -> String? = { null }
+    /** Pubkey the authored query last ran for; reload when it changes (account switch). */
+    private var lastRequestedPubkey: String? = null
 
     /**
      * `d`-tags with an in-flight cover resolution. Guards against a fresh `lists`
@@ -38,10 +57,19 @@ class CookbookViewModel : ViewModel() {
     private val resolvingCovers = mutableSetOf<String>()
 
     /**
-     * Mirror [bookmarkRepo]'s lists into [lists] and resolve covers as they
-     * arrive. Idempotent — safe to call from a `LaunchedEffect` on every entry.
+     * Mirror [bookmarkRepo]'s lists into [lists] (resolving covers as they
+     * arrive) and the repo's authored-recipe flows into [authoredRecipes] /
+     * [isAuthoredLoading]. [userPubkeyProvider] is read live (not captured) so a
+     * late sign-in / account switch is reflected. Re-binding refreshes the
+     * provider/repo; the flow collectors are wired exactly once.
      */
-    fun bind(bookmarkRepo: RecipeBookmarkRepository, recipeRepo: RecipeRepository) {
+    fun bind(
+        bookmarkRepo: RecipeBookmarkRepository,
+        recipeRepo: RecipeRepository,
+        userPubkeyProvider: () -> String?,
+    ) {
+        this.recipeRepo = recipeRepo
+        this.userPubkeyProvider = userPubkeyProvider
         if (bound) return
         bound = true
         viewModelScope.launch {
@@ -50,6 +78,26 @@ class CookbookViewModel : ViewModel() {
                 lists.forEach { list -> resolveCover(list, recipeRepo) }
             }
         }
+        viewModelScope.launch {
+            recipeRepo.authoredRecipes.collect { _authoredRecipes.value = it }
+        }
+        viewModelScope.launch {
+            recipeRepo.isAuthoredLoading.collect { _isAuthoredLoading.value = it }
+        }
+    }
+
+    /**
+     * Kick off the LIVE author query for the current user when My Recipes is
+     * shown (lazy — Saved is the default landing, so this avoids a query the
+     * user may never need). No-op when signed-out (no pubkey) or already loaded
+     * for this pubkey; reloads when the pubkey changed (account switch).
+     */
+    fun requestMyRecipes() {
+        val pubkey = userPubkeyProvider().orEmpty().trim().takeIf { it.isNotEmpty() } ?: return
+        val repo = recipeRepo ?: return
+        if (pubkey == lastRequestedPubkey) return
+        lastRequestedPubkey = pubkey
+        repo.loadAuthoredRecipes(pubkey)
     }
 
     /**
