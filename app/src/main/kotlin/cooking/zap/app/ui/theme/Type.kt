@@ -55,7 +55,7 @@ fun buildWispTypography(isLargeText: Boolean): Typography {
     val display = WispDisplayFont
     val body = WispBodyFont
 
-    fun head(style: TextStyle) = style.copy(fontFamily = display, letterSpacing = TIGHT)
+    fun head(style: TextStyle) = style.copy(fontFamily = display, fontWeight = FontWeight.SemiBold, letterSpacing = TIGHT)
 
     return if (!isLargeText) {
         Typography(
@@ -67,7 +67,7 @@ fun buildWispTypography(isLargeText: Boolean): Typography {
             headlineSmall = head(d.headlineSmall),
             titleLarge = TextStyle(fontFamily = display, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, letterSpacing = TIGHT),
             titleMedium = TextStyle(fontFamily = display, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, letterSpacing = TIGHT),
-            titleSmall = d.titleSmall.copy(fontFamily = display),
+            titleSmall = head(d.titleSmall),
             bodyLarge = TextStyle(fontFamily = body, fontSize = 15.sp, lineHeight = 22.sp),
             bodyMedium = TextStyle(fontFamily = body, fontSize = 14.sp),
             bodySmall = TextStyle(fontFamily = body, fontSize = 12.sp),
@@ -85,7 +85,7 @@ fun buildWispTypography(isLargeText: Boolean): Typography {
             headlineSmall = head(d.headlineSmall),
             titleLarge = TextStyle(fontFamily = display, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, letterSpacing = TIGHT),
             titleMedium = TextStyle(fontFamily = display, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, letterSpacing = TIGHT),
-            titleSmall = d.titleSmall.copy(fontFamily = display),
+            titleSmall = head(d.titleSmall),
             bodyLarge = TextStyle(fontFamily = body, fontSize = 17.sp, lineHeight = 24.sp),
             bodyMedium = TextStyle(fontFamily = body, fontSize = 16.sp),
             bodySmall = TextStyle(fontFamily = body, fontSize = 14.sp),

@@ -75,7 +75,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
-enum class FeedType { FOR_YOU, FOLLOWS, EXTENDED_FOLLOWS, RELAY, LIST, TRENDING }
+enum class FeedType { FOR_YOU, FOLLOWS, EXTENDED_FOLLOWS, RELAY, LIST, TRENDING, ONLY_FOOD }
 
 enum class TrendingMode { NOTES, USERS }
 
@@ -301,6 +301,22 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
         userPubkeyProvider = { getUserPubkey() },
     )
 
+    /**
+     * A14 canonical recipe bookmarks — the kind-30001 `nostrcooking-bookmarks`
+     * list shared with the web client (separate from generic note bookmarks).
+     */
+    val recipeBookmarkRepo = cooking.zap.app.repo.RecipeBookmarkRepository(
+        relayPool = relayPool,
+        outboxRouter = outboxRouter,
+        eventRepo = eventRepo,
+        subManager = subManager,
+        scope = viewModelScope,
+        processingContext = processingDispatcher,
+        userReadRelaysProvider = { pubkeyHex?.let { relayListRepo.getReadRelays(it) } ?: emptyList() },
+        userPubkeyProvider = { getUserPubkey() },
+        signerProvider = { signer },
+    )
+
     /** zap.cooking backend client (membership today; Phase 2 AI endpoints). */
     val zapCookingApi = cooking.zap.app.api.ZapCookingApi()
 
@@ -334,6 +350,7 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
 
     val eventRouter: EventRouter = EventRouter(
         relayPool, eventRepo, contactRepo, muteRepo, notifRepo, listRepo, bookmarkRepo,
+        recipeBookmarkRepo,
         bookmarkSetRepo, pinRepo, blossomRepo, customEmojiRepo, relayListRepo, interestRepo, relaySetRepo,
         relayScoreBoard, relayHintStore, keyRepo, dmRepo, extendedNetworkRepo, groupRepo, liveStreamRepo, metadataFetcher,
         getUserPubkey = { getUserPubkey() },
@@ -341,6 +358,7 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
         getFeedSubId = { feedSub.feedSubId },
         getRelayFeedSubId = { feedSub.relayFeedSubId },
         getIsTrendingFeed = { feedSub.feedType.value == FeedType.TRENDING },
+        getIsHashtagFeed = { feedSub.feedType.value == FeedType.ONLY_FOOD },
         onRelayFeedEventReceived = { feedSub.onRelayFeedEventReceived() }
     )
 
@@ -369,7 +387,8 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
         getUserPubkey = { getUserPubkey() },
         registerAuthSigner = { registerAuthSigner() },
         fetchEmojiSets = { listCrud.fetchEmojiSets() },
-        getSigner = { signer }
+        getSigner = { signer },
+        migrateRecipeBookmarks = { migrateRecipeBookmarksIfNeeded() }
     )
 
     // -- Global online count from nostrarchives live-metrics --
@@ -404,8 +423,12 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
     val feed: StateFlow<List<NostrEvent>> = combine(
         feedSub.feedType, eventRepo.feed, eventRepo.relayFeed
     ) { type, main, relay ->
-        if (type == FeedType.RELAY || type == FeedType.TRENDING) relay else main
+        // ONLY_FOOD is relay-backed (a dedicated #t query), like RELAY/TRENDING.
+        if (type == FeedType.RELAY || type == FeedType.TRENDING || type == FeedType.ONLY_FOOD) relay else main
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** OnlyFood posts hidden by the WoT filter since the last (re)load — for the empty-state notice. */
+    val onlyFoodWotDropped: StateFlow<Int> = eventRepo.onlyFoodWotDropped
 
     val liveNowStreams: StateFlow<List<cooking.zap.app.repo.LiveStream>> = liveStreamRepo.liveStreams
         .map { streams ->
@@ -474,11 +497,88 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
         startup.resetForAccountSwitch()
         groupRepo.clear()
         liveStreamRepo.clear()
+        recipeBookmarkRepo.reset()
     }
     fun reloadForNewAccount() {
         safetyPrefs.reload(getUserPubkey())
         startup.reloadForNewAccount()
         groupRepo.reload(getUserPubkey())
+        recipeBookmarkRepo.load(getUserPubkey())
+    }
+
+    /** Cache-first paint + relay refresh of the canonical recipe-bookmark list. */
+    fun loadRecipeBookmarks() {
+        recipeBookmarkRepo.paintFromCache()
+        recipeBookmarkRepo.load()
+    }
+
+    /**
+     * Toggle a recipe's bookmark in the canonical kind-30001 list by coordinate.
+     * Resolves the event by id (recipe surfaces pass the recipe event id); a
+     * no-op for non-recipe events or read-only accounts.
+     */
+    fun toggleRecipeBookmark(eventId: String) {
+        val event = eventRepo.getEvent(eventId) ?: return
+        // Off the Main dispatcher — toggle() reads ObjectBox and signs the event.
+        viewModelScope.launch(processingDispatcher) { recipeBookmarkRepo.toggle(event) }
+    }
+
+    /**
+     * Toggle a recipe's membership in a specific kind-30001 list (the list
+     * chooser; multi-membership). Off the Main dispatcher for the same reason as
+     * [toggleRecipeBookmark].
+     */
+    fun toggleRecipeInList(dTag: String, eventId: String) {
+        val event = eventRepo.getEvent(eventId) ?: return
+        viewModelScope.launch(processingDispatcher) { recipeBookmarkRepo.toggleRecipeInList(dTag, event) }
+    }
+
+    /** Create a new named collection from [title] and add [eventId]'s recipe to it. */
+    fun createRecipeListAndSave(title: String, eventId: String) {
+        val event = eventRepo.getEvent(eventId) ?: return
+        viewModelScope.launch(processingDispatcher) { recipeBookmarkRepo.createList(title, seedEvent = event) }
+    }
+
+    /**
+     * A14 PR 2 — one-time, one-shot background migration of legacy kind-10003
+     * recipe bookmarks into the canonical kind-30001 list, so existing Android
+     * bookmarks sync to web. Idempotent: guarded by a per-user persisted flag
+     * (mirrors KeyRepository.migrateRemoveRemoteSigner). ADD-ONLY — the legacy
+     * 10003 list is never mutated (PR 1's read-union dedups by coordinate, so no
+     * double-display and no bookmark can be stranded).
+     */
+    fun migrateRecipeBookmarksIfNeeded() {
+        val s = signer ?: return
+        val prefs = getApplication<Application>().getSharedPreferences(
+            "wisp_recipe_bookmark_migration_${s.pubkeyHex}", android.content.Context.MODE_PRIVATE
+        )
+        if (prefs.getBoolean("recipe_bookmarks_migrated_v1", false)) return
+        viewModelScope.launch(processingDispatcher) {
+            try {
+                // Let a freshly-synced 10003 list land before reading legacy ids;
+                // persisted ids (the common case) are already available.
+                kotlinx.coroutines.delay(2_000)
+                val legacyIds = bookmarkRepo.getBookmarkedIds()
+                if (legacyIds.isNotEmpty()) {
+                    val outcome = recipeBookmarkRepo.migrateLegacyBookmarks(legacyIds)
+                    if (outcome.added.isNotEmpty()) {
+                        Log.d("FeedVM", "Recipe bookmark migration: added ${outcome.added.size} canonical coordinate(s)")
+                    }
+                    // Don't burn the one-shot flag if relays were unreachable for
+                    // un-cached ids — retry on a later launch so nothing is stranded.
+                    if (!outcome.complete) {
+                        Log.d("FeedVM", "Recipe bookmark migration incomplete (relays unreachable); will retry next launch")
+                        return@launch
+                    }
+                }
+                prefs.edit().putBoolean("recipe_bookmarks_migrated_v1", true).apply()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Leave the flag unset so the migration retries on a later launch.
+                Log.w("FeedVM", "Recipe bookmark migration failed; will retry next launch", e)
+            }
+        }
     }
     /** Called after relay reconnect to re-subscribe notified group channels. */
     var onGroupReconnect: (() -> Unit)? = null

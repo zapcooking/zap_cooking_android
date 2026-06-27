@@ -200,9 +200,11 @@ fun WispTheme(
         }
     }
 
+    val typography = remember(isLargeText) { buildWispTypography(isLargeText) }
+
     MaterialTheme(
         colorScheme = colorScheme,
-        typography = buildWispTypography(isLargeText),
+        typography = typography,
         content = {
             CompositionLocalProvider(LocalWispColors provides wispColors) {
                 content()

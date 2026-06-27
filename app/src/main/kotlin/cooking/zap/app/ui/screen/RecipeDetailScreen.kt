@@ -26,6 +26,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -66,6 +67,7 @@ fun RecipeDetailScreen(
     viewModel: cooking.zap.app.viewmodel.RecipeDetailViewModel,
     eventRepo: EventRepository,
     onBack: () -> Unit,
+    onShare: (() -> Unit)? = null,
     onProfileClick: (String) -> Unit = {},
     onHashtagClick: ((String) -> Unit)? = null,
     onReply: (cooking.zap.app.nostr.NostrEvent) -> Unit = {},
@@ -74,6 +76,7 @@ fun RecipeDetailScreen(
     onQuote: (cooking.zap.app.nostr.NostrEvent) -> Unit = {},
     onZap: (cooking.zap.app.nostr.NostrEvent) -> Unit = {},
     onAddToList: (String) -> Unit = {},
+    onAddToListLongPress: ((String) -> Unit)? = null,
     zapAnimatingIds: Set<String> = emptySet(),
     zapInProgressIds: Set<String> = emptySet(),
     listedIds: Set<String> = emptySet(),
@@ -114,6 +117,16 @@ fun RecipeDetailScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    if (onShare != null) {
+                        IconButton(onClick = onShare) {
+                            Icon(
+                                Icons.Outlined.Share,
+                                contentDescription = stringResource(R.string.btn_share),
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -224,6 +237,7 @@ fun RecipeDetailScreen(
                                 onZap = { onZap(recipeEvent) },
                                 hasUserZapped = hasUserZapped,
                                 onAddToList = { onAddToList(recipeEvent.id) },
+                                onAddToListLongPress = onAddToListLongPress?.let { cb -> { cb(recipeEvent.id) } },
                                 isInList = recipeEvent.id in listedIds,
                                 likeCount = likeCount,
                                 repostCount = repostCount,

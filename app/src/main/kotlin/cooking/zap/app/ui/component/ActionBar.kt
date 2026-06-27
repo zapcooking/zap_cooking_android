@@ -71,6 +71,7 @@ fun ActionBar(
     onZap: () -> Unit = {},
     hasUserZapped: Boolean = false,
     onAddToList: () -> Unit = {},
+    onAddToListLongPress: (() -> Unit)? = null,
     isInList: Boolean = false,
     likeCount: Int = 0,
     repostCount: Int = 0,
@@ -260,7 +261,18 @@ fun ActionBar(
             )
         }
         Spacer(Modifier.width(8.dp))
-        IconButton(onClick = onAddToList) {
+        // Single tap → default Saved toggle; long-press → list chooser (when wired).
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .size(48.dp)
+                .combinedClickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = androidx.compose.material3.ripple(bounded = false, radius = 24.dp),
+                    onClick = onAddToList,
+                    onLongClick = onAddToListLongPress,
+                )
+        ) {
             Icon(
                 if (isInList) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder,
                 contentDescription = stringResource(R.string.cd_add_to_list),

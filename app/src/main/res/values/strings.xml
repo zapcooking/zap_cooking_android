@@ -247,6 +247,8 @@
     <string name="tab_bad">Bad</string>
     <string name="tab_recipes">Recipes</string>
     <string name="tab_packs">Packs</string>
+    <string name="tab_cookbook">Cookbook</string>
+    <string name="cookbook_tab_my_recipes">My Recipes</string>
     <string name="tab_discover">Discover</string>
     <string name="tab_mine">Mine</string>
     <string name="tab_saved">Saved</string>
@@ -260,6 +262,13 @@
     <string name="tab_relay">Relay</string>
     <string name="tab_list">List</string>
     <string name="tab_hashtags">Hashtags</string>
+    <string name="tab_onlyfood">OnlyFood</string>
+    <string name="feed_onlyfood_empty">No food posts yet — pull to refresh</string>
+    <plurals name="feed_onlyfood_wot_hidden">
+        <item quantity="one">%d post was hidden by the food trust filter.</item>
+        <item quantity="other">%d posts were hidden by the food trust filter.</item>
+    </plurals>
+    <string name="feed_onlyfood_show_all">Show all posts</string>
     <string name="tab_feed">Feed</string>
     <string name="interests">Interests</string>
     <string name="loading_interest_sets">Loading interest sets…</string>
@@ -574,6 +583,25 @@
     <string name="settings_private_key_copied">Private key copied</string>
     <string name="settings_authenticate_view_key">Authenticate to view your private key</string>
     <string name="settings_auth_failed">Authentication failed: %s</string>
+    <string name="btn_hide_private_key">Hide private key</string>
+    <string name="nsec_qr_title">Private key QR</string>
+    <string name="nsec_qr_warning">Only show this to devices you trust. Anyone who scans it gains full control of your account.</string>
+
+    <!-- Key backup step (shown right after a new account is created, and re-surfaced as a nudge) -->
+    <string name="backup_key_title">Save your backup key</string>
+    <string name="backup_key_intro">Your account lives on your key. Save it now so you can always get back in.</string>
+    <string name="backup_key_private_label">Private key (nsec)</string>
+    <string name="backup_key_public_label">Public key (npub)</string>
+    <string name="backup_key_npub_safe">This is your public identity — safe to share.</string>
+    <string name="backup_key_download">Download backup file</string>
+    <string name="backup_key_downloaded">Backup file saved</string>
+    <string name="backup_key_download_failed">Couldn\'t save the backup file</string>
+    <string name="backup_key_warning">This key is the only way to recover your account. There is no password reset. Anyone who has it controls your account — never share it.</string>
+    <string name="backup_key_saved">I\'ve saved it</string>
+    <string name="backup_key_skip">Skip for now</string>
+    <string name="key_backup_banner_text">Back up your key so you never lose your account</string>
+    <string name="key_backup_banner_action">Back up</string>
+    <string name="key_backup_banner_dismiss">Dismiss</string>
     <string name="settings_never_share_key">Never share your private key. Anyone with your nsec has full control of your account.</string>
     <string name="settings_muted_words_description">Notes containing these words will be hidden from your feed.</string>
     <string name="settings_no_muted_users">No muted users</string>
@@ -584,6 +612,8 @@
     <string name="safety_spam_filter_description">Uses an on-device model to hide likely-bot replies in threads and notifications from people you don\'t follow. Model runs locally, no data leaves your device.</string>
     <string name="safety_wot_title">Web of Trust</string>
     <string name="safety_wot_description">Only show content from accounts within your social graph. Requires a computed social graph.</string>
+    <string name="safety_onlyfood_wot_title">OnlyFood trust filter</string>
+    <string name="safety_onlyfood_wot_description">On the OnlyFood feed, only show posts from accounts in your social graph (or the Zap Cooking curator\'s follows). Falls back to showing everything until your social graph is computed.</string>
     <string name="safety_wot_ready">Social graph ready (%d qualified accounts)</string>
     <string name="safety_wot_last_computed">Last computed %s ago</string>
     <string name="safety_wot_not_computed">Social graph not computed</string>
@@ -636,6 +666,24 @@
         <item quantity="one">%d recipe</item>
         <item quantity="other">%d recipes</item>
     </plurals>
+    <string name="cookbook_sign_in">Sign in to view your cookbook</string>
+    <string name="cookbook_saved_empty_title">Start Your Cookbook</string>
+    <string name="cookbook_saved_empty_body">Save recipes you love and organize them into collections.</string>
+    <string name="cookbook_my_recipes_empty">No published recipes yet</string>
+    <string name="cookbook_manage_menu">Manage collection</string>
+    <string name="cookbook_action_rename">Rename</string>
+    <string name="cookbook_action_edit_description">Edit description</string>
+    <string name="cookbook_action_choose_cover">Choose cover</string>
+    <string name="cookbook_action_delete">Delete</string>
+    <string name="cookbook_rename_label">Collection name</string>
+    <string name="cookbook_description_label">Description</string>
+    <string name="cookbook_delete_title">Delete collection?</string>
+    <string name="cookbook_delete_body">Delete \"%1$s\"? This removes the collection but won\'t delete the recipes themselves.</string>
+    <string name="cookbook_cover_empty">Add recipes to this collection to choose a cover.</string>
+    <string name="recipe_list_chooser_title">Save to collection</string>
+    <string name="recipe_list_chooser_new">New list</string>
+    <string name="recipe_list_chooser_name_hint">Collection name</string>
+    <string name="recipe_list_chooser_empty">No collections yet</string>
     <string name="error_search_hint">Search recipes, people, and notes</string>
     <string name="error_no_notifications">No notifications yet</string>
     <string name="error_no_messages">No messages yet</string>

@@ -36,6 +36,7 @@ import cooking.zap.app.repo.MetadataFetcher
 import cooking.zap.app.repo.MuteRepository
 import cooking.zap.app.repo.NotificationRepository
 import cooking.zap.app.repo.PinRepository
+import cooking.zap.app.repo.RecipeBookmarkRepository
 import cooking.zap.app.repo.DiagnosticLogger
 import cooking.zap.app.repo.GroupRepository
 import cooking.zap.app.repo.LiveStreamRepository
@@ -57,6 +58,7 @@ class EventRouter(
     private val notifRepo: NotificationRepository,
     private val listRepo: ListRepository,
     private val bookmarkRepo: BookmarkRepository,
+    private val recipeBookmarkRepo: RecipeBookmarkRepository,
     private val bookmarkSetRepo: BookmarkSetRepository,
     private val pinRepo: PinRepository,
     private val blossomRepo: BlossomRepository,
@@ -77,6 +79,7 @@ class EventRouter(
     private val getFeedSubId: () -> String,
     private val getRelayFeedSubId: () -> String,
     private val getIsTrendingFeed: () -> Boolean,
+    private val getIsHashtagFeed: () -> Boolean,
     private val onRelayFeedEventReceived: () -> Unit
 ) {
     /**
@@ -417,6 +420,10 @@ class EventRouter(
                 val myPubkey = getUserPubkey()
                 if (myPubkey != null && event.pubkey == myPubkey) bookmarkRepo.loadFromEvent(event)
             }
+            if (event.kind == RecipeBookmarkRepository.LIST_KIND) {
+                val myPubkey = getUserPubkey()
+                if (myPubkey != null && event.pubkey == myPubkey) recipeBookmarkRepo.applyEvent(event)
+            }
             if (event.kind == Nip51.KIND_PIN_LIST) {
                 val myPubkey = getUserPubkey()
                 if (myPubkey != null && event.pubkey == myPubkey) pinRepo.loadFromEvent(event)
@@ -523,11 +530,20 @@ class EventRouter(
                 return
             }
             if (isRelayFeedSub) {
-                eventRepo.cacheEvent(event)
-                if (getIsTrendingFeed()) {
-                    eventRepo.addTrendingFeedEvent(event)
+                if (getIsHashtagFeed()) {
+                    // OnlyFood: skip cacheEvent() — it marks the global seenEventIds,
+                    // which would block the same event from later entering the
+                    // author-based main feed via addEvent(). addHashtagFeedEvent()
+                    // caches into eventCache itself without touching seenEventIds,
+                    // so a followed author's food note can appear in both feeds.
+                    eventRepo.addHashtagFeedEvent(event)
                 } else {
-                    eventRepo.addRelayFeedEvent(event)
+                    eventRepo.cacheEvent(event)
+                    if (getIsTrendingFeed()) {
+                        eventRepo.addTrendingFeedEvent(event)
+                    } else {
+                        eventRepo.addRelayFeedEvent(event)
+                    }
                 }
                 onRelayFeedEventReceived()
                 eventRepo.addEventRelay(event.id, relayUrl)
