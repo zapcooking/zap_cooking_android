@@ -118,6 +118,7 @@ import cooking.zap.app.ui.component.KeyBackupBanner
 import cooking.zap.app.ui.component.NsecPasteWarningOverlay
 import cooking.zap.app.ui.screen.OnboardingSuggestionsScreen
 import cooking.zap.app.ui.screen.OnboardingTopicsScreen
+import cooking.zap.app.ui.screen.OnboardingSaveRecipesScreen
 import cooking.zap.app.ui.screen.OnboardingFirstPostScreen
 import cooking.zap.app.ui.screen.RelayDetailScreen
 import cooking.zap.app.ui.screen.WalletScreen
@@ -195,6 +196,7 @@ object Routes {
     const val ONBOARDING_PROFILE = "onboarding/profile"
     const val ONBOARDING_SUGGESTIONS = "onboarding/suggestions"
     const val ONBOARDING_TOPICS = "onboarding/topics"
+    const val ONBOARDING_SAVE_RECIPES = "onboarding/save-recipes"
     const val ONBOARDING_FIRST_POST = "onboarding/first-post"
     const val RELAY_DETAIL = "relay_detail/{relayUrl}"
     const val CUSTOM_EMOJIS = "custom_emojis"
@@ -336,6 +338,7 @@ fun WispNavHost(
     val relayHealthViewModel: RelayHealthViewModel = viewModel()
     val onboardingViewModel: OnboardingViewModel = viewModel()
     val topicOnboardingViewModel: cooking.zap.app.viewmodel.TopicOnboardingViewModel = viewModel()
+    val recipeOnboardingViewModel: cooking.zap.app.viewmodel.RecipeOnboardingViewModel = viewModel()
     val splashViewModel: SplashViewModel = viewModel()
 
     relayViewModel.relayPool = feedViewModel.relayPool
@@ -535,7 +538,7 @@ fun WispNavHost(
         }
     }
 
-    val nonAppRoutes = setOf(Routes.SPLASH, Routes.AUTH, Routes.GOOGLE_AUTH, Routes.LOADING, Routes.BACKUP_KEY, Routes.ONBOARDING_PROFILE, Routes.ONBOARDING_SUGGESTIONS, Routes.ONBOARDING_TOPICS, Routes.ONBOARDING_FIRST_POST, Routes.EXISTING_USER_ONBOARDING, Routes.WATCH_ONLY_ONBOARDING)
+    val nonAppRoutes = setOf(Routes.SPLASH, Routes.AUTH, Routes.GOOGLE_AUTH, Routes.LOADING, Routes.BACKUP_KEY, Routes.ONBOARDING_PROFILE, Routes.ONBOARDING_SUGGESTIONS, Routes.ONBOARDING_TOPICS, Routes.ONBOARDING_SAVE_RECIPES, Routes.ONBOARDING_FIRST_POST, Routes.EXISTING_USER_ONBOARDING, Routes.WATCH_ONLY_ONBOARDING)
     val hideBottomBarRoutes = nonAppRoutes + Routes.DM_CONVERSATION + Routes.DM_CONVERSATION_GROUP + Routes.CONTACT_PICKER + Routes.GROUP_ROOM + Routes.GROUP_DETAIL + Routes.LIVE_STREAM
     val socialGraphDiscoveryState by feedViewModel.extendedNetworkRepo.discoveryState.collectAsState()
     val socialGraphComputing = currentRoute == Routes.SOCIAL_GRAPH && (
@@ -3871,7 +3874,7 @@ fun WispNavHost(
                             selectedPubkeys = selectedPubkeys,
                             signer = activeSigner
                         )
-                        navController.navigate(Routes.ONBOARDING_FIRST_POST)
+                        navController.navigate(Routes.ONBOARDING_SAVE_RECIPES)
                     }
                 },
                 onSkip = {
@@ -3885,7 +3888,7 @@ fun WispNavHost(
                             selectedPubkeys = emptySet(),
                             signer = activeSigner
                         )
-                        navController.navigate(Routes.ONBOARDING_FIRST_POST)
+                        navController.navigate(Routes.ONBOARDING_SAVE_RECIPES)
                     }
                 }
             )
@@ -3908,6 +3911,46 @@ fun WispNavHost(
                     navController.navigate(Routes.ONBOARDING_SUGGESTIONS)
                 }
             )
+        }
+
+        composable(Routes.ONBOARDING_SAVE_RECIPES) {
+            // Gate behind signing capability: RecipeBookmarkRepository.toggle needs a
+            // signer, so a READ_ONLY account can't save. The new-key flow always has a
+            // signer; watch-only never reaches here (separate path), but gate anyway so
+            // the bookmark action can't render in a broken state — skip straight on.
+            if (activeSigner == null) {
+                LaunchedEffect(Unit) {
+                    navController.navigate(Routes.ONBOARDING_FIRST_POST) {
+                        popUpTo(Routes.ONBOARDING_SAVE_RECIPES) { inclusive = true }
+                    }
+                }
+            } else {
+                LaunchedEffect(Unit) {
+                    // Browse happens AFTER the Profile-step reloadForNewAccount()/clearAll(),
+                    // so this fresh load isn't wiped. loadRecipeBookmarks() keys the
+                    // bookmark repo to the new pubkey for correct saved-state + carry-forward.
+                    recipeOnboardingViewModel.load(feedViewModel.recipeRepo)
+                    feedViewModel.loadRecipeBookmarks()
+                }
+                val featured by recipeOnboardingViewModel.featured.collectAsState()
+                val recipesLoading by recipeOnboardingViewModel.loading.collectAsState()
+                val bookmarked by feedViewModel.recipeBookmarkRepo.bookmarkedCoordinates.collectAsState()
+
+                OnboardingSaveRecipesScreen(
+                    recipes = featured,
+                    loading = recipesLoading,
+                    bookmarkedCoordinates = bookmarked,
+                    onToggleBookmark = { recipeId -> feedViewModel.toggleRecipeBookmark(recipeId) },
+                    onContinue = {
+                        recipeOnboardingViewModel.reset()
+                        navController.navigate(Routes.ONBOARDING_FIRST_POST)
+                    },
+                    onSkip = {
+                        recipeOnboardingViewModel.reset()
+                        navController.navigate(Routes.ONBOARDING_FIRST_POST)
+                    }
+                )
+            }
         }
 
         composable(Routes.ONBOARDING_FIRST_POST) {
