@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -273,6 +274,8 @@ fun FeedScreen(
     val newNotesButtonHidden by viewModel.newNotesButtonHidden.collectAsState()
     val initLoadingState by viewModel.initLoadingState.collectAsState()
     val relayFeedStatus by viewModel.relayFeedStatus.collectAsState()
+    val onlyFoodWotDropped by viewModel.onlyFoodWotDropped.collectAsState()
+    val onlyFoodWotEnabled by viewModel.safetyPrefs.onlyFoodWotEnabled.collectAsState()
     val pendingFirstFollow by viewModel.pendingFirstFollow.collectAsState()
     val firstFollowCheckDone by viewModel.firstFollowCheckDone.collectAsState()
     val zapInProgress by viewModel.zapInProgress.collectAsState()
@@ -665,6 +668,11 @@ fun FeedScreen(
                                         onClick = {
                                             showFeedTypeDropdown = false
                                             viewModel.setFeedType(FeedType.ONLY_FOOD)
+                                            // WoT is on but no graph yet → nudge the user to compute it
+                                            // (the feed still works; WoT just no-ops until ready).
+                                            if (onlyFoodWotEnabled && viewModel.extendedNetworkRepo.cachedNetwork.value == null) {
+                                                showSocialGraphDialog = true
+                                            }
                                         },
                                         trailingIcon = if (feedType == FeedType.ONLY_FOOD) {{
                                             Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -891,6 +899,27 @@ fun FeedScreen(
                                     },
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
+                            }
+                            feedType == FeedType.ONLY_FOOD && onlyFoodWotDropped > 0 -> {
+                                // WoT removed everything we received — explain, don't show a silent blank.
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text(
+                                        stringResource(R.string.feed_onlyfood_wot_hidden, onlyFoodWotDropped),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        textAlign = TextAlign.Center
+                                    )
+                                    Spacer(Modifier.height(12.dp))
+                                    Button(onClick = {
+                                        viewModel.safetyPrefs.setOnlyFoodWotEnabled(false)
+                                        viewModel.setFeedType(FeedType.ONLY_FOOD)
+                                    }) {
+                                        Text(stringResource(R.string.feed_onlyfood_show_all))
+                                    }
+                                    Spacer(Modifier.height(8.dp))
+                                    OutlinedButton(onClick = { onSocialGraph() }) {
+                                        Text(stringResource(R.string.btn_go_to_social_graph))
+                                    }
+                                }
                             }
                             feedType == FeedType.ONLY_FOOD -> {
                                 Text(
