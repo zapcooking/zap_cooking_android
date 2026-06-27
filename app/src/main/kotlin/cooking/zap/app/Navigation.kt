@@ -859,6 +859,7 @@ fun WispNavHost(
                         hasUnreadHome = newNoteCount > 0,
                         hasUnreadMessages = hasUnreadDms,
                         hasUnreadNotifications = hasUnreadNotifications,
+                        isDarkTheme = isDarkTheme,
                         isZapAnimating = isZapAnimating,
                         isReplyAnimating = isReplyAnimating,
                         notifSoundEnabled = notifSoundEnabled,
