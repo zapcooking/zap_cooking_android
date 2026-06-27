@@ -3771,7 +3771,17 @@ fun WispNavHost(
                                 walletModeRepo = feedViewModel.walletModeRepo,
                                 signer = activeSigner
                             )) {
-                            navController.navigate(Routes.ONBOARDING_SUGGESTIONS) {
+                            // Re-key all per-account state to the new pubkey now, BEFORE
+                            // the Topics step publishes its interest set. reloadForNewAccount()
+                            // runs clearAll() + switches contactRepo/interestRepo to the
+                            // pubkey-scoped prefs; if it ran later, the topic/follow writes
+                            // would land in the null-keyed prefs and be wiped on reload.
+                            feedViewModel.reloadForNewAccount()
+                            relayViewModel.reload()
+                            blossomServersViewModel.reload()
+                            composeViewModel.reloadBlossomRepo()
+                            walletViewModel.refreshState()
+                            navController.navigate(Routes.ONBOARDING_TOPICS) {
                                 popUpTo(Routes.ONBOARDING_PROFILE) { inclusive = true }
                             }
                         }
@@ -3802,37 +3812,22 @@ fun WispNavHost(
                 totalSelected = selectedPubkeys.size,
                 onContinue = {
                     scope.launch {
-                        // Don't set the feed type here — reloadForNewAccount() runs
-                        // clearAll(), which would wipe a cache paint, and the REQ would
-                        // fire before the pool reconnects. Let the corrected default
-                        // (resolveInitialFeedType) own the OnlyFood landing.
-                        feedViewModel.reloadForNewAccount()
-                        relayViewModel.reload()
-                        blossomServersViewModel.reload()
-                        composeViewModel.reloadBlossomRepo()
-                        walletViewModel.refreshState()
-                        // finishOnboarding must run after reloadForNewAccount so contactRepo
-                        // is already switched to the new pubkey-specific prefs file.
-                        // Otherwise the follow list is saved to the null-keyed prefs and
-                        // wiped when reloadForNewAccount reloads to the correct prefs.
+                        // The account was already re-keyed at the Profile step, so
+                        // contactRepo points at the correct pubkey-scoped prefs here.
+                        // finishOnboarding publishes the kind-3 follow list and marks
+                        // onboarding complete — keeping markOnboardingComplete() at the
+                        // Creators step means a drop-off after this still completes.
                         onboardingViewModel.finishOnboarding(
                             relayPool = feedViewModel.relayPool,
                             contactRepo = feedViewModel.contactRepo,
                             selectedPubkeys = selectedPubkeys,
                             signer = activeSigner
                         )
-                        navController.navigate(Routes.ONBOARDING_TOPICS)
+                        navController.navigate(Routes.ONBOARDING_FIRST_POST)
                     }
                 },
                 onSkip = {
                     scope.launch {
-                        // See onContinue: let the corrected default own the landing
-                        // instead of setting the feed type before clearAll() / reconnect.
-                        feedViewModel.reloadForNewAccount()
-                        relayViewModel.reload()
-                        blossomServersViewModel.reload()
-                        composeViewModel.reloadBlossomRepo()
-                        walletViewModel.refreshState()
                         // Publish a kind 3 that at least follows the user themselves so
                         // their own posts land in their feed — finishOnboarding also
                         // marks onboarding complete.
@@ -3842,16 +3837,13 @@ fun WispNavHost(
                             selectedPubkeys = emptySet(),
                             signer = activeSigner
                         )
-                        navController.navigate(Routes.ONBOARDING_TOPICS)
+                        navController.navigate(Routes.ONBOARDING_FIRST_POST)
                     }
                 }
             )
         }
 
         composable(Routes.ONBOARDING_TOPICS) {
-            LaunchedEffect(Unit) {
-                topicOnboardingViewModel.load(feedViewModel.relayPool)
-            }
             OnboardingTopicsScreen(
                 viewModel = topicOnboardingViewModel,
                 onContinue = {
@@ -3862,10 +3854,10 @@ fun WispNavHost(
                         // API to produce one atomic event with a nice title.
                         feedViewModel.followHashtags(selected, dTag = "interests", setTitle = "Interests")
                     }
-                    navController.navigate(Routes.ONBOARDING_FIRST_POST)
+                    navController.navigate(Routes.ONBOARDING_SUGGESTIONS)
                 },
                 onSkip = {
-                    navController.navigate(Routes.ONBOARDING_FIRST_POST)
+                    navController.navigate(Routes.ONBOARDING_SUGGESTIONS)
                 }
             )
         }
