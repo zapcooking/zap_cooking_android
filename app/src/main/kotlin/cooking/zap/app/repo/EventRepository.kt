@@ -134,6 +134,14 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
     // Inline content hashtags, mirroring the web's HASHTAG_PATTERN = /(^|\s)#([^\s#]+)/g.
     private val CONTENT_HASHTAG_REGEX = Regex("""(^|\s)#([^\s#]+)""")
 
+    // App-level OnlyFood blocklist (curation). Applies to ALL users' OnlyFood feed and is
+    // SEPARATE from each user's personal mute list (muteRepo). Add a future spammer's hex
+    // pubkey as a one-line entry, commented with its npub for readability.
+    private val ONLY_FOOD_BLOCKED_PUBKEYS: Set<String> = setOf(
+        // npub1m354es2t3hpx0wslegv7qrrpt4dmjyzh6feazktpuze0vnqw6jcqx5ps3x
+        "dc695cc14b8dc267ba1fca19e00c615d5bb91057d273d15961e0b2f64c0ed4b0",
+    )
+
     // Author filter: null = show all, non-null = only show events from these pubkeys
     private val _authorFilter = MutableStateFlow<Set<String>?>(null)
 
@@ -1460,6 +1468,7 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
         // Bare `return`s below are non-local returns from this function (synchronized
         // is inline), so the monitor is always released on exit.
         if (event.created_at > System.currentTimeMillis() / 1000 + 30) return
+        if (event.pubkey in ONLY_FOOD_BLOCKED_PUBKEYS) return  // app-level OnlyFood curation
         if (muteRepo?.isBlocked(event.pubkey) == true) return
         if (deletedEventsRepo?.isDeleted(event.id) == true) return
 
@@ -1495,6 +1504,7 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
                 if (event.content.isNotBlank()) {
                     try {
                         val inner = NostrEvent.fromJson(event.content)
+                        if (inner.pubkey in ONLY_FOOD_BLOCKED_PUBKEYS) return  // drop reposts of blocked author
                         if (muteRepo?.isBlocked(inner.pubkey) == true) return
                         if (muteRepo?.containsMutedWord(inner.content) == true) return
                         if (isStructuralSpam(inner)) return          // structural caps on reposted note
