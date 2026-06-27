@@ -1599,29 +1599,55 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
     }
 
     /**
-     * Cache-first paint for the OnlyFood feed: pull persisted kind 1/6/1068 events,
-     * keep only those carrying a food `t`-tag, and route EACH through the shared
-     * [addHashtagFeedEvent] choke-point so mute + structural spam + WoT + dedup all
-     * apply. Runs off the main thread (ObjectBox query on IO) and is non-blocking —
-     * callers fire it then immediately subscribe relays to merge fresh events on top.
+     * Cache-first paint for the OnlyFood feed: find food-tagged kind 1/6/1068 events
+     * and route EACH through the shared [addHashtagFeedEvent] choke-point so mute +
+     * structural spam + WoT + dedup all apply. Runs off the main thread and is
+     * non-blocking — callers fire it then immediately subscribe relays to merge fresh
+     * events on top.
+     *
+     * The PRIMARY source is the FULL in-memory [eventCache] (LRU, ~5000), mirroring
+     * [rebuildFeedFromCache]. A persisted "500 newest" query is recency-starved: after
+     * browsing For You / Trending the newest persisted kind-1 notes are non-food and
+     * bury the food notes, so the food pre-filter rejects the whole window and paints
+     * nothing (the blank-on-switch bug). The cache holds prior-session food notes —
+     * [addHashtagFeedEvent] writes them into [eventCache] — so they survive the detour
+     * through other tabs and are always found here regardless of recency.
+     *
+     * As a cold-start fallback only (cache holds no food notes yet, e.g. a fresh
+     * session), fall back to persistence with a much larger, food-scoped window
+     * ([fallbackLimit]) so that query isn't recency-starved either.
      *
      * The [FoodHashtags.hasFoodTag] pre-filter is REQUIRED: [addHashtagFeedEvent]
      * does not itself check for a food tag (the relay path guarantees that via its
      * `tTags` filter), so without it non-food cached kind-1 notes would leak in.
      * Cached events dedup against live relay events via [relayFeedIds].
      */
-    fun paintOnlyFoodFromCache(limit: Int = 500) {
-        val persistence = eventPersistence ?: return
+    fun paintOnlyFoodFromCache(fallbackLimit: Int = 5000) {
         // Captured on the caller thread, right after clearRelayFeed() bumped it. If the
         // user switches feeds (RELAY/TRENDING reuse relayFeedList), clearRelayFeed bumps
         // the generation again and this paint abandons mid-loop instead of polluting the
         // next feed.
         val gen = relayFeedGeneration
         scope.launch(Dispatchers.IO) {
-            val cached = persistence.getEventsByKinds(intArrayOf(1, 6, Nip88.KIND_POLL), limit)
-            for (event in cached) {
+            // Primary: scan the full in-memory cache for food-tagged feed kinds.
+            val snapshot = eventCache
+            var painted = 0
+            for ((_, event) in snapshot) {
                 if (relayFeedGeneration != gen) return@launch
-                if (FoodHashtags.hasFoodTag(event)) addHashtagFeedEvent(event)
+                if (event.kind != 1 && event.kind != 6 && event.kind != Nip88.KIND_POLL) continue
+                if (FoodHashtags.hasFoodTag(event)) {
+                    addHashtagFeedEvent(event)
+                    painted++
+                }
+            }
+            // Cold-start fallback: nothing food-tagged in the cache yet.
+            if (painted == 0) {
+                val persistence = eventPersistence ?: return@launch
+                val cached = persistence.getEventsByKinds(intArrayOf(1, 6, Nip88.KIND_POLL), fallbackLimit)
+                for (event in cached) {
+                    if (relayFeedGeneration != gen) return@launch
+                    if (FoodHashtags.hasFoodTag(event)) addHashtagFeedEvent(event)
+                }
             }
         }
     }
