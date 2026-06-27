@@ -1599,29 +1599,61 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
     }
 
     /**
-     * Cache-first paint for the OnlyFood feed: pull persisted kind 1/6/1068 events,
-     * keep only those carrying a food `t`-tag, and route EACH through the shared
-     * [addHashtagFeedEvent] choke-point so mute + structural spam + WoT + dedup all
-     * apply. Runs off the main thread (ObjectBox query on IO) and is non-blocking —
-     * callers fire it then immediately subscribe relays to merge fresh events on top.
+     * Cache-first paint for the OnlyFood feed: find food-tagged kind 1/6/1068 events
+     * and route EACH through the shared [addHashtagFeedEvent] choke-point so mute +
+     * structural spam + WoT + dedup all apply. Runs off the main thread and is
+     * non-blocking — callers fire it then immediately subscribe relays to merge fresh
+     * events on top.
+     *
+     * The PRIMARY source is the FULL in-memory [eventCache] (the session's accumulated
+     * event map — unbounded, not recency-truncated), mirroring [rebuildFeedFromCache].
+     * A persisted "500 newest" query is recency-starved: after browsing For You /
+     * Trending the newest persisted kind-1 notes are non-food and bury the food notes,
+     * so the food pre-filter rejects the whole window and paints nothing (the
+     * blank-on-switch bug). The cache holds prior-session food notes —
+     * [addHashtagFeedEvent] writes them into [eventCache] — so they survive the detour
+     * through other tabs and are always found here regardless of recency.
+     *
+     * Cold-start fallback only: if the cache scan leaves the relay feed empty (a fresh
+     * session with no food notes cached yet), fall back to the persisted catalog
+     * queried by kind with a much larger window ([fallbackLimit], food-filtered in
+     * memory) so the query isn't recency-starved like the old 500-newest one. The
+     * fallback keys off the relay feed actually being empty — not a match count — since
+     * [addHashtagFeedEvent] may still drop every candidate (mute/WoT/spam/reply/dedup);
+     * if live relay events have already landed, the feed isn't blank and we skip it.
      *
      * The [FoodHashtags.hasFoodTag] pre-filter is REQUIRED: [addHashtagFeedEvent]
      * does not itself check for a food tag (the relay path guarantees that via its
      * `tTags` filter), so without it non-food cached kind-1 notes would leak in.
      * Cached events dedup against live relay events via [relayFeedIds].
      */
-    fun paintOnlyFoodFromCache(limit: Int = 500) {
-        val persistence = eventPersistence ?: return
+    fun paintOnlyFoodFromCache(fallbackLimit: Int = 5000) {
         // Captured on the caller thread, right after clearRelayFeed() bumped it. If the
         // user switches feeds (RELAY/TRENDING reuse relayFeedList), clearRelayFeed bumps
         // the generation again and this paint abandons mid-loop instead of polluting the
         // next feed.
         val gen = relayFeedGeneration
         scope.launch(Dispatchers.IO) {
-            val cached = persistence.getEventsByKinds(intArrayOf(1, 6, Nip88.KIND_POLL), limit)
-            for (event in cached) {
+            // Primary: scan the full in-memory cache for food-tagged feed kinds.
+            val snapshot = eventCache
+            for ((_, event) in snapshot) {
                 if (relayFeedGeneration != gen) return@launch
+                if (event.kind != 1 && event.kind != 6 && event.kind != Nip88.KIND_POLL) continue
                 if (FoodHashtags.hasFoodTag(event)) addHashtagFeedEvent(event)
+            }
+            // Cold-start fallback: the cache produced nothing that survived the
+            // addHashtagFeedEvent filters, so the relay feed is still empty. Measuring
+            // the feed (not a hasFoodTag match count) also skips the fallback when live
+            // relay events have already landed — the feed isn't blank in that case.
+            if (relayFeedGeneration != gen) return@launch
+            val feedEmpty = synchronized(relayFeedList) { relayFeedList.isEmpty() }
+            if (feedEmpty) {
+                val persistence = eventPersistence ?: return@launch
+                val cached = persistence.getEventsByKinds(intArrayOf(1, 6, Nip88.KIND_POLL), fallbackLimit)
+                for (event in cached) {
+                    if (relayFeedGeneration != gen) return@launch
+                    if (FoodHashtags.hasFoodTag(event)) addHashtagFeedEvent(event)
+                }
             }
         }
     }
