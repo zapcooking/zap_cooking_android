@@ -95,8 +95,26 @@ class OnboardingViewModel(app: Application) : AndroidViewModel(app) {
     companion object {
         private const val TAG = "OnboardingSuggestions"
 
-        /** zap.cooking curator account — seeds "Meet the creators" and is pre-selected. */
-        const val ZC_PUBKEY = "319ad3e790634dbe86f14db9c2995b26ee3c6228be55f89c4c7fea9acc01d50a"
+        /**
+         * zap.cooking curator account — seeds "Meet the creators" and is pre-selected.
+         * Aliases the canonical [ExtendedNetworkRepository.ZC_CURATOR_PUBKEY] so the
+         * literal lives in exactly one place.
+         */
+        const val ZC_PUBKEY = ExtendedNetworkRepository.ZC_CURATOR_PUBKEY
+
+        /** Shown for Zap Cooking even if its kind-0 profile didn't load, so the
+         *  pre-selected follow stays visible and toggleable. */
+        private val ZC_FALLBACK_PROFILE = ProfileData(
+            pubkey = ZC_PUBKEY,
+            name = "Zap Cooking",
+            displayName = "Zap Cooking",
+            about = null,
+            picture = null,
+            banner = null,
+            nip05 = null,
+            lud16 = null,
+            updatedAt = 0L,
+        )
 
         /** Cap on curated creators shown so "Meet the creators" stays browsable. */
         private const val MAX_CREATORS = 24
@@ -411,12 +429,16 @@ class OnboardingViewModel(app: Application) : AndroidViewModel(app) {
             val seed = extendedNetworkRepo.getFoodSeedPubkeys()
             val pubkeys = (listOf(ZC_PUBKEY) + seed).distinct().take(MAX_CREATORS)
             val profiles = fetchProfiles(relayPool, pubkeys, "onb-creators", FeedSubscriptionManager.ONLY_FOOD_RELAYS)
-            // Zap Cooking first; remaining creators follow.
-            val ordered = profiles.sortedByDescending { it.pubkey == ZC_PUBKEY }
+            // Always keep a Zap Cooking card (it's pre-selected) — fall back to a
+            // placeholder if its kind-0 didn't load, so the follow stays visible and
+            // toggleable. Zap Cooking first; remaining creators follow.
+            val withZc = if (profiles.any { it.pubkey == ZC_PUBKEY }) profiles else profiles + ZC_FALLBACK_PROFILE
+            val ordered = withZc.sortedByDescending { it.pubkey == ZC_PUBKEY }
             _creators.value = SuggestionSection(profiles = ordered, isLoading = false)
         } catch (e: Exception) {
             Log.e(TAG, "loadCreators failed: ${e.message}")
-            _creators.value = SuggestionSection(isLoading = false)
+            // Even on failure, keep Zap Cooking visible since it's pre-selected.
+            _creators.value = SuggestionSection(profiles = listOf(ZC_FALLBACK_PROFILE), isLoading = false)
         }
     }
 
