@@ -2,6 +2,7 @@ package cooking.zap.app.ui.component
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
@@ -72,6 +73,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -108,6 +110,7 @@ fun WispDrawerContent(
     onDrafts: () -> Unit = {},
     onMediaServers: () -> Unit,
     onKeys: () -> Unit = {},
+    keyBackupNeeded: Boolean = false,
     onSocialGraph: () -> Unit = {},
     onSafety: () -> Unit = {},
     onFollowRecovery: () -> Unit = {},
@@ -441,43 +444,12 @@ fun WispDrawerContent(
                 modifier = Modifier.height(48.dp).padding(horizontal = 12.dp)
             )
         }
-        NavigationDrawerItem(
-            icon = { Icon(Icons.Outlined.Restaurant, contentDescription = null) },
-            label = { Text(stringResource(R.string.drawer_recipes)) },
-            selected = false,
-            onClick = onRecipes,
-            modifier = Modifier.height(48.dp).padding(horizontal = 12.dp)
-        )
-        NavigationDrawerItem(
-            // Sous Chef = sparkle in the web's purple accent (#a855f7). The web
-            // uses a generic sparkle glyph (no bespoke mark), so this matches it.
-            icon = { Icon(Icons.Outlined.AutoAwesome, contentDescription = null, tint = SousChefPurple) },
-            label = { Text(stringResource(R.string.drawer_souschef)) },
-            selected = false,
-            onClick = onSousChef,
-            modifier = Modifier.height(48.dp).padding(horizontal = 12.dp)
-        )
-        NavigationDrawerItem(
-            icon = { CheffyIcon(size = 24.dp) },
-            label = { Text(stringResource(R.string.drawer_cheffy)) },
-            selected = false,
-            onClick = onCheffy,
-            modifier = Modifier.height(48.dp).padding(horizontal = 12.dp)
-        )
-        NavigationDrawerItem(
-            icon = { Icon(Icons.Outlined.Forum, contentDescription = null) },
-            label = { Text(stringResource(R.string.drawer_onlyfood)) },
-            selected = false,
-            onClick = onOnlyFood,
-            modifier = Modifier.height(48.dp).padding(horizontal = 12.dp)
-        )
-        NavigationDrawerItem(
-            icon = { Icon(Icons.Outlined.FormatListBulleted, contentDescription = null) },
-            label = { Text(stringResource(R.string.drawer_lists)) },
-            selected = false,
-            onClick = onLists,
-            modifier = Modifier.height(48.dp).padding(horizontal = 12.dp)
-        )
+        // Recipes, Sous Chef, Cheffy, OnlyFood, and Lists drawer entries were
+        // removed from the menu. Their callback params
+        // (onRecipes/onSousChef/onCheffy/onOnlyFood/onLists) are intentionally
+        // kept on the function signature for API/call-site stability — the
+        // destinations still exist and are reachable elsewhere — even though
+        // they're no longer referenced here.
         NavigationDrawerItem(
             icon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
             label = { Text(stringResource(R.string.drawer_drafts)) },
@@ -507,11 +479,18 @@ fun WispDrawerContent(
             icon = { Icon(Icons.Outlined.Settings, contentDescription = null) },
             label = { Text(stringResource(R.string.drawer_settings)) },
             badge = {
-                Icon(
-                    if (settingsExpanded) Icons.Outlined.KeyboardArrowDown
-                    else Icons.Outlined.KeyboardArrowRight,
-                    contentDescription = null
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Surface the nested Keys nudge while Settings is collapsed.
+                    if (keyBackupNeeded && !settingsExpanded) {
+                        NudgeDot()
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Icon(
+                        if (settingsExpanded) Icons.Outlined.KeyboardArrowDown
+                        else Icons.Outlined.KeyboardArrowRight,
+                        contentDescription = null
+                    )
+                }
             },
             selected = false,
             onClick = { settingsExpanded = !settingsExpanded },
@@ -536,6 +515,7 @@ fun WispDrawerContent(
                 NavigationDrawerItem(
                     icon = { Icon(Icons.Outlined.Key, contentDescription = null) },
                     label = { Text(stringResource(R.string.drawer_keys)) },
+                    badge = { if (keyBackupNeeded) NudgeDot() },
                     selected = false,
                     onClick = onKeys,
                     modifier = Modifier.height(48.dp).padding(start = 36.dp, end = 12.dp)
@@ -756,4 +736,15 @@ fun WispDrawerContent(
         }
         }
     }
+}
+
+/** Small accent dot indicating an unattended item (e.g. an un-backed-up key). */
+@Composable
+private fun NudgeDot() {
+    Box(
+        modifier = Modifier
+            .size(8.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.error)
+    )
 }

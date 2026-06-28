@@ -1261,6 +1261,28 @@ class RelayPool(private val prefs: SharedPreferences? = null) {
 
     fun isRelayConnected(url: String): Boolean = relayIndex[url]?.isConnected == true
 
+    /**
+     * Ensure the ephemeral read relay at [url] exists and its socket is open,
+     * suspending up to [timeoutMs] for the handshake. Returns true once
+     * connected, false on timeout (or if the relay couldn't be created — cap
+     * reached, blocked, invalid url). Used to gate a one-shot REQ on a live
+     * socket instead of racing a fixed EOSE timeout against a cold connect.
+     */
+    suspend fun awaitRelayConnected(url: String, timeoutMs: Long): Boolean {
+        val existing = relayIndex[url]
+        if (existing != null) {
+            if (existing.isConnected) return true
+            // A previously-used ephemeral that dropped (e.g. across a background)
+            // has autoReconnect=false, so nothing re-establishes it on its own.
+            // Kick a fresh connect; connect() no-ops if a handshake is already in
+            // flight and respects the Relay's own attempt-backoff cooldown.
+            existing.connect()
+            return existing.awaitConnected(timeoutMs)
+        }
+        connectEphemeralRelay(url)
+        return relayIndex[url]?.awaitConnected(timeoutMs) ?: false
+    }
+
     /** Clear cooldown for a specific relay so it can be retried immediately. */
     fun clearCooldown(url: String) {
         relayCooldowns.remove(url)

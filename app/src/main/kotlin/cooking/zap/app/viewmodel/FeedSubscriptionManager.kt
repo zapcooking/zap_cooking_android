@@ -22,6 +22,7 @@ import cooking.zap.app.repo.ListRepository
 import cooking.zap.app.repo.MetadataFetcher
 import cooking.zap.app.repo.NotificationRepository
 import cooking.zap.app.repo.ProfileRepository
+import cooking.zap.app.nostr.FoodHashtags
 import cooking.zap.app.nostr.Nip57
 import cooking.zap.app.nostr.Nip69
 import cooking.zap.app.nostr.Nip88
@@ -32,8 +33,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.CoroutineContext
 
 enum class FeedContentFilter { ALL, TEXT_ONLY, GALLERY_ONLY, POLLS_ONLY }
@@ -65,6 +69,20 @@ class FeedSubscriptionManager(
 ) {
     companion object {
         val FEED_KINDS = listOf(1, 6, 1068, 6969, 30023, 20, 21, 22)
+
+        /** OnlyFood kinds mirror the web feed: notes, reposts, polls. */
+        val ONLY_FOOD_KINDS = listOf(1, 6, Nip88.KIND_POLL)
+
+        /**
+         * OnlyFood relays: nostrarchives (efficient #t indexing, primary) plus the
+         * web feed's standard set as supplementary. Deduped, order-preserved.
+         */
+        val ONLY_FOOD_RELAYS = listOf(
+            SearchViewModel.DEFAULT_SEARCH_RELAY,
+            "wss://nos.lol",
+            "wss://relay.damus.io",
+            "wss://relay.primal.net",
+        ).distinct()
         private const val KEY_LAST_FEED_TYPE = "last_feed_type"
         private const val KEY_LAST_RELAY_URL = "last_relay_url"
         private const val KEY_LAST_RELAY_SET_NAME = "last_relay_set_name"
@@ -154,7 +172,7 @@ class FeedSubscriptionManager(
     private var engagementGeneration = 0
     private val engagedEventIds = mutableSetOf<String>()
     private var viewportEngagementJob: Job? = null
-    private var hasRestoredFeedType = false
+    private var hasResolvedInitialFeed = false
 
     // For You supplementary fetches (trending + hashtags)
     private var forYouSupplementaryJob: Job? = null
@@ -183,6 +201,10 @@ class FeedSubscriptionManager(
         })
     }
 
+    /** Feed types whose events render from the isolated [EventRepository.relayFeed]. */
+    private fun isRelayBackedFeed(type: FeedType = _feedType.value): Boolean =
+        type == FeedType.RELAY || type == FeedType.TRENDING || type == FeedType.ONLY_FOOD
+
     fun setFeedType(type: FeedType) {
         val prev = _feedType.value
         Log.d("RLC", "[FeedSub] setFeedType $prev → $type feedSize=${eventRepo.feed.value.size}")
@@ -192,11 +214,9 @@ class FeedSubscriptionManager(
         viewportEngagementJob?.cancel()
         applyAuthorFilterForFeedType(type)
 
-        // Tear down relay/trending feed when leaving those modes
-        if (prev == FeedType.RELAY && type != FeedType.RELAY) {
-            unsubscribeRelayFeed()
-        }
-        if (prev == FeedType.TRENDING && type != FeedType.TRENDING) {
+        // Tear down any relay-backed feed (relay/trending/onlyfood) when switching
+        // to a different type — including between two relay-backed feeds.
+        if (isRelayBackedFeed(prev) && prev != type) {
             unsubscribeRelayFeed()
         }
 
@@ -241,6 +261,13 @@ class FeedSubscriptionManager(
                     subscribeTrendingFeed()
                 }
             }
+            FeedType.ONLY_FOOD -> {
+                eventRepo.clearRelayFeed()
+                // Cache-first paint: show persisted food notes instantly, then merge
+                // fresh relay events on top (pack paint-from-cache → fetch-fill pattern).
+                eventRepo.paintOnlyFoodFromCache()
+                subscribeOnlyFoodFeed()
+            }
         }
     }
 
@@ -281,25 +308,167 @@ class FeedSubscriptionManager(
     }
 
     fun subscribeFeed() {
+        // On the very first subscribe, resolve the landing feed (explicit saved
+        // choice, else the OnlyFood default) BEFORE any REQ fires, then subscribe to
+        // it directly — no FOR_YOU bootstrap that gets swapped out post-hoc. This
+        // kills the cold-start flash, the wasted/leaked FOR_YOU subscription, and the
+        // scroll reset, and lets the landing feed own the loading-Done handoff.
+        if (!hasResolvedInitialFeed) {
+            hasResolvedInitialFeed = true
+            val landing = resolveInitialFeedType()
+            Log.d("RLC", "[FeedSub] subscribeFeed: resolved landing feed = $landing")
+            if (isRelayBackedFeed(landing)) {
+                // OnlyFood paints from cache first so there's instant content under the
+                // loading indicator (merge fresh on top → clear=false); its EOSE arms
+                // loading-Done via onRelayFeedEose(). Other relay feeds clear first.
+                if (landing == FeedType.ONLY_FOOD) {
+                    eventRepo.paintOnlyFoodFromCache()
+                    restartRelayFeed(clear = false)
+                } else {
+                    restartRelayFeed(clear = true)
+                }
+                return
+            }
+            // Author / List landing: resubscribeFeed() subscribes and arms
+            // loading-Done at the feed's own EOSE.
+            resubscribeFeed()
+            return
+        }
         resubscribeFeed()
-        if (_feedType.value == FeedType.RELAY) {
-            eventRepo.clearRelayFeed()
-            subscribeRelayFeed()
-        } else if (_feedType.value == FeedType.TRENDING) {
-            eventRepo.clearRelayFeed()
-            if (_trendingMode.value == TrendingMode.USERS) {
-                subscribeTrendingUsers()
+        if (isRelayBackedFeed()) {
+            // Resume/reconnect: OnlyFood must mirror the cold-start landing — paint from
+            // cache and merge fresh on top (clear=false) — so it doesn't blank while
+            // relays reconnect. Only paint when the relay feed is actually empty: with
+            // clear=false the generation isn't bumped, so an unconditional paint would
+            // re-scan the whole eventCache on every resume and could overlap an in-flight
+            // paint. A non-empty list already has content to show, so skip the scan.
+            if (_feedType.value == FeedType.ONLY_FOOD) {
+                if (eventRepo.relayFeed.value.isEmpty()) eventRepo.paintOnlyFoodFromCache()
+                restartRelayFeed(clear = false)
             } else {
-                subscribeTrendingFeed()
+                restartRelayFeed(clear = true)
             }
         }
     }
 
+    /**
+     * Resolve the landing feed ONCE, before the first subscription fires, so we can
+     * subscribe directly to the right feed instead of booting FOR_YOU and swapping.
+     *
+     * An explicit saved choice ([KEY_LAST_FEED_TYPE]) wins; otherwise we fall back to
+     * the OnlyFood default. Applying the DEFAULT must NOT write [KEY_LAST_FEED_TYPE] —
+     * only an explicit user selection (via [setFeedType] → [persistFeedSelection])
+     * persists — so "never chose" stays distinct from "chose OnlyFood", preserving the
+     * "default unless the user picked something" logic. Sets [_feedType] (plus relay /
+     * list state) directly, without persisting or triggering a subscription.
+     */
+    private fun resolveInitialFeedType(): FeedType {
+        val savedName = prefs.getString(KEY_LAST_FEED_TYPE, null)
+        val savedType = savedName?.let { try { FeedType.valueOf(it) } catch (_: Exception) { null } }
+        var landing = savedType ?: FeedType.ONLY_FOOD
+
+        when (landing) {
+            FeedType.RELAY -> {
+                val relaySetName = prefs.getString(KEY_LAST_RELAY_SET_NAME, null)
+                val relaySetRelays = prefs.getString(KEY_LAST_RELAY_SET_RELAYS, null)
+                if (relaySetName != null && relaySetRelays != null) {
+                    val urls = relaySetRelays.split(",").filter { it.isNotBlank() }.toSet()
+                    if (urls.isNotEmpty()) {
+                        _selectedRelaySet.value = RelaySet(pubkeyHex ?: "", dTag = "", name = relaySetName, relays = urls, createdAt = 0)
+                    }
+                } else {
+                    prefs.getString(KEY_LAST_RELAY_URL, null)?.let { _selectedRelay.value = it }
+                }
+                // No restorable relay target → fall back to the default.
+                if (_selectedRelaySet.value == null && _selectedRelay.value == null) {
+                    landing = FeedType.ONLY_FOOD
+                }
+            }
+            FeedType.LIST -> {
+                val pubkey = prefs.getString(KEY_LAST_LIST_PUBKEY, null)
+                val dTag = prefs.getString(KEY_LAST_LIST_DTAG, null)
+                val list = if (pubkey != null && dTag != null) listRepo.getList(pubkey, dTag) else null
+                if (list != null) listRepo.selectList(list) else landing = FeedType.ONLY_FOOD
+            }
+            else -> {}
+        }
+
+        _feedType.value = landing
+        applyAuthorFilterForFeedType(landing)
+        return landing
+    }
+
+    /**
+     * Re-dispatch the active relay-backed feed's subscription (OnlyFood / RELAY /
+     * TRENDING). When [clear] is true, the isolated relay feed is wiped first — the
+     * behavior the normal subscribe entry points want. When false, fresh events
+     * merge on top of the current feed with no blank flash — the pull-to-refresh
+     * path. The subscribe methods do not self-clear, so [clear]=false is a pure
+     * merge-on-top. No-op for author feeds.
+     *
+     * [trendingMode] is captured by the caller so the (re)subscribe choice and any
+     * completion signal it awaits stay consistent even if the user flips Trending
+     * mode mid-refresh.
+     */
+    private fun restartRelayFeed(clear: Boolean, trendingMode: TrendingMode = _trendingMode.value) {
+        when (_feedType.value) {
+            FeedType.RELAY -> {
+                if (clear) eventRepo.clearRelayFeed()
+                subscribeRelayFeed()
+            }
+            FeedType.TRENDING -> {
+                if (clear) eventRepo.clearRelayFeed()
+                if (trendingMode == TrendingMode.USERS) {
+                    subscribeTrendingUsers()
+                } else {
+                    subscribeTrendingFeed()
+                }
+            }
+            FeedType.ONLY_FOOD -> {
+                if (clear) eventRepo.clearRelayFeed()
+                subscribeOnlyFoodFeed()
+            }
+            else -> {}
+        }
+    }
+
     fun refreshFeed() {
+        val type = _feedType.value
+
+        // Author feeds (For You / Follows / Extended / List): leave the legacy
+        // timed spinner untouched — a real refresh for these is a later scoped fix.
+        if (!isRelayBackedFeed(type)) {
+            _isRefreshing.value = true
+            scope.launch {
+                delay(3000)
+                _isRefreshing.value = false
+            }
+            return
+        }
+
+        // Relay-backed feeds: re-subscribe WITHOUT clearing (merge-on-top, no blank),
+        // then flip the spinner off once fresh results land — EOSE-count on the new
+        // sub with a hard timeout, no fixed delay. Capture the Trending mode once so
+        // the (re)subscribe and the completion signal can't disagree if the user
+        // flips mode mid-refresh.
+        val mode = _trendingMode.value
         _isRefreshing.value = true
+        restartRelayFeed(clear = false, trendingMode = mode)
+        val newSubId = relayFeedSubId
         scope.launch {
-            delay(3000)
-            _isRefreshing.value = false
+            try {
+                if (type == FeedType.TRENDING && mode == TrendingMode.USERS) {
+                    // Trending-users completes via its streaming collector, signalled
+                    // by trendingUsersLoading flipping false (hard-timeout backstop).
+                    withTimeoutOrNull(8_000) {
+                        _trendingUsersLoading.filter { !it }.first()
+                    }
+                } else {
+                    subManager.awaitEoseCount(newSubId, expectedCount = 1, timeoutMs = 8_000)
+                }
+            } finally {
+                _isRefreshing.value = false
+            }
         }
     }
 
@@ -362,7 +531,7 @@ class FeedSubscriptionManager(
                     indexerRelays = indexerRelays, blockedUrls = excludedUrls
                 )
             }
-            FeedType.RELAY, FeedType.TRENDING -> {
+            FeedType.RELAY, FeedType.TRENDING, FeedType.ONLY_FOOD -> {
                 // RELAY/TRENDING feeds use their own subscribe methods — should not reach here
                 Log.w("RLC", "[FeedSub] resubscribeFeed() called for ${_feedType.value} type, skipping")
                 return
@@ -453,8 +622,6 @@ class FeedSubscriptionManager(
                 metadataFetcher.sweepMissingProfiles()
             }
 
-            restoreSavedFeedType()
-
             if (_feedType.value == FeedType.FOR_YOU) {
                 startForYouSupplementaryFetches()
             }
@@ -509,6 +676,21 @@ class FeedSubscriptionManager(
                     } else { isLoadingMore = false; return }
                 }
             }
+            FeedType.ONLY_FOOD -> {
+                val oldest = eventRepo.getOldestRelayFeedTimestamp() ?: run { isLoadingMore = false; return }
+                val filter = Filter(
+                    kinds = ONLY_FOOD_KINDS,
+                    tTags = FoodHashtags.ALL,
+                    until = oldest - 1,
+                    limit = 50,
+                )
+                val msg = ClientMessage.req("relay-loadmore", filter)
+                var sentAny = false
+                for (url in ONLY_FOOD_RELAYS) {
+                    if (relayPool.sendToRelayOrEphemeral(url, msg, skipBadCheck = true)) sentAny = true
+                }
+                if (!sentAny) { isLoadingMore = false; return }
+            }
             FeedType.LIST -> {
                 val oldest = eventRepo.getOldestTimestamp() ?: run { isLoadingMore = false; return }
                 val list = listRepo.selectedList.value ?: run { isLoadingMore = false; return }
@@ -552,9 +734,10 @@ class FeedSubscriptionManager(
             FeedType.TRENDING -> return  // guarded above, but required for exhaustiveness
         }
 
-        val loadMoreSubId = if (_feedType.value == FeedType.RELAY) "relay-loadmore" else "loadmore"
+        // RELAY and ONLY_FOOD both page the isolated relay feed via "relay-loadmore".
+        val loadMoreSubId = if (_feedType.value == FeedType.RELAY || _feedType.value == FeedType.ONLY_FOOD) "relay-loadmore" else "loadmore"
         scope.launch {
-            val feedBefore = if (_feedType.value == FeedType.RELAY) {
+            val feedBefore = if (isRelayBackedFeed()) {
                 eventRepo.relayFeed.value.toList()
             } else {
                 eventRepo.feed.value.toList()
@@ -563,7 +746,7 @@ class FeedSubscriptionManager(
             subManager.awaitEoseWithTimeout(loadMoreSubId)
             subManager.closeSubscription(loadMoreSubId)
 
-            val feedAfter = if (_feedType.value == FeedType.RELAY) {
+            val feedAfter = if (isRelayBackedFeed()) {
                 eventRepo.relayFeed.value
             } else {
                 eventRepo.feed.value
@@ -773,6 +956,46 @@ class FeedSubscriptionManager(
 
     // -- Isolated relay feed subscription --
 
+    /**
+     * Subscribe the OnlyFood feed: kind [1,6,1068] filtered by #t food hashtags
+     * against [ONLY_FOOD_RELAYS]. Uses the shared [relayFeedSubId] machinery so
+     * EventRouter routes its events to [EventRepository.addHashtagFeedEvent].
+     * Mirrors the multi-relay branch of [subscribeRelayFeed].
+     */
+    private fun subscribeOnlyFoodFeed() {
+        val oldSubId = relayFeedSubId
+        relayFeedGeneration++
+        relayFeedSubId = "onlyfood-feed-$relayFeedGeneration"
+        relayPool.closeOnAllRelays(oldSubId)
+        relayFeedEoseJob?.cancel()
+        relayStatusMonitorJob?.cancel()
+        _relayFeedStatus.value = RelayFeedStatus.Subscribing
+
+        // Warm the curator food-seed (one-time) so the WoT gate can rescue
+        // good authors outside a thin social graph.
+        scope.launch { extendedNetworkRepo.ensureFoodSeedLoaded() }
+
+        val filter = Filter(kinds = ONLY_FOOD_KINDS, tTags = FoodHashtags.ALL, limit = 100)
+        val msg = ClientMessage.req(relayFeedSubId, filter)
+        val sentUrls = mutableSetOf<String>()
+        for (url in ONLY_FOOD_RELAYS) {
+            if (relayPool.sendToRelayOrEphemeral(url, msg, skipBadCheck = true)) sentUrls.add(url)
+        }
+        if (sentUrls.isEmpty()) {
+            _relayFeedStatus.value = RelayFeedStatus.ConnectionFailed("Failed to connect to any OnlyFood relay")
+            return
+        }
+        relayFeedEoseJob = scope.launch {
+            val eoseTarget = maxOf(1, (sentUrls.size * 0.3).toInt()).coerceIn(1, sentUrls.size)
+            subManager.awaitEoseCount(relayFeedSubId, eoseTarget)
+            onRelayFeedEose()
+            subscribeEngagementForFeed()
+            withContext(processingContext) {
+                metadataFetcher.sweepMissingProfiles()
+            }
+        }
+    }
+
     private fun subscribeRelayFeed() {
         val oldSubId = relayFeedSubId
         relayFeedGeneration++
@@ -946,7 +1169,12 @@ class FeedSubscriptionManager(
     }
 
     private fun onRelayFeedEose() {
-        if (_feedType.value != FeedType.RELAY && _feedType.value != FeedType.TRENDING) return
+        if (!isRelayBackedFeed()) return
+        // When a relay-backed feed (OnlyFood / RELAY / TRENDING) is the landing feed,
+        // its own EOSE owns the loading-screen handoff — never a feed that isn't
+        // showing. Idempotent for runtime switches (already Done by then).
+        _initialLoadDone.value = true
+        _initLoadingState.value = InitLoadingState.Done
         val status = _relayFeedStatus.value
         if (status is RelayFeedStatus.Connecting || status is RelayFeedStatus.Subscribing) {
             _relayFeedStatus.value = if (eventRepo.relayFeed.value.isEmpty()) {
@@ -959,7 +1187,7 @@ class FeedSubscriptionManager(
 
     /** Mark status as Streaming when events start arriving. Called by EventRouter. */
     fun onRelayFeedEventReceived() {
-        if (_feedType.value != FeedType.RELAY && _feedType.value != FeedType.TRENDING) return
+        if (!isRelayBackedFeed()) return
         val status = _relayFeedStatus.value
         if (status is RelayFeedStatus.Subscribing || status is RelayFeedStatus.Connecting) {
             _relayFeedStatus.value = RelayFeedStatus.Streaming
@@ -973,7 +1201,7 @@ class FeedSubscriptionManager(
         activeEngagementSubIds.clear()
         engagedEventIds.clear()
 
-        val feedEvents = if (_feedType.value == FeedType.RELAY || _feedType.value == FeedType.TRENDING) eventRepo.relayFeed.value else eventRepo.feed.value
+        val feedEvents = if (isRelayBackedFeed()) eventRepo.relayFeed.value else eventRepo.feed.value
         if (feedEvents.isEmpty()) return
 
         // Subscribe global subs (poll votes, DM zaps) for all feed events
@@ -1107,7 +1335,7 @@ class FeedSubscriptionManager(
         viewportEngagementJob = scope.launch {
             // Debounce to avoid thrashing during fast scrolls
             delay(300)
-            val feedEvents = if (_feedType.value == FeedType.RELAY || _feedType.value == FeedType.TRENDING) {
+            val feedEvents = if (isRelayBackedFeed()) {
                 eventRepo.relayFeed.value
             } else {
                 eventRepo.feed.value
@@ -1207,7 +1435,7 @@ class FeedSubscriptionManager(
         _trendingUsers.value = emptyList()
         _trendingUsersLoading.value = false
         isLoadingMore = false
-        hasRestoredFeedType = false
+        hasResolvedInitialFeed = false
         prefs.edit()
             .remove(KEY_LAST_FEED_TYPE).remove(KEY_LAST_RELAY_URL)
             .remove(KEY_LAST_RELAY_SET_NAME).remove(KEY_LAST_RELAY_SET_RELAYS)
@@ -1240,48 +1468,6 @@ class FeedSubscriptionManager(
             else -> {}
         }
         editor.apply()
-    }
-
-    private fun restoreSavedFeedType() {
-        if (hasRestoredFeedType) return
-        hasRestoredFeedType = true
-
-        val savedName = prefs.getString(KEY_LAST_FEED_TYPE, null) ?: return
-        val savedType = try { FeedType.valueOf(savedName) } catch (_: Exception) { return }
-        if (savedType == _feedType.value) return
-
-        Log.d("RLC", "[FeedSub] restoring saved feed type: $savedType")
-        when (savedType) {
-            FeedType.FOLLOWS, FeedType.TRENDING, FeedType.EXTENDED_FOLLOWS -> setFeedType(savedType)
-            FeedType.RELAY -> {
-                val relaySetName = prefs.getString(KEY_LAST_RELAY_SET_NAME, null)
-                val relaySetRelays = prefs.getString(KEY_LAST_RELAY_SET_RELAYS, null)
-                if (relaySetName != null && relaySetRelays != null) {
-                    val urls = relaySetRelays.split(",").filter { it.isNotBlank() }.toSet()
-                    if (urls.isNotEmpty()) {
-                        val set = RelaySet(pubkeyHex ?: "", dTag = "", name = relaySetName, relays = urls, createdAt = 0)
-                        _selectedRelaySet.value = set
-                        setFeedType(FeedType.RELAY)
-                        return
-                    }
-                }
-                val url = prefs.getString(KEY_LAST_RELAY_URL, null)
-                if (url != null) {
-                    _selectedRelay.value = url
-                    setFeedType(FeedType.RELAY)
-                }
-            }
-            FeedType.LIST -> {
-                val pubkey = prefs.getString(KEY_LAST_LIST_PUBKEY, null) ?: return
-                val dTag = prefs.getString(KEY_LAST_LIST_DTAG, null) ?: return
-                val list = listRepo.getList(pubkey, dTag)
-                if (list != null) {
-                    listRepo.selectList(list)
-                    setFeedType(FeedType.LIST)
-                }
-            }
-            else -> {}
-        }
     }
 
     /**

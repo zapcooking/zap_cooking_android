@@ -2,6 +2,7 @@ package cooking.zap.app.repo
 
 import android.util.Log
 import android.util.LruCache
+import cooking.zap.app.nostr.FoodHashtags
 import cooking.zap.app.nostr.Nip09
 import cooking.zap.app.nostr.Nip10
 import cooking.zap.app.nostr.Nip30
@@ -21,6 +22,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import cooking.zap.app.db.EventPersistence
 import java.util.concurrent.ConcurrentHashMap
@@ -109,6 +111,38 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
     private val relayFeedIds = HashSet<String>()
     private val _relayFeed = MutableStateFlow<List<NostrEvent>>(emptyList())
     val relayFeed: StateFlow<List<NostrEvent>> = _relayFeed
+
+    /** Serializes [addHashtagFeedEvent] across live relay ingestion and the cache paint. */
+    private val hashtagFeedLock = Any()
+
+    /**
+     * Bumped by [clearRelayFeed] so an in-flight [paintOnlyFoodFromCache] can detect a
+     * feed switch and stop inserting into the now-repurposed [relayFeedList]
+     * (RELAY/TRENDING reuse the same list).
+     */
+    @Volatile
+    private var relayFeedGeneration = 0
+
+    // Count of OnlyFood posts dropped by the WoT filter since the last feed (re)load.
+    // Surfaced so the UI can explain an empty/sparse feed instead of showing a silent blank.
+    private val _onlyFoodWotDropped = MutableStateFlow(0)
+    val onlyFoodWotDropped: StateFlow<Int> = _onlyFoodWotDropped
+
+    // OnlyFood structural spam caps — mirror the web client's FoodstrFeed thresholds.
+    private val HELLTHREAD_P_LIMIT = 25
+    private val MAX_HASHTAGS = 5
+    // Inline content hashtags, mirroring the web's HASHTAG_PATTERN = /(^|\s)#([^\s#]+)/g.
+    private val CONTENT_HASHTAG_REGEX = Regex("""(^|\s)#([^\s#]+)""")
+
+    // App-level OnlyFood blocklist (curation). Applies to ALL users' OnlyFood feed and is
+    // SEPARATE from each user's personal mute list (muteRepo). Add a future spammer's hex
+    // pubkey as a one-line entry, commented with its npub for readability.
+    private val ONLY_FOOD_BLOCKED_PUBKEYS: Set<String> = setOf(
+        // npub1m354es2t3hpx0wslegv7qrrpt4dmjyzh6feazktpuze0vnqw6jcqx5ps3x
+        "dc695cc14b8dc267ba1fca19e00c615d5bb91057d273d15961e0b2f64c0ed4b0",
+        // npub1qvv7xqpkeugn4qsa9lqjuypjttpx6gewk3gzz80mew07lgpw57sq2u5jtf
+    "0319e30036cf113a821d2fc12e10325ac26d232eb450211dfbcb9fefa02ea7a0",
+    )
 
     // Author filter: null = show all, non-null = only show events from these pubkeys
     private val _authorFilter = MutableStateFlow<Set<String>?>(null)
@@ -1411,6 +1445,139 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
         }
     }
 
+    /**
+     * Ingestion choke-point for the OnlyFood hashtag feed (FeedType.ONLY_FOOD).
+     * Shares the isolated [relayFeedList] display with RELAY/TRENDING, but unlike
+     * [addRelayFeedEvent] it also applies the muted-word filter, so the full set
+     * the standalone OnlyFood screen lacked is centralized here:
+     * future-timestamp, mute (pubkey + word + thread), deleted-event, and
+     * de-dup (via [relayFeedBinaryInsert]'s [relayFeedIds]).
+     *
+     * Dedup uses the relay-feed-local [relayFeedIds] rather than the global
+     * [seenEventIds] on purpose: sharing the global set with the author-based
+     * main feed would make each event land in only one of the two lists
+     * (whichever arrived first), starving the other. The local set still
+     * prevents an event from appearing twice within OnlyFood.
+     *
+     * This is also the single hook for PR 2's WoT + structural spam layer.
+     * Mirrors the web's kind set [1, 6, 1068] (notes, reposts, polls).
+     */
+    fun addHashtagFeedEvent(event: NostrEvent): Unit = synchronized(hashtagFeedLock) {
+        // Serializes all callers (live relay ingestion + cache paint) so concurrent
+        // calls can't race the non-atomic compound mutations below (e.g. the kind-6
+        // repostAuthors get-or-create). Live ingestion is already single-threaded via
+        // the relayEvents collector, so the only real contention is the paint overlap.
+        // Bare `return`s below are non-local returns from this function (synchronized
+        // is inline), so the monitor is always released on exit.
+        if (event.created_at > System.currentTimeMillis() / 1000 + 30) return
+        if (event.pubkey in ONLY_FOOD_BLOCKED_PUBKEYS) return  // app-level OnlyFood curation
+        if (muteRepo?.isBlocked(event.pubkey) == true) return
+        if (deletedEventsRepo?.isDeleted(event.id) == true) return
+
+        when (event.kind) {
+            1 -> {
+                if (muteRepo?.containsMutedWord(event.content) == true) return
+                val threadRoot = Nip10.getRootId(event) ?: Nip10.getReplyTarget(event) ?: event.id
+                if (muteRepo?.isThreadMuted(threadRoot) == true) return
+                if (isStructuralSpam(event)) return                  // cheap: hellthread / hashtag cap
+                val isReply = Nip10.isReply(event)
+                if (!isReply) {
+                    if (isOnlyFoodWotFiltered(event.pubkey)) {       // strong: web-of-trust
+                        _onlyFoodWotDropped.update { it + 1 }
+                        return
+                    }
+                    eventCache[event.id] = event
+                    relayHintStore?.extractHintsFromTags(event)
+                    relayFeedBinaryInsert(event)
+                }
+            }
+            Nip88.KIND_POLL -> {
+                if (muteRepo?.containsMutedWord(event.content) == true) return
+                if (isStructuralSpam(event)) return
+                if (isOnlyFoodWotFiltered(event.pubkey)) {
+                    _onlyFoodWotDropped.update { it + 1 }
+                    return
+                }
+                eventCache[event.id] = event
+                relayHintStore?.extractHintsFromTags(event)
+                relayFeedBinaryInsert(event)
+            }
+            6 -> {
+                if (event.content.isNotBlank()) {
+                    try {
+                        val inner = NostrEvent.fromJson(event.content)
+                        if (inner.pubkey in ONLY_FOOD_BLOCKED_PUBKEYS) return  // drop reposts of blocked author
+                        if (muteRepo?.isBlocked(inner.pubkey) == true) return
+                        if (muteRepo?.containsMutedWord(inner.content) == true) return
+                        if (isStructuralSpam(inner)) return          // structural caps on reposted note
+                        // Drop only if BOTH the reposter and the inner author fail WoT —
+                        // a trusted reposter surfacing a stranger's food note is allowed.
+                        if (isOnlyFoodWotFiltered(event.pubkey) && isOnlyFoodWotFiltered(inner.pubkey)) {
+                            _onlyFoodWotDropped.update { it + 1 }
+                            return
+                        }
+                        val authors = repostAuthors.get(inner.id)
+                            ?: ConcurrentHashMap.newKeySet<String>().also { repostAuthors.put(inner.id, it) }
+                        authors.add(event.pubkey)
+                        if (event.pubkey == currentUserPubkey) {
+                            userReposts.put(inner.id, true)
+                        }
+                        repostDirty = true
+                        markVersionDirty()
+                        val isReply = Nip10.isReply(inner)
+                        if (!isReply) {
+                            eventCache[inner.id] = inner
+                            relayHintStore?.extractHintsFromTags(inner)
+                            feedSortTime.put(inner.id, event.created_at)
+                            relayFeedBinaryInsert(inner, sortTime = event.created_at)
+                        }
+                    } catch (_: Exception) {}
+                }
+            }
+        }
+    }
+
+    // -- OnlyFood spam-defense helpers (used only by addHashtagFeedEvent) --
+
+    /** Count inline #hashtags in note content, mirroring the web's countContentHashtags. */
+    private fun countContentHashtags(content: String): Int =
+        CONTENT_HASHTAG_REGEX.findAll(content).count()
+
+    /** Mirror the web client's structural caps: hellthread p-tags and hashtag spam. */
+    private fun isStructuralSpam(event: NostrEvent): Boolean {
+        var pCount = 0
+        var tCount = 0
+        for (tag in event.tags) {
+            if (tag.isEmpty()) continue
+            when (tag[0]) {
+                "p" -> pCount++
+                "t" -> tCount++
+            }
+        }
+        // Mirror the web's getHashtagCount = max(inline content #tags, t-tags), so
+        // inline-hashtag spam is caught even when the author omits #t tags.
+        val hashtagCount = maxOf(countContentHashtags(event.content), tCount)
+        return pCount >= HELLTHREAD_P_LIMIT || hashtagCount > MAX_HASHTAGS
+    }
+
+    /**
+     * OnlyFood web-of-trust gate. Drops authors outside the trust set
+     * (qualified network ∪ curator food seed). Opt-in toggle, default OFF to mirror
+     * the web client, which applies NO web-of-trust gate to the #foodstr discovery
+     * feed (structural + mute only). Distinct from the global
+     * [isWotFiltered]/wotFilterEnabled. NO-OPS when the social graph isn't ready, to
+     * avoid an empty feed (mute + structural still apply).
+     */
+    private fun isOnlyFoodWotFiltered(pubkey: String): Boolean {
+        if (safetyPrefs?.onlyFoodWotEnabled?.value != true) return false
+        val netRepo = extendedNetworkRepo ?: return false
+        if (!netRepo.isNetworkReady()) return false  // empty-feed guard
+        if (pubkey == currentUserPubkey) return false
+        if (netRepo.isInQualifiedNetwork(pubkey)) return false
+        if (netRepo.isInFoodSeed(pubkey)) return false
+        return true
+    }
+
     private fun trendingFeedAppend(event: NostrEvent) {
         synchronized(relayFeedList) {
             if (!relayFeedIds.add(event.id)) return
@@ -1434,11 +1601,105 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
     }
 
     fun clearRelayFeed() {
+        relayFeedGeneration++  // invalidate any in-flight cache paint
         synchronized(relayFeedList) {
             relayFeedList.clear()
             relayFeedIds.clear()
         }
         _relayFeed.value = emptyList()
+        _onlyFoodWotDropped.value = 0
+    }
+
+    /**
+     * Cache-first paint for the OnlyFood feed: find food-tagged kind 1/6/1068 events
+     * and route EACH through the shared [addHashtagFeedEvent] choke-point so mute +
+     * structural spam + WoT + dedup all apply. Runs off the main thread and is
+     * non-blocking — callers fire it then immediately subscribe relays to merge fresh
+     * events on top.
+     *
+     * The PRIMARY source is the FULL in-memory [eventCache] (the session's accumulated
+     * event map — unbounded, not recency-truncated), mirroring [rebuildFeedFromCache].
+     * A persisted "500 newest" query is recency-starved: after browsing For You /
+     * Trending the newest persisted kind-1 notes are non-food and bury the food notes,
+     * so the food pre-filter rejects the whole window and paints nothing (the
+     * blank-on-switch bug). The cache holds prior-session food notes —
+     * [addHashtagFeedEvent] writes them into [eventCache] — so they survive the detour
+     * through other tabs and are always found here regardless of recency.
+     *
+     * Cold-start fallback only: if the cache scan leaves the relay feed empty (a fresh
+     * session with no food notes cached yet), fall back to the persisted catalog
+     * queried by kind with a much larger window ([fallbackLimit], food-filtered in
+     * memory) so the query isn't recency-starved like the old 500-newest one. The
+     * fallback keys off the relay feed actually being empty — not a match count — since
+     * [addHashtagFeedEvent] may still drop every candidate (mute/WoT/spam/reply/dedup);
+     * if live relay events have already landed, the feed isn't blank and we skip it.
+     *
+     * The [FoodHashtags.hasFoodTag] pre-filter is REQUIRED: [addHashtagFeedEvent]
+     * does not itself check for a food tag (the relay path guarantees that via its
+     * `tTags` filter), so without it non-food cached kind-1 notes would leak in.
+     * Cached events dedup against live relay events via [relayFeedIds].
+     */
+    fun paintOnlyFoodFromCache(fallbackLimit: Int = 5000) {
+        // Captured on the caller thread, right after clearRelayFeed() bumped it. If the
+        // user switches feeds (RELAY/TRENDING reuse relayFeedList), clearRelayFeed bumps
+        // the generation again and this paint abandons mid-loop instead of polluting the
+        // next feed.
+        val gen = relayFeedGeneration
+        scope.launch(Dispatchers.IO) {
+            // Primary: scan the full in-memory cache for food-tagged feed kinds.
+            val snapshot = eventCache
+            for ((_, event) in snapshot) {
+                if (relayFeedGeneration != gen) return@launch
+                if (event.kind != 1 && event.kind != 6 && event.kind != Nip88.KIND_POLL) continue
+                if (FoodHashtags.hasFoodTag(event)) addHashtagFeedEvent(event)
+            }
+            // Cold-start fallback: the cache produced nothing that survived the
+            // addHashtagFeedEvent filters, so the relay feed is still empty. Measuring
+            // the feed (not a hasFoodTag match count) also skips the fallback when live
+            // relay events have already landed — the feed isn't blank in that case.
+            if (relayFeedGeneration != gen) return@launch
+            val feedEmpty = synchronized(relayFeedList) { relayFeedList.isEmpty() }
+            if (feedEmpty) {
+                val persistence = eventPersistence ?: return@launch
+                val cached = persistence.getEventsByKinds(intArrayOf(1, 6, Nip88.KIND_POLL), fallbackLimit)
+                for (event in cached) {
+                    if (relayFeedGeneration != gen) return@launch
+                    if (FoodHashtags.hasFoodTag(event)) addHashtagFeedEvent(event)
+                }
+            }
+        }
+    }
+
+    /**
+     * Read-only cache-seed source for the OnlyFood VM: cached **kind-1** notes
+     * carrying a food hashtag ([FoodHashtags.hasFoodTag]), newest first. Mirrors
+     * [paintOnlyFoodFromCache]'s proven filter but RETURNS the list instead of
+     * routing into the [relayFeedList] hashtag-feed surface — the OnlyFood feed
+     * keeps its own per-mode cache, so it needs the events, not a side-effect.
+     *
+     * Primary source is the full in-memory [eventCache] (not recency-truncated);
+     * if that yields nothing, fall back to the persisted catalog queried by kind
+     * with a wide window (food-filtered in memory) so the result isn't
+     * recency-starved by non-food kind-1 notes. Best-effort: never throws.
+     */
+    fun cachedFoodNotes(limit: Int = 200): List<NostrEvent> {
+        return try {
+            val fromCache = eventCache.values.asSequence()
+                .filter { it.kind == 1 && FoodHashtags.hasFoodTag(it) }
+                .sortedByDescending { it.created_at }
+                .take(limit)
+                .toList()
+            if (fromCache.isNotEmpty()) return fromCache
+            val persistence = eventPersistence ?: return emptyList()
+            persistence.getEventsByKind(1, limit = 5000)
+                .asSequence()
+                .filter { FoodHashtags.hasFoodTag(it) }
+                .sortedByDescending { it.created_at }
+                .take(limit)
+                .toList()
+        } catch (t: Throwable) {
+            emptyList()
+        }
     }
 
     fun getOldestRelayFeedTimestamp(): Long? {

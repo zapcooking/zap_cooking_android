@@ -75,7 +75,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
-enum class FeedType { FOR_YOU, FOLLOWS, EXTENDED_FOLLOWS, RELAY, LIST, TRENDING }
+enum class FeedType { FOR_YOU, FOLLOWS, EXTENDED_FOLLOWS, RELAY, LIST, TRENDING, ONLY_FOOD }
 
 enum class TrendingMode { NOTES, USERS }
 
@@ -358,6 +358,7 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
         getFeedSubId = { feedSub.feedSubId },
         getRelayFeedSubId = { feedSub.relayFeedSubId },
         getIsTrendingFeed = { feedSub.feedType.value == FeedType.TRENDING },
+        getIsHashtagFeed = { feedSub.feedType.value == FeedType.ONLY_FOOD },
         onRelayFeedEventReceived = { feedSub.onRelayFeedEventReceived() }
     )
 
@@ -422,8 +423,12 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
     val feed: StateFlow<List<NostrEvent>> = combine(
         feedSub.feedType, eventRepo.feed, eventRepo.relayFeed
     ) { type, main, relay ->
-        if (type == FeedType.RELAY || type == FeedType.TRENDING) relay else main
+        // ONLY_FOOD is relay-backed (a dedicated #t query), like RELAY/TRENDING.
+        if (type == FeedType.RELAY || type == FeedType.TRENDING || type == FeedType.ONLY_FOOD) relay else main
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** OnlyFood posts hidden by the WoT filter since the last (re)load — for the empty-state notice. */
+    val onlyFoodWotDropped: StateFlow<Int> = eventRepo.onlyFoodWotDropped
 
     val liveNowStreams: StateFlow<List<cooking.zap.app.repo.LiveStream>> = liveStreamRepo.liveStreams
         .map { streams ->

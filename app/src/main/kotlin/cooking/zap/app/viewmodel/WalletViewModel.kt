@@ -5,7 +5,9 @@ import androidx.lifecycle.viewModelScope
 import cooking.zap.app.nostr.Bolt11
 import cooking.zap.app.nostr.ClientMessage
 import cooking.zap.app.nostr.Filter
+import android.content.ContentResolver
 import cooking.zap.app.nostr.LocalSigner
+import cooking.zap.app.nostr.RemoteSigner
 import cooking.zap.app.nostr.Nip57
 import cooking.zap.app.nostr.Nip78
 import cooking.zap.app.nostr.NostrEvent
@@ -133,6 +135,7 @@ class WalletViewModel(
     val eventRepo: EventRepository,
     val relayPool: RelayPool,
     val keyRepo: KeyRepository,
+    private val contentResolver: ContentResolver? = null,
 ) : ViewModel() {
 
     private val _walletMode = MutableStateFlow(walletModeRepo.getMode())
@@ -1557,6 +1560,12 @@ class WalletViewModel(
             SigningMode.LOCAL -> {
                 val keypair = keyRepo.getKeypair() ?: return null
                 LocalSigner(keypair.privkey, keypair.pubkey)
+            }
+            SigningMode.REMOTE -> {
+                val pubkey = keyRepo.getPubkeyHex() ?: return null
+                val pkg = keyRepo.getSignerPackage() ?: return null
+                val cr = contentResolver ?: return null
+                RemoteSigner(pubkey, cr, pkg)
             }
             SigningMode.READ_ONLY -> null
         }
