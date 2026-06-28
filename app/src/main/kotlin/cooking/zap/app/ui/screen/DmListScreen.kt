@@ -120,9 +120,9 @@ fun DmListScreen(
             if (selectedTab == 0) {
                 cooking.zap.app.ui.component.ZapGradientFab(
                     onClick = onNewDm,
-                    contentDescription = null
+                    contentDescription = stringResource(R.string.cd_new_conversation)
                 ) {
-                    Icon(Icons.AutoMirrored.Outlined.Chat, contentDescription = stringResource(R.string.cd_new_conversation), tint = Color.White)
+                    Icon(Icons.AutoMirrored.Outlined.Chat, contentDescription = null, tint = Color.White)
                 }
             }
         }
