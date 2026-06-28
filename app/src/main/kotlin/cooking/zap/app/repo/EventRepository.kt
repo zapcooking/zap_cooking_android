@@ -1668,6 +1668,38 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
         }
     }
 
+    /**
+     * Read-only cache-seed source for the OnlyFood VM: cached **kind-1** notes
+     * carrying a food hashtag ([FoodHashtags.hasFoodTag]), newest first. Mirrors
+     * [paintOnlyFoodFromCache]'s proven filter but RETURNS the list instead of
+     * routing into the [relayFeedList] hashtag-feed surface — the OnlyFood feed
+     * keeps its own per-mode cache, so it needs the events, not a side-effect.
+     *
+     * Primary source is the full in-memory [eventCache] (not recency-truncated);
+     * if that yields nothing, fall back to the persisted catalog queried by kind
+     * with a wide window (food-filtered in memory) so the result isn't
+     * recency-starved by non-food kind-1 notes. Best-effort: never throws.
+     */
+    fun cachedFoodNotes(limit: Int = 200): List<NostrEvent> {
+        return try {
+            val fromCache = eventCache.values.asSequence()
+                .filter { it.kind == 1 && FoodHashtags.hasFoodTag(it) }
+                .sortedByDescending { it.created_at }
+                .take(limit)
+                .toList()
+            if (fromCache.isNotEmpty()) return fromCache
+            val persistence = eventPersistence ?: return emptyList()
+            persistence.getEventsByKind(1, limit = 5000)
+                .asSequence()
+                .filter { FoodHashtags.hasFoodTag(it) }
+                .sortedByDescending { it.created_at }
+                .take(limit)
+                .toList()
+        } catch (t: Throwable) {
+            emptyList()
+        }
+    }
+
     fun getOldestRelayFeedTimestamp(): Long? {
         return synchronized(relayFeedList) {
             relayFeedList.lastOrNull()?.let { effectiveSortTime(it) }

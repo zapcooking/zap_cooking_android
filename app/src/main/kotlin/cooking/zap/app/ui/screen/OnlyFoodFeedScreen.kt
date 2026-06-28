@@ -28,9 +28,9 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -40,6 +40,11 @@ import cooking.zap.app.ui.component.NoteActions
 import cooking.zap.app.ui.component.PostCard
 import cooking.zap.app.viewmodel.OnlyFoodFeedViewModel
 import cooking.zap.app.viewmodel.OnlyFoodFeedViewModel.Mode
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
+
+/** Item runway before the viewport bottom that triggers the next backward page. */
+private const val PAGE_PREFETCH_DISTANCE = 6
 
 /**
  * OnlyFood 🍳 — the social food feed (concern 1.6). A Global/Following toggle
@@ -65,15 +70,22 @@ fun OnlyFoodFeedScreen(
     val emptyFollows by viewModel.emptyFollows.collectAsState()
 
     val listState = rememberLazyListState()
-    // Infinite scroll: when the last item nears the viewport, page older.
-    val shouldPage by remember {
-        derivedStateOf {
-            val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            notes.isNotEmpty() && last >= notes.size - 3
+    // Infinite scroll: page older when the last item nears the viewport. Keyed on
+    // totalItemsCount (not a bare boolean) so a page that appends WHILE the user is
+    // parked at the bottom re-triggers the next page — a boolean stuck `true` would
+    // stall. distinctUntilChanged suppresses re-fires when nothing changed; the VM's
+    // own isPaging/endReached guards are the backstop. PostCards measure slowly, so
+    // a 6-item runway prefetches earlier than the old 3.
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            val layoutInfo = listState.layoutInfo
+            val total = layoutInfo.totalItemsCount
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+            if (total > 0 && lastVisible >= total - PAGE_PREFETCH_DISTANCE) total else -1
         }
-    }
-    LaunchedEffect(shouldPage) {
-        if (shouldPage) viewModel.loadMore()
+            .distinctUntilChanged()
+            .filter { it >= 0 }
+            .collect { viewModel.loadMore() }
     }
 
     Scaffold(
