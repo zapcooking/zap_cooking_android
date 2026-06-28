@@ -64,11 +64,20 @@ import cooking.zap.app.nostr.RecipeTag
 import cooking.zap.app.nostr.RecipeTagCatalog
 import cooking.zap.app.repo.EventRepository
 import cooking.zap.app.repo.RecipePackSummary
+import cooking.zap.app.repo.CookbookMemberRecipe
+import cooking.zap.app.repo.RecipeBookmarkRepository.CookbookList
+import cooking.zap.app.ui.component.ChooseCoverSheet
+import cooking.zap.app.ui.component.CookbookCollectionCard
+import cooking.zap.app.ui.component.DeleteCollectionDialog
+import cooking.zap.app.ui.component.EditDescriptionDialog
 import cooking.zap.app.ui.component.IntelligenceMenu
 import cooking.zap.app.ui.component.RecipePackCard
+import cooking.zap.app.ui.component.RenameCollectionDialog
+import cooking.zap.app.ui.util.LocalCanSign
 import cooking.zap.app.ui.component.ProfilePicture
 import cooking.zap.app.ui.component.RecipeCard
 import cooking.zap.app.ui.component.RecipePosterSkeleton
+import cooking.zap.app.viewmodel.CookbookViewModel
 import cooking.zap.app.viewmodel.RecipeFeedViewModel
 import cooking.zap.app.viewmodel.RecipePacksTab
 import cooking.zap.app.viewmodel.RecipePacksViewModel
@@ -82,7 +91,9 @@ import kotlinx.coroutines.flow.filter
  */
 private const val LOAD_MORE_PREFETCH = 6
 
-private enum class RecipesMainTab { RECIPES, PACKS }
+private enum class RecipesMainTab { RECIPES, PACKS, COOKBOOK }
+
+private enum class CookbookSubTab { SAVED, MY_RECIPES }
 
 /**
  * The Recipes feed — recipe cards only (concern 1.6 un-merge), rendered as a
@@ -95,10 +106,12 @@ private enum class RecipesMainTab { RECIPES, PACKS }
 fun RecipeFeedScreen(
     viewModel: RecipeFeedViewModel,
     packsViewModel: RecipePacksViewModel,
+    cookbookViewModel: CookbookViewModel,
     eventRepo: EventRepository,
     userPubkey: String?,
     onRecipeClick: (author: String, dTag: String) -> Unit,
     onPackClick: (author: String, dTag: String) -> Unit,
+    onCollectionClick: (dTag: String) -> Unit = {},
     onTagClick: (tag: String) -> Unit = {},
     // Recipes is a root tab: no back arrow. The nav icon opens the shared
     // drawer (hoisted to WispNavHost) and the top bar carries a search icon,
@@ -219,6 +232,12 @@ fun RecipeFeedScreen(
                     },
                     modifier = Modifier.weight(1f),
                 )
+                RecipesMainTabButton(
+                    label = stringResource(R.string.tab_cookbook),
+                    selected = mainTab == RecipesMainTab.COOKBOOK,
+                    onClick = { mainTab = RecipesMainTab.COOKBOOK },
+                    modifier = Modifier.weight(1f),
+                )
             }
 
             if (mainTab == RecipesMainTab.PACKS) {
@@ -227,6 +246,17 @@ fun RecipeFeedScreen(
                     eventRepo = eventRepo,
                     userPubkey = userPubkey,
                     onPackClick = onPackClick,
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                )
+                return@Column
+            }
+
+            if (mainTab == RecipesMainTab.COOKBOOK) {
+                CookbookSection(
+                    viewModel = cookbookViewModel,
+                    userPubkey = userPubkey,
+                    onCollectionClick = onCollectionClick,
+                    onRecipeClick = onRecipeClick,
                     modifier = Modifier.fillMaxWidth().weight(1f),
                 )
                 return@Column
@@ -488,6 +518,233 @@ private fun RecipePacksSection(
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * Cookbook tab. Two sub-tabs reusing the Packs `TabRow` pattern:
+ *  - **Saved** (PR 3b-i) — the user's kind-30001 recipe collections (PR 3a):
+ *    default Saved list first, named collections after, each a cover card that
+ *    drills into the shared pack-detail grid.
+ *  - **My Recipes** (PR 3b-ii) — the user's OWN published recipes via the live
+ *    author query, rendered in the same `RecipeCard` poster grid. Distinct from
+ *    Saved (authored, not bookmarked). Loaded lazily when first shown.
+ *
+ * Both sub-tabs are personal: signed-out shows a sign-in prompt. READ_ONLY still
+ * renders (the account's own lists and authored recipes are fetchable); management
+ * affordances are PR 3b-iii.
+ */
+@Composable
+private fun CookbookSection(
+    viewModel: CookbookViewModel,
+    userPubkey: String?,
+    onCollectionClick: (dTag: String) -> Unit,
+    onRecipeClick: (author: String, dTag: String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val lists by viewModel.lists.collectAsState()
+    val covers by viewModel.covers.collectAsState()
+    var subTab by remember { mutableStateOf(CookbookSubTab.SAVED) }
+    // Management (PR 3b-iii) is owner-only — a signing key is required.
+    val canManage = LocalCanSign.current
+    var manage by remember { mutableStateOf<CookbookManageState?>(null) }
+
+    Column(modifier = modifier) {
+        TabRow(selectedTabIndex = subTab.ordinal) {
+            Tab(
+                selected = subTab == CookbookSubTab.SAVED,
+                onClick = { subTab = CookbookSubTab.SAVED },
+                text = { Text(stringResource(R.string.tab_saved)) }
+            )
+            Tab(
+                selected = subTab == CookbookSubTab.MY_RECIPES,
+                onClick = { subTab = CookbookSubTab.MY_RECIPES },
+                text = { Text(stringResource(R.string.cookbook_tab_my_recipes)) }
+            )
+        }
+
+        // Both sub-tabs are personal — gate on having an account at all.
+        if (userPubkey.isNullOrBlank()) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    text = stringResource(R.string.cookbook_sign_in),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            return
+        }
+
+        when (subTab) {
+            CookbookSubTab.SAVED -> {
+                if (lists.isEmpty()) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.padding(horizontal = 32.dp),
+                        ) {
+                            Text(text = "📖", style = MaterialTheme.typography.displaySmall)
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                text = stringResource(R.string.cookbook_saved_empty_title),
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = stringResource(R.string.cookbook_saved_empty_body),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            )
+                        }
+                    }
+                } else {
+                    LazyVerticalGrid(
+                        columns = GridCells.Adaptive(minSize = 280.dp),
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        gridItems(lists, key = { it.dTag }) { list ->
+                            CookbookCollectionCard(
+                                title = list.title,
+                                coverUrl = covers[list.dTag],
+                                recipeCount = list.coordinates.size,
+                                isDefault = list.isDefault,
+                                onClick = { onCollectionClick(list.dTag) },
+                                canManage = canManage,
+                                onRename = { manage = CookbookManageState.Rename(list) },
+                                onEditDescription = { manage = CookbookManageState.Description(list) },
+                                onChooseCover = { manage = CookbookManageState.Cover(list) },
+                                onDelete = { manage = CookbookManageState.Delete(list) },
+                            )
+                        }
+                    }
+                }
+            }
+
+            // PR 3b-ii — the user's OWN published recipes via the live author
+            // query, in the same poster grid as Saved/Recipes.
+            CookbookSubTab.MY_RECIPES -> {
+                val authored by viewModel.authoredRecipes.collectAsState()
+                val isAuthoredLoading by viewModel.isAuthoredLoading.collectAsState()
+                // Lazy: kick off the author query when this sub-tab shows. Keyed on
+                // userPubkey so a late sign-in / account switch re-runs it for the
+                // new author (requestMyRecipes() no-ops if already loaded for it).
+                LaunchedEffect(userPubkey) { viewModel.requestMyRecipes() }
+
+                val columns = GridCells.Adaptive(minSize = 160.dp)
+                val contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp)
+                val spacing = Arrangement.spacedBy(12.dp)
+                when {
+                    authored.isEmpty() && isAuthoredLoading -> {
+                        LazyVerticalGrid(
+                            columns = columns,
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = contentPadding,
+                            horizontalArrangement = spacing,
+                            verticalArrangement = spacing,
+                        ) {
+                            repeat(12) {
+                                item {
+                                    RecipePosterSkeleton(Modifier.fillMaxWidth().aspectRatio(2f / 3f))
+                                }
+                            }
+                        }
+                    }
+                    authored.isEmpty() -> {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text(
+                                text = stringResource(R.string.cookbook_my_recipes_empty),
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    else -> {
+                        LazyVerticalGrid(
+                            columns = columns,
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = contentPadding,
+                            horizontalArrangement = spacing,
+                            verticalArrangement = spacing,
+                        ) {
+                            gridItems(authored, key = { it.id }) { recipe ->
+                                RecipeCard(
+                                    recipe = recipe,
+                                    onClick = { onRecipeClick(recipe.author, recipe.dTag) },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Management dialogs (PR 3b-iii) — owner-only; dismissed on confirm.
+    CookbookManageDialogs(
+        state = manage,
+        viewModel = viewModel,
+        onDismiss = { manage = null },
+    )
+}
+
+/** The active management dialog/sheet for a Saved collection (PR 3b-iii). */
+private sealed interface CookbookManageState {
+    val list: CookbookList
+    data class Rename(override val list: CookbookList) : CookbookManageState
+    data class Description(override val list: CookbookList) : CookbookManageState
+    data class Cover(override val list: CookbookList) : CookbookManageState
+    data class Delete(override val list: CookbookList) : CookbookManageState
+}
+
+/**
+ * Hosts the rename / description / cover / delete dialogs for the Saved sub-tab.
+ * Each confirm delegates to the [CookbookViewModel] write pass-through (which
+ * republishes via the kind-30001 repo) and dismisses. Cover resolves the list's
+ * member recipes lazily for the picker.
+ */
+@Composable
+private fun CookbookManageDialogs(
+    state: CookbookManageState?,
+    viewModel: CookbookViewModel,
+    onDismiss: () -> Unit,
+) {
+    when (state) {
+        null -> Unit
+        is CookbookManageState.Rename -> RenameCollectionDialog(
+            initialTitle = state.list.title,
+            onConfirm = { title -> viewModel.renameList(state.list.dTag, title); onDismiss() },
+            onDismiss = onDismiss,
+        )
+        is CookbookManageState.Description -> EditDescriptionDialog(
+            initialSummary = state.list.summary.orEmpty(),
+            onConfirm = { summary -> viewModel.setDescription(state.list.dTag, summary); onDismiss() },
+            onDismiss = onDismiss,
+        )
+        is CookbookManageState.Delete -> DeleteCollectionDialog(
+            title = state.list.title,
+            onConfirm = { viewModel.deleteList(state.list.dTag); onDismiss() },
+            onDismiss = onDismiss,
+        )
+        is CookbookManageState.Cover -> {
+            var members by remember(state.list.dTag) { mutableStateOf<List<CookbookMemberRecipe>>(emptyList()) }
+            var loading by remember(state.list.dTag) { mutableStateOf(true) }
+            LaunchedEffect(state.list.dTag) {
+                members = viewModel.memberRecipes(state.list)
+                loading = false
+            }
+            ChooseCoverSheet(
+                members = members,
+                currentCoord = state.list.coverCoord,
+                loading = loading,
+                onPick = { coord -> viewModel.setCover(state.list.dTag, coord); onDismiss() },
+                onDismiss = onDismiss,
+            )
         }
     }
 }

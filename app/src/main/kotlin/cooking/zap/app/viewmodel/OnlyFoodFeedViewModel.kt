@@ -10,13 +10,18 @@ import cooking.zap.app.relay.RelayPool
 import cooking.zap.app.repo.ContactRepository
 import cooking.zap.app.repo.EventRepository
 import cooking.zap.app.repo.MuteRepository
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -91,6 +96,12 @@ class OnlyFoodFeedViewModel : ViewModel() {
     ) {
         if (deps != null) return
         deps = Deps(relayPool, eventRepo, muteRepo, contactRepo)
+        // Seed GLOBAL from cache so cached food renders before the live query.
+        seedGlobalFromCache()
+        // Auto-recover: re-issue when the search relay (re)connects while the
+        // current mode hasn't reached a genuine EOSE. Started before the initial
+        // submit so a connect that lands during the first query is observed.
+        observeReconnect()
         val st = stateOf(_mode.value)
         if (!st.loaded) submit(_mode.value, st, Load.INITIAL, since = null, until = null)
     }
@@ -114,17 +125,28 @@ class OnlyFoodFeedViewModel : ViewModel() {
     /** The ONLY path that re-queries a loaded mode. Merges newest into cache. */
     fun refresh() {
         val mode = _mode.value
-        submit(mode, stateOf(mode), Load.REFRESH, since = null, until = null)
+        val st = stateOf(mode)
+        // A refresh re-opens paging: a prior `endReached` may have been a quiet
+        // stretch or a throttle, and new posts may have arrived. `endReached` is
+        // per-mode and resettable here; it is NOT the Phase-1 `loaded` latch.
+        st.endReached = false
+        submit(mode, st, Load.REFRESH, since = null, until = null)
     }
 
-    /** Infinite-scroll: page one window further back, appending to the cache. */
+    /**
+     * Infinite-scroll: page strictly backwards from the oldest loaded event,
+     * appending to the cache. No `since` floor — `until` + `limit` walk backwards
+     * through quiet stretches the standard Nostr way, so a single empty time
+     * window no longer ends the feed. `endReached` then trips only on a genuine
+     * zero-older-events EOSE.
+     */
     fun loadMore() {
         val mode = _mode.value
         val st = stateOf(mode)
         if (_isLoading.value || _isPaging.value || _isRefreshing.value || st.endReached) return
         val oldest = st.seen.values.minOfOrNull { it.created_at } ?: return
-        val until = oldest - 1
-        submit(mode, st, Load.PAGE, since = until - windowSeconds(mode), until = until)
+        val bounds = pageBoundsBehind(oldest)
+        submit(mode, st, Load.PAGE, since = bounds.since, until = bounds.until)
     }
 
     /**
@@ -161,23 +183,64 @@ class OnlyFoodFeedViewModel : ViewModel() {
                 }
             }
 
+            val searchRelay = SearchViewModel.DEFAULT_SEARCH_RELAY
+            // Pull-to-refresh must punch through a stale cooldown so it never
+            // silently no-ops. INITIAL/auto-recover must NOT clear it — that would
+            // fight a genuine 429 backoff from the rate-limit-prone search relay.
+            if (load == Load.REFRESH) d.relayPool.clearCooldown(searchRelay)
+
             val base = "onlyfood-${SUB_SEQ.incrementAndGet()}"
             val opened = mutableListOf<String>()
             var received = 0
+            var collector: Job? = null
+            // Pin while the read is in flight so the LRU cap can't evict the
+            // search ephemeral mid-handshake; unpinned in finally.
+            d.relayPool.pinEphemeral(searchRelay)
             try {
-                val collector = launch {
-                    d.relayPool.relayEvents.collect { relayEvent ->
-                        if (!relayEvent.subscriptionId.startsWith(base)) return@collect
-                        val event = relayEvent.event
-                        if (event.kind != 1 || event.id in state.seen) return@collect
-                        if (!accept(event, d, follows)) return@collect
-                        received++
-                        state.seen[event.id] = event
-                        d.eventRepo.cacheEvent(event)
-                        d.eventRepo.requestProfileIfMissing(event.pubkey)
-                        if (_mode.value == mode) _notes.value = state.snapshot()
+                // Gate the REQ on a LIVE socket. Connect budget is separate from
+                // the EOSE budget — we don't race one 8s timeout across a cold
+                // connect AND the EOSE.
+                val connected = d.relayPool.awaitRelayConnected(searchRelay, CONNECT_TIMEOUT_MS)
+                if (!connected) {
+                    // Connect timed out. A queued send would drain only after this
+                    // collector is gone (relayEvents has replay=0) → events arrive
+                    // into the void, recreating the original bug. So do NOT send;
+                    // leave loaded=false for auto-recover/refresh to retry.
+                    if (_mode.value == mode) clearIndicators()
+                    return@launch
+                }
+
+                // Subscribe the event collector AND the EOSE awaiter, and wait
+                // until BOTH are actively collecting before sending — relayEvents
+                // and eoseSignals both have replay=0, so a send that races ahead of
+                // subscription drops its events/EOSE on the floor.
+                val collectorReady = CompletableDeferred<Unit>()
+                collector = launch {
+                    d.relayPool.relayEvents
+                        .onSubscription { collectorReady.complete(Unit) }
+                        .collect { relayEvent ->
+                            if (!relayEvent.subscriptionId.startsWith(base)) return@collect
+                            val event = relayEvent.event
+                            if (event.kind != 1 || event.id in state.seen) return@collect
+                            if (!accept(event, d, follows)) return@collect
+                            received++
+                            state.seen[event.id] = event
+                            d.eventRepo.cacheEvent(event)
+                            d.eventRepo.requestProfileIfMissing(event.pubkey)
+                            if (_mode.value == mode) _notes.value = state.snapshot()
+                        }
+                }
+                val eoseReady = CompletableDeferred<Unit>()
+                val eoseAwaiter = async {
+                    withTimeoutOrNull(EOSE_TIMEOUT_MS) {
+                        d.relayPool.eoseSignals
+                            .onSubscription { eoseReady.complete(Unit) }
+                            .first { it.startsWith(base) }
                     }
                 }
+                collectorReady.await()
+                eoseReady.await()
+
                 val filter = Filter(
                     kinds = listOf(1),
                     tTags = FoodHashtags.ALL,
@@ -185,34 +248,109 @@ class OnlyFoodFeedViewModel : ViewModel() {
                     until = until,
                     limit = 100,
                 )
+                var anySent = false
                 if (follows == null) {
                     opened.add(base)
-                    d.relayPool.sendToRelayOrEphemeral(
-                        SearchViewModel.DEFAULT_SEARCH_RELAY,
-                        ClientMessage.req(base, filter),
-                    )
+                    if (d.relayPool.sendToRelayOrEphemeral(searchRelay, ClientMessage.req(base, filter))) {
+                        anySent = true
+                    }
                 } else {
                     follows.toList().chunked(AUTHOR_CHUNK).forEachIndexed { i, chunk ->
                         val subId = "$base-$i"
                         opened.add(subId)
-                        d.relayPool.sendToRelayOrEphemeral(
-                            SearchViewModel.DEFAULT_SEARCH_RELAY,
-                            ClientMessage.req(subId, filter.copy(authors = chunk)),
-                        )
+                        if (d.relayPool.sendToRelayOrEphemeral(
+                                searchRelay,
+                                ClientMessage.req(subId, filter.copy(authors = chunk)),
+                            )
+                        ) {
+                            anySent = true
+                        }
                     }
                 }
-                withTimeoutOrNull(8_000) { d.relayPool.eoseSignals.first { it.startsWith(base) } }
-                state.loaded = true // loaded even on 0 events → no re-query on toggle
-                if (load == Load.PAGE && received == 0) state.endReached = true
+
+                if (!anySent) {
+                    // Every send was dropped (cooldown / no capacity). Don't await
+                    // an EOSE that can't arrive; leave loaded=false to retry.
+                    eoseAwaiter.cancel()
+                    if (_mode.value == mode) clearIndicators()
+                    return@launch
+                }
+
+                // Latch ONLY on a genuine EOSE (even at 0 events). A timeout leaves
+                // loaded=false so auto-recover/refresh can retry — no empty latch.
+                // By here connected and anySent are both true (the paths above
+                // early-returned otherwise); [shouldLatchLoaded] is the single
+                // source of truth for the rule, unit-tested across all three cases.
+                val eose = eoseAwaiter.await()
+                val eoseFired = eose != null
+                if (shouldLatchLoaded(connected = true, anySent = true, eoseFired = eoseFired)) {
+                    state.loaded = true
+                    // Gated on a genuine EOSE (a timeout never end-reaches): a PAGE
+                    // that returned zero strictly-older events has hit the floor.
+                    if (load == Load.PAGE && pageEndReached(received)) state.endReached = true
+                }
                 if (_mode.value == mode) {
                     _notes.value = state.snapshot()
                     clearIndicators()
                 }
-                delay(6_000) // collect stragglers, then tear down
-                collector.cancel()
+                if (eose != null) delay(6_000) // collect stragglers, then tear down
             } finally {
+                collector?.cancel()
+                d.relayPool.unpinEphemeral(searchRelay)
                 // Close ONLY the subIds we actually opened (not a base-0..39 sweep).
                 for (subId in opened) d.relayPool.closeOnAllRelays(subId)
+            }
+        }
+    }
+
+    /**
+     * Cache-seed the GLOBAL mode from [EventRepository.cachedFoodNotes] so cached
+     * food renders immediately instead of a blank empty-state. Mute-filtered via
+     * [accept] (follows=null), inserted into GLOBAL's `seen` — NOT into [_notes],
+     * which is rebuilt from `seen` on the first live snapshot. Does NOT set
+     * `loaded`, so the live query still runs and EOSE still drives the latch.
+     * GLOBAL only: FOLLOWING needs the follow set first.
+     */
+    private fun seedGlobalFromCache() {
+        val d = deps ?: return
+        viewModelScope.launch {
+            val global = stateOf(Mode.GLOBAL)
+            if (global.seen.isNotEmpty()) return@launch
+            val cached = withContext(Dispatchers.IO) { d.eventRepo.cachedFoodNotes() }
+            var added = false
+            for (event in cached) {
+                if (event.kind != 1 || event.id in global.seen) continue
+                if (!accept(event, d, follows = null)) continue
+                global.seen[event.id] = event
+                added = true
+            }
+            if (added && _mode.value == Mode.GLOBAL) _notes.value = global.snapshot()
+        }
+    }
+
+    /**
+     * Auto-recover: each [RelayPool.connectedCount] change is a cheap "re-check"
+     * tick. Re-derive `isRelayConnected(searchRelay)` fresh each time (the search
+     * ephemeral is evicted/recreated, so a held per-URL flow would observe a dead
+     * Relay). Re-issue ONLY when the search relay is connected, the current mode
+     * has NOT reached a genuine EOSE (`!loaded`), and nothing is in flight.
+     *
+     * Keying on `!loaded` (not `notes.isEmpty()`) is deliberate: a legitimately
+     * empty-but-loaded GLOBAL window, a FOLLOWING mode whose follows don't post
+     * food, and the `emptyFollows` fast-path all set `loaded = true`, so they are
+     * NOT re-queried on unrelated relay reconnects — the throttle protection the
+     * per-mode cache exists for. `loaded` flips true after the first EOSE, so this
+     * self-limits with no false→true edge tracking.
+     */
+    private fun observeReconnect() {
+        val d = deps ?: return
+        viewModelScope.launch {
+            d.relayPool.connectedCount.collect {
+                if (!d.relayPool.isRelayConnected(SearchViewModel.DEFAULT_SEARCH_RELAY)) return@collect
+                val mode = _mode.value
+                val st = stateOf(mode)
+                if (st.loaded || activeJob?.isActive == true) return@collect
+                submit(mode, st, Load.INITIAL, since = null, until = null)
             }
         }
     }
@@ -230,9 +368,6 @@ class OnlyFoodFeedViewModel : ViewModel() {
         return true
     }
 
-    private fun windowSeconds(mode: Mode): Long =
-        if (mode == Mode.FOLLOWING) THREE_DAYS else SEVEN_DAYS
-
     override fun onCleared() {
         super.onCleared()
         activeJob?.cancel()
@@ -241,8 +376,44 @@ class OnlyFoodFeedViewModel : ViewModel() {
     companion object {
         /** Process-wide subId sequence — unique across all VM instances. */
         private val SUB_SEQ = java.util.concurrent.atomic.AtomicLong(0)
-        private const val THREE_DAYS = 3L * 24 * 60 * 60
-        private const val SEVEN_DAYS = 7L * 24 * 60 * 60
         private const val AUTHOR_CHUNK = 500
+        /** Budget to bring the search ephemeral's socket up before sending. */
+        private const val CONNECT_TIMEOUT_MS = 8_000L
+        /** Budget to await EOSE, measured only AFTER the socket is connected. */
+        private const val EOSE_TIMEOUT_MS = 8_000L
     }
 }
+
+/**
+ * The OnlyFood per-mode latch rule, extracted pure for unit testing. A mode is
+ * "loaded" (so it won't be re-queried on toggle or auto-recover) ONLY when the
+ * socket was [connected], at least one REQ was actually [anySent], AND a genuine
+ * EOSE arrived ([eoseFired]). EOSE-with-zero-events still latches (the window is
+ * genuinely empty); a connect/send failure or an EOSE timeout does NOT latch, so
+ * the transient failure can be retried instead of latching a blank feed.
+ */
+internal fun shouldLatchLoaded(connected: Boolean, anySent: Boolean, eoseFired: Boolean): Boolean =
+    connected && anySent && eoseFired
+
+/** Bounds for one backward infinite-scroll page. */
+internal data class PageBounds(val since: Long?, val until: Long)
+
+/**
+ * The bounds for the next page strictly older than [oldestCreatedAt]. NO `since`
+ * floor (the Phase-2 fix): `until` + `limit` walk backwards through quiet
+ * stretches instead of a fixed time window ending the feed at the first gap.
+ * `until = oldestCreatedAt - 1` excludes the boundary second, so each non-empty
+ * page strictly lowers `oldest` → the next `until` strictly decreases → no two
+ * page queries are identical (search-relay throttle-safe).
+ */
+internal fun pageBoundsBehind(oldestCreatedAt: Long): PageBounds =
+    PageBounds(since = null, until = oldestCreatedAt - 1)
+
+/**
+ * Paging exhaustion rule: a backward page has hit the floor ONLY when it added
+ * zero strictly-older events. Because `until = oldest - 1` excludes everything at
+ * or above `oldest`, every returned event is genuinely new, so [receivedNew] == 0
+ * means the relay holds nothing older — a real end, not an empty intermediate
+ * window. Always evaluated behind a genuine EOSE (a timeout never end-reaches).
+ */
+internal fun pageEndReached(receivedNew: Int): Boolean = receivedNew == 0

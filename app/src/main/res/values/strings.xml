@@ -23,6 +23,7 @@
     <string name="drawer_media_servers">Media Servers</string>
     <string name="drawer_keys">Keys</string>
     <string name="drawer_safety">Safety</string>
+    <string name="drawer_restore_follows">Restore Follows</string>
     <string name="drawer_proof_of_work">Proof of Work</string>
     <string name="drawer_social_graph">Social Graph</string>
     <string name="drawer_custom_emojis">Custom Emojis</string>
@@ -100,6 +101,7 @@
     <!-- Auth Screen -->
     <string name="auth_sign_up">Sign Up</string>
     <string name="auth_log_in">Log In</string>
+    <string name="auth_login_with_signer">Login with Signer</string>
     <string name="auth_or_log_in_with_key">Or log in with your key</string>
     <string name="auth_nsec_or_npub">nsec or npub…</string>
     <string name="auth_wisp">Zap Cooking</string>
@@ -113,7 +115,8 @@
     <string name="btn_save_profile">Save Profile</string>
     <string name="btn_save_draft">Save draft</string>
     <string name="compose_new_post">New Post</string>
-    <string name="new_group_dm">New Group DM</string>
+    <string name="new_conversation">New conversation</string>
+    <string name="cd_new_conversation">New conversation</string>
     <string name="compose_reply">Reply</string>
     <string name="compose_quote">Quote</string>
     <string name="compose_placeholder">What\'s on your mind?</string>
@@ -133,6 +136,8 @@
     <string name="content_marked_nsfw">Marked as NSFW</string>
     <string name="btn_post_now">Post now</string>
     <string name="btn_cancel">Cancel</string>
+    <string name="keys_remote_signer_info">Signing is handled by a connected signer app. No private key is stored on this device.</string>
+    <string name="keys_read_only_info">No private key is stored on this device.</string>
     <string name="btn_save">Save</string>
     <string name="btn_delete">Delete</string>
     <string name="btn_create">Create</string>
@@ -244,6 +249,8 @@
     <string name="tab_bad">Bad</string>
     <string name="tab_recipes">Recipes</string>
     <string name="tab_packs">Packs</string>
+    <string name="tab_cookbook">Cookbook</string>
+    <string name="cookbook_tab_my_recipes">My Recipes</string>
     <string name="tab_discover">Discover</string>
     <string name="tab_mine">Mine</string>
     <string name="tab_saved">Saved</string>
@@ -257,6 +264,13 @@
     <string name="tab_relay">Relay</string>
     <string name="tab_list">List</string>
     <string name="tab_hashtags">Hashtags</string>
+    <string name="tab_onlyfood">OnlyFood</string>
+    <string name="feed_onlyfood_empty">No food posts yet — pull to refresh</string>
+    <plurals name="feed_onlyfood_wot_hidden">
+        <item quantity="one">%d post was hidden by the food trust filter.</item>
+        <item quantity="other">%d posts were hidden by the food trust filter.</item>
+    </plurals>
+    <string name="feed_onlyfood_show_all">Show all posts</string>
     <string name="tab_feed">Feed</string>
     <string name="interests">Interests</string>
     <string name="loading_interest_sets">Loading interest sets…</string>
@@ -317,7 +331,7 @@
     <string name="filter_zen">Zen</string>
     <string name="notif_filtered">Filtered</string>
     <string name="notif_filter_title">Notification Filters</string>
-    <string name="notif_chat_rooms">Chat rooms</string>
+    <string name="notif_chat_rooms">Groups</string>
     <string name="notif_enable_all">Enable all</string>
     <string name="notif_disable_all">Disable all</string>
     <string name="cd_mute_notifications">Mute notifications</string>
@@ -571,6 +585,25 @@
     <string name="settings_private_key_copied">Private key copied</string>
     <string name="settings_authenticate_view_key">Authenticate to view your private key</string>
     <string name="settings_auth_failed">Authentication failed: %s</string>
+    <string name="btn_hide_private_key">Hide private key</string>
+    <string name="nsec_qr_title">Private key QR</string>
+    <string name="nsec_qr_warning">Only show this to devices you trust. Anyone who scans it gains full control of your account.</string>
+
+    <!-- Key backup step (shown right after a new account is created, and re-surfaced as a nudge) -->
+    <string name="backup_key_title">Save your backup key</string>
+    <string name="backup_key_intro">Your account lives on your key. Save it now so you can always get back in.</string>
+    <string name="backup_key_private_label">Private key (nsec)</string>
+    <string name="backup_key_public_label">Public key (npub)</string>
+    <string name="backup_key_npub_safe">This is your public identity — safe to share.</string>
+    <string name="backup_key_download">Download backup file</string>
+    <string name="backup_key_downloaded">Backup file saved</string>
+    <string name="backup_key_download_failed">Couldn\'t save the backup file</string>
+    <string name="backup_key_warning">This key is the only way to recover your account. There is no password reset. Anyone who has it controls your account — never share it.</string>
+    <string name="backup_key_saved">I\'ve saved it</string>
+    <string name="backup_key_skip">Skip for now</string>
+    <string name="key_backup_banner_text">Back up your key so you never lose your account</string>
+    <string name="key_backup_banner_action">Back up</string>
+    <string name="key_backup_banner_dismiss">Dismiss</string>
     <string name="settings_never_share_key">Never share your private key. Anyone with your nsec has full control of your account.</string>
     <string name="settings_muted_words_description">Notes containing these words will be hidden from your feed.</string>
     <string name="settings_no_muted_users">No muted users</string>
@@ -581,6 +614,8 @@
     <string name="safety_spam_filter_description">Uses an on-device model to hide likely-bot replies in threads and notifications from people you don\'t follow. Model runs locally, no data leaves your device.</string>
     <string name="safety_wot_title">Web of Trust</string>
     <string name="safety_wot_description">Only show content from accounts within your social graph. Requires a computed social graph.</string>
+    <string name="safety_onlyfood_wot_title">OnlyFood trust filter</string>
+    <string name="safety_onlyfood_wot_description">On the OnlyFood feed, only show posts from accounts in your social graph (or the Zap Cooking curator\'s follows). Falls back to showing everything until your social graph is computed.</string>
     <string name="safety_wot_ready">Social graph ready (%d qualified accounts)</string>
     <string name="safety_wot_last_computed">Last computed %s ago</string>
     <string name="safety_wot_not_computed">Social graph not computed</string>
@@ -633,6 +668,20 @@
         <item quantity="one">%d recipe</item>
         <item quantity="other">%d recipes</item>
     </plurals>
+    <string name="cookbook_sign_in">Sign in to view your cookbook</string>
+    <string name="cookbook_saved_empty_title">Start Your Cookbook</string>
+    <string name="cookbook_saved_empty_body">Save recipes you love and organize them into collections.</string>
+    <string name="cookbook_my_recipes_empty">No published recipes yet</string>
+    <string name="cookbook_manage_menu">Manage collection</string>
+    <string name="cookbook_action_rename">Rename</string>
+    <string name="cookbook_action_edit_description">Edit description</string>
+    <string name="cookbook_action_choose_cover">Choose cover</string>
+    <string name="cookbook_action_delete">Delete</string>
+    <string name="cookbook_rename_label">Collection name</string>
+    <string name="cookbook_description_label">Description</string>
+    <string name="cookbook_delete_title">Delete collection?</string>
+    <string name="cookbook_delete_body">Delete \"%1$s\"? This removes the collection but won\'t delete the recipes themselves.</string>
+    <string name="cookbook_cover_empty">Add recipes to this collection to choose a cover.</string>
     <string name="recipe_list_chooser_title">Save to collection</string>
     <string name="recipe_list_chooser_new">New list</string>
     <string name="recipe_list_chooser_name_hint">Collection name</string>
@@ -712,7 +761,7 @@
     <string name="profile_tab_media">Media</string>
     <string name="profile_tab_following">Following</string>
     <string name="profile_tab_followers">Followers</string>
-    <string name="profile_tab_groups">Chat Rooms</string>
+    <string name="profile_tab_groups">Groups</string>
     <string name="profile_tab_relays">Relays</string>
     <string name="profile_sort_recent">Recent</string>
     <string name="profile_sort_likes">Likes</string>
@@ -732,7 +781,7 @@
     <string name="profile_no_media">No media yet</string>
     <string name="profile_not_following">Not following anyone</string>
     <string name="profile_no_followers">No followers found</string>
-    <string name="profile_no_groups">No chat rooms</string>
+    <string name="profile_no_groups">No groups</string>
     <string name="profile_no_relays">No relay list published</string>
     <string name="profile_relay_list">Relay List (NIP-65)</string>
     <string name="profile_discovered_relays">Discovered Relays</string>
@@ -845,31 +894,28 @@
     <string name="wallet_recent">Recent</string>
     <string name="wallet_view_all">View all</string>
 
-    <!-- NIP-29 Chat Rooms -->
-    <string name="tab_direct_messages">Direct Messages</string>
-    <string name="tab_chat_rooms">Chat Rooms</string>
-    <string name="title_join_chat_room">Join Chat Room</string>
-    <string name="title_create_group">Create Chat Room</string>
+    <!-- NIP-29 Groups -->
+    <string name="title_join_chat_room">Join Group</string>
+    <string name="title_create_group">Create Group</string>
     <string name="error_invalid_invite_link">Invalid invite link</string>
-    <string name="title_join_rejected">Couldn\'t join chat room</string>
-    <string name="msg_join_rejected_body">The relay rejected your join request. This room may be invite-only — ask an admin for an invite link with a code.</string>
+    <string name="title_join_rejected">Couldn\'t join group</string>
+    <string name="msg_join_rejected_body">The relay rejected your join request. This group may be invite-only — ask an admin for an invite link with a code.</string>
     <string name="label_relay_url">Relay URL</string>
-    <string name="label_group_id">Room ID</string>
-    <string name="label_group_name">Room Name</string>
+    <string name="label_group_id">Group ID</string>
+    <string name="label_group_name">Group Name</string>
     <string name="action_join">Join</string>
     <string name="action_cancel">Cancel</string>
     <string name="action_create">Create</string>
-    <string name="action_join_group">Join existing chat room</string>
-    <string name="action_create_group">Create new chat room</string>
-    <string name="action_discover_groups">Discover chat rooms</string>
-    <string name="title_discover_groups">Discover Chat Rooms</string>
-    <string name="error_no_chat_rooms">No chat rooms yet</string>
-    <string name="error_join_room_hint">Tap + to join or create a chat room</string>
-    <string name="cd_join_group">Join chat room</string>
-    <string name="cd_new_group_dm">New group DM</string>
-    <string name="cd_group_actions">Chat room actions</string>
-    <string name="title_group_detail">Chat Room Info</string>
-    <string name="cd_edit_group">Edit chat room</string>
+    <string name="action_join_group">Join existing group</string>
+    <string name="action_create_group">Create new group</string>
+    <string name="action_discover_groups">Discover groups</string>
+    <string name="title_discover_groups">Discover Groups</string>
+    <string name="error_no_chat_rooms">No groups yet</string>
+    <string name="error_join_room_hint">Tap + to join or create a group</string>
+    <string name="cd_join_group">Join group</string>
+    <string name="cd_group_actions">Group actions</string>
+    <string name="title_group_detail">Group Info</string>
+    <string name="cd_edit_group">Edit group</string>
     <string name="label_invite_link">Invite Link</string>
     <string name="cd_copy_link">Copy link</string>
     <string name="label_members_count">Members (%d)</string>
@@ -877,23 +923,63 @@
     <string name="title_remove_user">Remove User</string>
     <string name="msg_remove_user_confirm">Remove %s from this group?</string>
     <string name="action_remove">Remove</string>
-    <string name="title_edit_group">Edit Chat Room</string>
+    <string name="title_edit_group">Edit Group</string>
     <string name="label_group_about">About</string>
     <string name="action_save">Save</string>
     <string name="cd_remove_user">Remove user</string>
     <string name="label_group_picture">Picture URL</string>
     <string name="cd_upload_group_picture">Upload group picture</string>
-    <string name="action_leave_group">Leave Chat Room</string>
-    <string name="title_leave_group">Leave Chat Room</string>
-    <string name="msg_leave_group_confirm">Leave this chat room? You can rejoin later using the invite link.</string>
-    <string name="action_delete_group">Delete Chat Room</string>
-    <string name="title_delete_group">Delete Chat Room</string>
-    <string name="msg_delete_group_confirm">Permanently delete this chat room? This cannot be undone.</string>
+    <string name="action_leave_group">Leave Group</string>
+    <string name="title_leave_group">Leave Group</string>
+    <string name="msg_leave_group_confirm">Leave this group? You can rejoin later using the invite link.</string>
+    <string name="action_delete_group">Delete Group</string>
+    <string name="title_delete_group">Delete Group</string>
+    <string name="msg_delete_group_confirm">Permanently delete this group? This cannot be undone.</string>
     <string name="title_delete_note">Delete note?</string>
     <string name="msg_delete_note_confirm">Send a deletion request to relays for this note? This cannot be guaranteed.</string>
     <string name="label_notifications">Notifications</string>
     <string name="label_notifications_on">On — new messages will be tracked</string>
     <string name="label_notifications_off">Off — tap to enable</string>
+
+    <!-- Create-group access level (public/private) -->
+    <string name="label_room_access">Who can access this group?</string>
+    <string name="room_access_public_label">Public</string>
+    <string name="room_access_public_desc">Anyone can find and read it. New members join by invite or approval.</string>
+    <string name="room_access_private_label">Private</string>
+    <string name="room_access_private_desc">Invite-only. Hidden from discovery and readable by members only.</string>
+    <string name="msg_create_members_only">Creating a group requires an active Zap Cooking membership.</string>
+    <string name="title_action_failed">Action failed</string>
+
+    <!-- Top-level Groups surface + invite redeem -->
+    <string name="title_rooms">Groups</string>
+    <string name="cd_rooms">Groups</string>
+    <string name="section_your_rooms">Your groups</string>
+    <string name="section_discover_rooms">Discover</string>
+    <string name="error_no_rooms">No groups yet</string>
+    <string name="error_no_rooms_hint">Create a group or paste an invite link to get started.</string>
+    <string name="error_no_public_rooms">No public groups found.</string>
+    <string name="action_paste_invite">Paste invite link</string>
+    <string name="title_redeem_invite">Join with invite</string>
+    <string name="action_continue">Continue</string>
+    <string name="label_joining_room">Joining…</string>
+    <string name="action_share_invite">Share invite link</string>
+
+    <!-- Group moderation: report / mute / remove & ban -->
+    <string name="action_report">Report</string>
+    <string name="action_mute">Mute</string>
+    <string name="action_unmute">Unmute</string>
+    <string name="label_muted_tap_unmute">Muted — tap to unmute</string>
+    <string name="action_remove_ban">Remove &amp; ban</string>
+    <string name="title_report">Report</string>
+    <string name="msg_report_pick_category">Why are you reporting this?</string>
+    <string name="label_report_reason">Add details (optional)</string>
+    <string name="report_cat_child_safety">Child Safety / CSAM</string>
+    <string name="report_cat_spam">Spam</string>
+    <string name="report_cat_harassment">Harassment</string>
+    <string name="report_cat_illegal">Illegal content</string>
+    <string name="report_cat_other">Other</string>
+    <string name="title_remove_ban">Remove &amp; ban</string>
+    <string name="msg_remove_ban_confirm">Remove and ban %s from this group? They won\'t be able to rejoin, even with an invite.</string>
 
     <!-- NIP-29 group configuration flags -->
     <string name="group_flag_private_label">Private</string>
@@ -949,4 +1035,21 @@
     <string name="wallet_switch_wallet">Switch Wallet</string>
     <string name="wallet_switch_wallet_body">Disconnect this wallet so you can use your default wallet or restore a different one. Your funds stay safe — you can reconnect this wallet anytime by entering its recovery phrase.</string>
     <string name="wallet_default_seed_info">This wallet is derived from your Nostr key, so the phrase below is just for export to other wallet apps. You don\'t need to back it up — your nsec is the backup.</string>
+
+    <!-- Group fallback title + member summary -->
+    <string name="group_fallback_title">Group</string>
+    <plurals name="group_members_more">
+        <item quantity="one">and %d more in this group</item>
+        <item quantity="other">and %d more in this group</item>
+    </plurals>
+    <plurals name="group_members_count">
+        <item quantity="one">%d in this group</item>
+        <item quantity="other">%d in this group</item>
+    </plurals>
+
+    <!-- Relay authentication dialog -->
+    <string name="auth_dialog_title">Relay Authentication</string>
+    <string name="auth_dialog_body">The relay %1$s is requesting authentication. Authenticating will reveal your identity (pubkey) to the relay operator, which some relays need before serving private DMs or groups. If you allow once, we\'ll remember this choice for this relay.</string>
+    <string name="auth_dialog_allow">Allow</string>
+    <string name="auth_dialog_deny">Deny</string>
 </resources>

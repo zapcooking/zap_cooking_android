@@ -94,34 +94,6 @@ class DmListViewModel(app: Application) : AndroidViewModel(app) {
     val pendingDecryptCount: StateFlow<Int>
         get() = dmRepo?.pendingDecryptCount ?: MutableStateFlow(0)
 
-    // ---- Group DM creation ----
-
-    private val _selectedContacts = MutableStateFlow<Set<String>>(emptySet())
-    val selectedContacts: StateFlow<Set<String>> = _selectedContacts
-
-    fun toggleContactSelection(pubkey: String) {
-        _selectedContacts.value = _selectedContacts.value.let {
-            if (it.contains(pubkey)) it - pubkey else it + pubkey
-        }
-    }
-
-    fun clearContactSelection() {
-        _selectedContacts.value = emptySet()
-    }
-
-    /**
-     * Pre-create a group conversation and return the conversationKey for navigation.
-     * [myPubkey] is the local user's pubkey included in the key computation.
-     */
-    fun createGroupConversation(participantPubkeys: List<String>, myPubkey: String): String {
-        val repo = dmRepo ?: return ""
-        val allParticipants = (participantPubkeys + myPubkey).distinct()
-        val convKey = DmRepository.conversationKey(allParticipants)
-        val participants = allParticipants.filter { it != myPubkey }
-        repo.initConversation(convKey, participants)
-        return convKey
-    }
-
     /**
      * Decrypt pending gift wraps using the remote signer, one at a time.
      * Called when user navigates to the DM list screen in remote signer mode.
