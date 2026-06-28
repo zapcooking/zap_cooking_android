@@ -116,7 +116,6 @@
     <string name="compose_new_post">New Post</string>
     <string name="new_conversation">New conversation</string>
     <string name="cd_new_conversation">New conversation</string>
-    <string name="action_start_conversation">Start conversation (%1$d)</string>
     <string name="compose_reply">Reply</string>
     <string name="compose_quote">Quote</string>
     <string name="compose_placeholder">What\'s on your mind?</string>

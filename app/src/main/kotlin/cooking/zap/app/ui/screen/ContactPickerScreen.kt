@@ -15,8 +15,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.Button
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -44,20 +42,22 @@ import cooking.zap.app.nostr.toNpub
 import cooking.zap.app.repo.ContactRepository
 import cooking.zap.app.repo.EventRepository
 import cooking.zap.app.ui.component.ProfilePicture
-import cooking.zap.app.viewmodel.DmListViewModel
 
+/**
+ * Single-select contact picker for starting a 1:1 direct message. Tapping a contact immediately
+ * opens a one-on-one conversation with that peer — DMs are 1:1 only; there is no group-DM composer.
+ * (Existing multi-recipient threads still render read-only via [DmListScreen], but new ones can't
+ * be created here.)
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ContactPickerScreen(
-    viewModel: DmListViewModel,
     eventRepo: EventRepository,
     contactRepo: ContactRepository,
     onBack: () -> Unit,
-    onConfirm: (conversationKey: String) -> Unit,
-    myPubkey: String
+    onConfirm: (pubkey: String) -> Unit
 ) {
     val followList by contactRepo.followList.collectAsState()
-    val selected by viewModel.selectedContacts.collectAsState()
     var query by rememberSaveable { mutableStateOf("") }
 
     val filteredList = remember(followList, query) {
@@ -79,33 +79,14 @@ fun ContactPickerScreen(
             TopAppBar(
                 title = { Text(stringResource(R.string.new_conversation)) },
                 navigationIcon = {
-                    IconButton(onClick = {
-                        viewModel.clearContactSelection()
-                        onBack()
-                    }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.cd_back))
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background
                 )
             )
-        },
-        bottomBar = {
-            if (selected.isNotEmpty()) {
-                Button(
-                    onClick = {
-                        val convKey = viewModel.createGroupConversation(selected.toList(), myPubkey)
-                        viewModel.clearContactSelection()
-                        onConfirm(convKey)
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp)
-                ) {
-                    Text(stringResource(R.string.action_start_conversation, selected.size))
-                }
-            }
         }
     ) { padding ->
         Column(
@@ -131,20 +112,14 @@ fun ContactPickerScreen(
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             items(items = filteredList, key = { it.pubkey }) { entry ->
                 val profile = remember(entry.pubkey) { eventRepo.getProfileData(entry.pubkey) }
-                val isSelected = selected.contains(entry.pubkey)
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { viewModel.toggleContactSelection(entry.pubkey) }
+                        .clickable { onConfirm(entry.pubkey) }
                         .padding(horizontal = 16.dp, vertical = 10.dp)
                 ) {
-                    Checkbox(
-                        checked = isSelected,
-                        onCheckedChange = { viewModel.toggleContactSelection(entry.pubkey) }
-                    )
-                    Spacer(Modifier.width(12.dp))
                     ProfilePicture(url = profile?.picture, size = 40)
                     Spacer(Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
