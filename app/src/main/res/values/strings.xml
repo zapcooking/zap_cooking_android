@@ -951,6 +951,20 @@
     <string name="msg_create_members_only">Creating a chat room requires an active Zap Cooking membership.</string>
     <string name="title_action_failed">Action failed</string>
 
+    <!-- Top-level Rooms surface + invite redeem -->
+    <string name="title_rooms">Rooms</string>
+    <string name="cd_rooms">Rooms</string>
+    <string name="section_your_rooms">Your rooms</string>
+    <string name="section_discover_rooms">Discover</string>
+    <string name="error_no_rooms">No rooms yet</string>
+    <string name="error_no_rooms_hint">Create a room or paste an invite link to get started.</string>
+    <string name="error_no_public_rooms">No public rooms found.</string>
+    <string name="action_paste_invite">Paste invite link</string>
+    <string name="title_redeem_invite">Join with invite</string>
+    <string name="action_continue">Continue</string>
+    <string name="label_joining_room">Joining…</string>
+    <string name="action_share_invite">Share invite link</string>
+
     <!-- NIP-29 group configuration flags -->
     <string name="group_flag_private_label">Private</string>
     <string name="group_flag_private_desc">Only members can read messages</string>
