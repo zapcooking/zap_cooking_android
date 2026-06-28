@@ -895,6 +895,8 @@
     <!-- NIP-29 Chat Rooms -->
     <string name="tab_direct_messages">Direct Messages</string>
     <string name="tab_chat_rooms">Chat Rooms</string>
+    <string name="tab_messages">Messages</string>
+    <string name="tab_rooms">Rooms</string>
     <string name="title_join_chat_room">Join Chat Room</string>
     <string name="title_create_group">Create Chat Room</string>
     <string name="error_invalid_invite_link">Invalid invite link</string>
