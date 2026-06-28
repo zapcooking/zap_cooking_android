@@ -179,7 +179,7 @@ fun WispDrawerContent(
                     ) {
                         Icon(
                             Icons.Filled.Add,
-                            contentDescription = "Add account",
+                            contentDescription = stringResource(R.string.cd_add_account),
                             modifier = Modifier.size(16.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -208,7 +208,7 @@ fun WispDrawerContent(
                         Icon(
                             if (accountPickerExpanded) Icons.Outlined.KeyboardArrowDown
                             else Icons.Outlined.KeyboardArrowRight,
-                            contentDescription = null,
+                            contentDescription = stringResource(R.string.cd_switch_account),
                             modifier = Modifier.size(18.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )

@@ -902,8 +902,7 @@ fun WispNavHost(
                         authViewModel.isAddingAccount = false
                         authViewModel.previousAccountPubkey = null
                         if (prev != null) {
-                            authViewModel.keyRepo.switchToAccount(prev)
-                            authViewModel.keyRepo.reloadPrefs(prev)
+                            authViewModel.switchAccount(prev)
                         }
                         feedViewModel.reloadForNewAccount()
                         relayViewModel.reload()
@@ -930,6 +929,7 @@ fun WispNavHost(
                 onDone = { isNewAccount ->
                     val wasAddingAccount = authViewModel.isAddingAccount
                     authViewModel.isAddingAccount = false
+                    authViewModel.previousAccountPubkey = null
                     authViewModel.refreshAfterExternalLogin()
 
                     if (isNewAccount) {
@@ -969,6 +969,7 @@ fun WispNavHost(
                 onAuthenticated = { isNewAccount ->
                     val wasAddingAccount = authViewModel.isAddingAccount
                     authViewModel.isAddingAccount = false
+                    authViewModel.previousAccountPubkey = null
 
                     if (isNewAccount) {
                         // New key generation always goes through full onboarding

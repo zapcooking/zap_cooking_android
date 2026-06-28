@@ -31,7 +31,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
@@ -207,7 +206,7 @@ fun SplashScreen(
         // Cancel pill — only shown when adding an account over an existing session
         if (onCancel != null) {
             Text(
-                text = "Cancel",
+                text = stringResource(R.string.btn_cancel),
                 style = MaterialTheme.typography.labelLarge,
                 color = Color.White,
                 modifier = Modifier
