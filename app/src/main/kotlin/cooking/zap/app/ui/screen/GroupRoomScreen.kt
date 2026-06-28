@@ -1311,6 +1311,33 @@ private fun GroupMessageBubble(
     val swipeThreshold = remember(density) { with(density) { 80.dp.toPx() } }
     val scope = rememberCoroutineScope()
 
+    // Muted author: collapse to a one-line placeholder that still allows unmute, so muting is
+    // reversible from within the room without needing the (now-hidden) full message overflow.
+    if (isMuted && !isOwnMessage) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onMuteToggle?.invoke() }
+                .padding(horizontal = 16.dp, vertical = 10.dp)
+        ) {
+            Icon(
+                Icons.AutoMirrored.Outlined.VolumeOff,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                stringResource(R.string.label_muted_tap_unmute),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+            )
+        }
+        return
+    }
+
     Box(modifier = Modifier.fillMaxWidth()) {
         Icon(
             Icons.AutoMirrored.Filled.Reply,

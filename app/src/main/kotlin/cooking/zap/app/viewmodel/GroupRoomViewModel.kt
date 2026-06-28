@@ -60,10 +60,14 @@ class GroupRoomViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _hiddenMessageIds = MutableStateFlow<Set<String>>(emptySet())
 
-    /** Messages to actually render — [messages] minus locally muted authors and hidden messages. */
+    /**
+     * Messages to render — [messages] minus individually hidden messages (e.g. reported ones).
+     * Muted authors are intentionally NOT filtered out here: the UI collapses their messages to a
+     * "tap to unmute" placeholder via [mutedPubkeys], so muting stays reversible from the room.
+     */
     val visibleMessages: StateFlow<List<GroupMessage>> =
-        combine(_messages, _mutedPubkeys, _hiddenMessageIds) { msgs, muted, hidden ->
-            msgs.filter { it.senderPubkey !in muted && it.id !in hidden }
+        combine(_messages, _hiddenMessageIds) { msgs, hidden ->
+            msgs.filter { it.id !in hidden }
         }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     /** Toggle a local mute for [pubkey] in this room. Client-side only — no relay event. */

@@ -969,6 +969,7 @@
     <string name="action_report">Report</string>
     <string name="action_mute">Mute</string>
     <string name="action_unmute">Unmute</string>
+    <string name="label_muted_tap_unmute">Muted — tap to unmute</string>
     <string name="action_remove_ban">Remove &amp; ban</string>
     <string name="title_report">Report</string>
     <string name="msg_report_pick_category">Why are you reporting this?</string>
