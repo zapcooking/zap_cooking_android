@@ -87,6 +87,8 @@ fun FollowRecoverySheet(
             )
             is FollowRecoveryState.Confirming -> ConfirmingContent(
                 candidate = s.candidate,
+                gained = s.gained,
+                lost = s.lost,
                 onBack = { viewModel.backToResults() },
                 onConfirm = { viewModel.confirmRestore(s.candidate) }
             )
@@ -351,6 +353,8 @@ private fun CandidateCard(
 @Composable
 private fun ConfirmingContent(
     candidate: FollowListCandidate,
+    gained: Int,
+    lost: Int,
     onBack: () -> Unit,
     onConfirm: () -> Unit
 ) {
@@ -378,6 +382,25 @@ private fun ConfirmingContent(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                if (gained > 0 || lost > 0) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        if (gained > 0) {
+                            Text(
+                                text = "+$gained",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        if (lost > 0) {
+                            Text(
+                                text = "-$lost",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                }
             }
         }
         Spacer(modifier = Modifier.height(12.dp))

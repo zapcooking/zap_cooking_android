@@ -1576,7 +1576,7 @@ private fun ProfileHeader(
                     ) {
                         Icon(
                             Icons.Outlined.History,
-                            contentDescription = "Restore follow list",
+                            contentDescription = stringResource(R.string.drawer_restore_follows),
                             modifier = Modifier.size(16.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )

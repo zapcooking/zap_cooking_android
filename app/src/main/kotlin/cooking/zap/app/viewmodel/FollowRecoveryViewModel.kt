@@ -17,6 +17,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
@@ -42,7 +43,12 @@ sealed class FollowRecoveryState {
     object Idle : FollowRecoveryState()
     object Scanning : FollowRecoveryState()
     data class Results(val result: FollowScanResult) : FollowRecoveryState()
-    data class Confirming(val candidate: FollowListCandidate, val result: FollowScanResult) : FollowRecoveryState()
+    data class Confirming(
+        val candidate: FollowListCandidate,
+        val result: FollowScanResult,
+        val gained: Int,
+        val lost: Int
+    ) : FollowRecoveryState()
     object Restoring : FollowRecoveryState()
     data class Done(val followCount: Int) : FollowRecoveryState()
     data class Error(val message: String) : FollowRecoveryState()
@@ -141,17 +147,13 @@ class FollowRecoveryViewModel(
         }
 
         val currentCount = candidates.firstOrNull()?.followCount ?: 0
-        val recommended = candidates
-            .filter { !it.isCurrent && it.followCount > 0 }
-            .maxByOrNull { it.followCount }
-            ?.takeIf { it.followCount > currentCount || currentCount == 0 }
 
-        // Cluster non-current candidates: versions within 5 follows of an already-kept
-        // version are the same "era" — keep only the newest representative per cluster.
+        // Cluster non-current candidates: versions within 5 follows (inclusive) of an
+        // already-kept version are the same "era" — keep only the newest per cluster.
         // Then drop any cluster whose count is within 10 of current (noise).
         val clustered = mutableListOf<FollowListCandidate>()
         for (c in candidates.filter { !it.isCurrent && it.followCount > 0 }) {
-            val covered = clustered.any { kotlin.math.abs(it.followCount - c.followCount) < 5 }
+            val covered = clustered.any { kotlin.math.abs(it.followCount - c.followCount) <= 5 }
             if (!covered) clustered.add(c)
         }
         val current = candidates.firstOrNull { it.isCurrent }
@@ -159,9 +161,17 @@ class FollowRecoveryViewModel(
             kotlin.math.abs(c.followCount - currentCount) >= 10
         })
 
+        // Pick recommended from the filtered (visible) list only — prevents a candidate
+        // that was clustered/filtered out from being marked isRecommended.
+        val recommendedId = filtered
+            .filter { !it.isCurrent && it.followCount > 0 }
+            .maxByOrNull { it.followCount }
+            ?.takeIf { it.followCount > currentCount || currentCount == 0 }
+            ?.eventId
+
         return FollowScanResult(
             candidates = filtered.map { c ->
-                c.copy(isRecommended = c.eventId == recommended?.eventId)
+                c.copy(isRecommended = c.eventId == recommendedId)
             },
             respondingRelays = respondingRelays.size
         )
@@ -169,7 +179,11 @@ class FollowRecoveryViewModel(
 
     fun selectCandidate(candidate: FollowListCandidate) {
         val s = _state.value as? FollowRecoveryState.Results ?: return
-        _state.value = FollowRecoveryState.Confirming(candidate, s.result)
+        val currentPubkeys = contactRepo.getFollowList().map { it.pubkey }.toSet()
+        val candidatePubkeys = candidate.pTags.mapNotNull { it.getOrNull(1) }.toSet()
+        val gained = (candidatePubkeys - currentPubkeys).size
+        val lost = (currentPubkeys - candidatePubkeys).size
+        _state.value = FollowRecoveryState.Confirming(candidate, s.result, gained, lost)
     }
 
     fun backToResults() {
