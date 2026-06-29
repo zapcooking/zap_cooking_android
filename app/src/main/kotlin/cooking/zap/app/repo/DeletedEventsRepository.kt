@@ -29,6 +29,19 @@ class DeletedEventsRepository(private val context: Context, pubkeyHex: String? =
     fun markDeletedAddress(kind: Int, pubkey: String, dTag: String) =
         markDeletedAddress(addressCoord(kind, pubkey, dTag))
 
+    /** Lift a tombstone — used when an addressable event is deliberately
+     *  (re)published locally for the same coordinate, superseding a prior delete. */
+    fun unmarkDeleted(eventId: String) {
+        if (deletedIds.remove(eventId)) saveIdsToPrefs()
+    }
+
+    fun unmarkDeletedAddress(coord: String) {
+        if (deletedAddresses.remove(coord)) saveAddressesToPrefs()
+    }
+
+    fun unmarkDeletedAddress(kind: Int, pubkey: String, dTag: String) =
+        unmarkDeletedAddress(addressCoord(kind, pubkey, dTag))
+
     fun isAddressDeleted(coord: String): Boolean = deletedAddresses.contains(coord)
 
     fun isAddressDeleted(kind: Int, pubkey: String, dTag: String): Boolean =
