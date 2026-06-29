@@ -86,17 +86,24 @@ object Nip56 {
 
     private val CONTENT_REGEX = Regex("^\\[(.+?)]\\s*(.*)$", RegexOption.DOT_MATCHES_ALL)
 
+    /** The NIP-56 standard report types (the 3rd element of a *typed* report `p`/`e` tag). */
+    private val REPORT_TYPES = setOf(
+        "nudity", "malware", "profanity", "illegal", "spam", "impersonation", "other",
+    )
+
     /**
      * Parse a kind-1984 event into a [ReportInfo], or null if it isn't a usable report.
      *
-     * The reported user is the *typed* `p` tag (3rd element = NIP-56 type) written by
-     * [buildReportTags]; the extra recipient/admin `p` tags (2 elements) are routing only and
-     * skipped. The category label is recovered from the `[Label] reason` content, falling back to
-     * the typed tag's NIP-56 type if the content isn't in that shape.
+     * The reported user is the `p` tag whose 3rd element is a known NIP-56 report type (written by
+     * [buildReportTags]); a routing/admin `p` tag whose 3rd element is a relay hint won't be
+     * mistaken for it. The category label is recovered from the `[Label] reason` content, falling
+     * back to the typed tag's NIP-56 type if the content isn't in that shape.
      */
     fun parseReport(event: NostrEvent): ReportInfo? {
         if (event.kind != KIND_REPORT) return null
-        val typedP = event.tags.firstOrNull { it.size >= 3 && it[0] == "p" } ?: return null
+        val typedP = event.tags.firstOrNull { it.size >= 3 && it[0] == "p" && it[2] in REPORT_TYPES }
+            ?: event.tags.firstOrNull { it.size >= 3 && it[0] == "p" }
+            ?: return null
         val reportedPubkey = typedP[1]
         val reportedEventId = event.tags.firstOrNull { it.size >= 2 && it[0] == "e" }?.get(1)
         val groupId = event.tags.firstOrNull { it.size >= 2 && it[0] == "h" }?.get(1)

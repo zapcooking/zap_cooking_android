@@ -61,6 +61,9 @@ fun ReportsScreen(
     val reports by viewModel.reports.collectAsState()
     val loading by viewModel.loading.collectAsState()
     val error by viewModel.error.collectAsState()
+    // Bumps when profile metadata arrives; keying row remembers on it refreshes names/avatars
+    // that initially fell back to npub/no-picture before the queued fetches completed.
+    val profileVersion by eventRepo.profileVersion.collectAsState()
 
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -105,6 +108,7 @@ fun ReportsScreen(
                             ReportRow(
                                 report = report,
                                 eventRepo = eventRepo,
+                                profileVersion = profileVersion,
                                 groupName = report.groupId?.let(groupNameFor),
                                 onOpenUser = { onOpenReportedUser(report.groupId, report.reportedPubkey) },
                                 onOpenMessage = {
@@ -150,13 +154,14 @@ private fun EmptyState(title: String, hint: String?) {
 private fun ReportRow(
     report: Nip56.ReportInfo,
     eventRepo: EventRepository,
+    profileVersion: Int,
     groupName: String?,
     onOpenUser: () -> Unit,
     onOpenMessage: () -> Unit,
 ) {
-    val reporterName = remember(report.reporterPubkey) { displayName(eventRepo, report.reporterPubkey) }
-    val reportedName = remember(report.reportedPubkey) { displayName(eventRepo, report.reportedPubkey) }
-    val reportedPic = remember(report.reportedPubkey) { eventRepo.getProfileData(report.reportedPubkey)?.picture }
+    val reporterName = remember(report.reporterPubkey, profileVersion) { displayName(eventRepo, report.reporterPubkey) }
+    val reportedName = remember(report.reportedPubkey, profileVersion) { displayName(eventRepo, report.reportedPubkey) }
+    val reportedPic = remember(report.reportedPubkey, profileVersion) { eventRepo.getProfileData(report.reportedPubkey)?.picture }
 
     Column(
         modifier = Modifier

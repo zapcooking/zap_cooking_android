@@ -2217,11 +2217,12 @@ fun WispNavHost(
         ) { backStackEntry ->
             val scopedGroupId = backStackEntry.arguments?.getString("groupId")?.takeIf { it.isNotEmpty() }
             val reportsViewModel: cooking.zap.app.viewmodel.ReportsViewModel = viewModel()
-            LaunchedEffect(scopedGroupId) {
+            val reportsPubkey = feedViewModel.getUserPubkey()
+            LaunchedEffect(scopedGroupId, reportsPubkey) {
                 reportsViewModel.init(
                     feedViewModel.relayPool,
                     feedViewModel.metadataFetcher,
-                    feedViewModel.getUserPubkey(),
+                    reportsPubkey,
                     scopedGroupId,
                 )
             }

@@ -51,16 +51,16 @@ class ReportsViewModel(app: Application) : AndroidViewModel(app) {
         groupId: String? = null,
     ) {
         if (started) return
+        if (myPubkey.isNullOrEmpty()) {
+            // No pubkey yet (startup) or READ_ONLY: show the empty state, but DON'T latch — a
+            // later init() once the pubkey resolves must still be able to subscribe.
+            _loading.value = false
+            return
+        }
         started = true
         relayPool = pool
         metadataFetcher = fetcher
         groupFilter = groupId
-
-        if (myPubkey.isNullOrEmpty()) {
-            // READ_ONLY / logged out: nothing is routed to us — show the empty state, not a spinner.
-            _loading.value = false
-            return
-        }
         subId = "reports-${myPubkey.take(12)}${groupId?.let { "-${it.take(8)}" } ?: ""}"
 
         pool.ensureGroupRelay(RelayConfig.MEMBERS_RELAY)
