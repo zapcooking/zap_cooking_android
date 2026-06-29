@@ -2,8 +2,11 @@ package cooking.zap.app.ui.component
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -40,8 +43,10 @@ import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Key
+import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Hub
 import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Tune
@@ -71,6 +76,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -105,13 +111,17 @@ fun WispDrawerContent(
     onOnlyFood: () -> Unit = {},
     onLists: () -> Unit = {},
     onDrafts: () -> Unit = {},
+    onKitchenTools: () -> Unit = {},
     onMediaServers: () -> Unit,
     onKeys: () -> Unit = {},
+    keyBackupNeeded: Boolean = false,
     onSocialGraph: () -> Unit = {},
     onSafety: () -> Unit = {},
+    onFollowRecovery: () -> Unit = {},
     onPowSettings: () -> Unit = {},
     onCustomEmojis: () -> Unit = {},
     onConsole: () -> Unit = {},
+    onReports: () -> Unit = {},
     // Network diagnostics relocated from the Feed top-bar chips (PR 3).
     // onNetworkStatus is the single relay-diagnostics entry (was Relay Health).
     connectedRelayCount: Int = 0,
@@ -163,6 +173,54 @@ fun WispDrawerContent(
                 }) {
                     ProfilePicture(url = profile?.picture, size = 64)
                 }
+                Spacer(modifier = Modifier.width(8.dp))
+                val otherAccountCount = (accounts.size - 1).coerceAtLeast(0)
+                if (otherAccountCount == 0) {
+                    Box(
+                        modifier = Modifier
+                            .size(26.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .clickable { onAddAccount() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Filled.Add,
+                            contentDescription = stringResource(R.string.cd_add_account),
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.clickable { accountPickerExpanded = !accountPickerExpanded }
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .height(26.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                .padding(horizontal = 10.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "+ $otherAccountCount",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(2.dp))
+                        Icon(
+                            if (accountPickerExpanded) Icons.Outlined.KeyboardArrowDown
+                            else Icons.Outlined.KeyboardArrowRight,
+                            contentDescription = stringResource(R.string.cd_switch_account),
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
                 Spacer(modifier = Modifier.weight(1f))
                 IconButton(onClick = onToggleTheme) {
                     Icon(
@@ -184,7 +242,7 @@ fun WispDrawerContent(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable(enabled = accounts.size > 1 || accounts.isNotEmpty()) {
+                    .clickable(enabled = accounts.isNotEmpty()) {
                         accountPickerExpanded = !accountPickerExpanded
                     },
                 verticalAlignment = Alignment.CenterVertically
@@ -195,15 +253,6 @@ fun WispDrawerContent(
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.weight(1f, fill = false)
                 )
-                if (accounts.size > 1 || accounts.isNotEmpty()) {
-                        Icon(
-                            if (accountPickerExpanded) Icons.Outlined.KeyboardArrowDown
-                            else Icons.Outlined.KeyboardArrowRight,
-                            contentDescription = stringResource(R.string.cd_switch_account),
-                        modifier = Modifier.size(20.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
             }
             Spacer(Modifier.height(2.dp))
             if (!profile?.nip05.isNullOrBlank()) {
@@ -439,48 +488,29 @@ fun WispDrawerContent(
                 modifier = Modifier.height(48.dp).padding(horizontal = 12.dp)
             )
         }
-        NavigationDrawerItem(
-            icon = { Icon(Icons.Outlined.Restaurant, contentDescription = null) },
-            label = { Text(stringResource(R.string.drawer_recipes)) },
-            selected = false,
-            onClick = onRecipes,
-            modifier = Modifier.height(48.dp).padding(horizontal = 12.dp)
-        )
-        NavigationDrawerItem(
-            // Sous Chef = sparkle in the web's purple accent (#a855f7). The web
-            // uses a generic sparkle glyph (no bespoke mark), so this matches it.
-            icon = { Icon(Icons.Outlined.AutoAwesome, contentDescription = null, tint = SousChefPurple) },
-            label = { Text(stringResource(R.string.drawer_souschef)) },
-            selected = false,
-            onClick = onSousChef,
-            modifier = Modifier.height(48.dp).padding(horizontal = 12.dp)
-        )
-        NavigationDrawerItem(
-            icon = { CheffyIcon(size = 24.dp) },
-            label = { Text(stringResource(R.string.drawer_cheffy)) },
-            selected = false,
-            onClick = onCheffy,
-            modifier = Modifier.height(48.dp).padding(horizontal = 12.dp)
-        )
-        NavigationDrawerItem(
-            icon = { Icon(Icons.Outlined.Forum, contentDescription = null) },
-            label = { Text(stringResource(R.string.drawer_onlyfood)) },
-            selected = false,
-            onClick = onOnlyFood,
-            modifier = Modifier.height(48.dp).padding(horizontal = 12.dp)
-        )
-        NavigationDrawerItem(
-            icon = { Icon(Icons.Outlined.FormatListBulleted, contentDescription = null) },
-            label = { Text(stringResource(R.string.drawer_lists)) },
-            selected = false,
-            onClick = onLists,
-            modifier = Modifier.height(48.dp).padding(horizontal = 12.dp)
-        )
+        // Recipes, Sous Chef, Cheffy, OnlyFood, and Lists drawer entries were
+        // removed from the menu. Their callback params
+        // (onRecipes/onSousChef/onCheffy/onOnlyFood/onLists) are intentionally
+        // kept on the function signature for API/call-site stability — the
+        // destinations still exist and are reachable elsewhere — even though
+        // they're no longer referenced here.
         NavigationDrawerItem(
             icon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
             label = { Text(stringResource(R.string.drawer_drafts)) },
             selected = false,
             onClick = onDrafts,
+            modifier = Modifier.height(48.dp).padding(horizontal = 12.dp)
+        )
+        NavigationDrawerItem(
+            icon = {
+                Icon(
+                    painter = painterResource(R.drawable.ic_cooking_pot),
+                    contentDescription = null
+                )
+            },
+            label = { Text(stringResource(R.string.drawer_kitchen_tools)) },
+            selected = false,
+            onClick = onKitchenTools,
             modifier = Modifier.height(48.dp).padding(horizontal = 12.dp)
         )
         var settingsExpanded by remember { mutableStateOf(false) }
@@ -501,15 +531,32 @@ fun WispDrawerContent(
                 scrollState.animateScrollTo(scrollState.maxValue)
             }
         }
+        // Moderation inbox — ops-only (Pantry mod admins). Room admins reach Reports from group detail.
+        if (pubkey != null && pubkey in cooking.zap.app.nostr.Nip56.PANTRY_MOD_ADMINS) {
+            NavigationDrawerItem(
+                icon = { Icon(Icons.Outlined.Flag, contentDescription = null) },
+                label = { Text(stringResource(R.string.drawer_reports)) },
+                selected = false,
+                onClick = onReports,
+                modifier = Modifier.height(48.dp).padding(horizontal = 12.dp)
+            )
+        }
         NavigationDrawerItem(
             icon = { Icon(Icons.Outlined.Settings, contentDescription = null) },
             label = { Text(stringResource(R.string.drawer_settings)) },
             badge = {
-                Icon(
-                    if (settingsExpanded) Icons.Outlined.KeyboardArrowDown
-                    else Icons.Outlined.KeyboardArrowRight,
-                    contentDescription = null
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Surface the nested Keys nudge while Settings is collapsed.
+                    if (keyBackupNeeded && !settingsExpanded) {
+                        NudgeDot()
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Icon(
+                        if (settingsExpanded) Icons.Outlined.KeyboardArrowDown
+                        else Icons.Outlined.KeyboardArrowRight,
+                        contentDescription = null
+                    )
+                }
             },
             selected = false,
             onClick = { settingsExpanded = !settingsExpanded },
@@ -534,6 +581,7 @@ fun WispDrawerContent(
                 NavigationDrawerItem(
                     icon = { Icon(Icons.Outlined.Key, contentDescription = null) },
                     label = { Text(stringResource(R.string.drawer_keys)) },
+                    badge = { if (keyBackupNeeded) NudgeDot() },
                     selected = false,
                     onClick = onKeys,
                     modifier = Modifier.height(48.dp).padding(start = 36.dp, end = 12.dp)
@@ -589,6 +637,13 @@ fun WispDrawerContent(
                             label = { Text(stringResource(R.string.drawer_custom_emojis)) },
                             selected = false,
                             onClick = onCustomEmojis,
+                            modifier = Modifier.height(48.dp).padding(start = 56.dp, end = 12.dp)
+                        )
+                        NavigationDrawerItem(
+                            icon = { Icon(Icons.Outlined.History, contentDescription = null) },
+                            label = { Text(stringResource(R.string.drawer_restore_follows)) },
+                            selected = false,
+                            onClick = onFollowRecovery,
                             modifier = Modifier.height(48.dp).padding(start = 56.dp, end = 12.dp)
                         )
                         // Network Status — single entry point for relay
@@ -747,4 +802,15 @@ fun WispDrawerContent(
         }
         }
     }
+}
+
+/** Small accent dot indicating an unattended item (e.g. an un-backed-up key). */
+@Composable
+private fun NudgeDot() {
+    Box(
+        modifier = Modifier
+            .size(8.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.error)
+    )
 }

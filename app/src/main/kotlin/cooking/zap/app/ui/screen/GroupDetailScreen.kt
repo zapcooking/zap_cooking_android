@@ -20,8 +20,10 @@ import androidx.compose.material.icons.outlined.AdminPanelSettings
 import androidx.compose.material.icons.automirrored.outlined.ExitToApp
 import androidx.compose.material.icons.outlined.DeleteForever
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.EditOff
+import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.outlined.FileUpload
 import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.Lock
@@ -86,7 +88,8 @@ fun GroupDetailScreen(
     onBack: () -> Unit,
     onLeave: () -> Unit = {},
     onDelete: () -> Unit = {},
-    onPickPicture: ((String) -> Unit) -> Unit = {}
+    onPickPicture: ((String) -> Unit) -> Unit = {},
+    onReports: () -> Unit = {}
 ) {
     val groups by groupListViewModel.groups.collectAsState()
     val room = groups.firstOrNull { it.groupId == groupId && it.relayUrl == relayUrl }
@@ -105,6 +108,7 @@ fun GroupDetailScreen(
     var latestInviteCode by remember { mutableStateOf<String?>(null) }
 
     val clipboardManager = LocalClipboardManager.current
+    val context = androidx.compose.ui.platform.LocalContext.current
     val inviteLink = Nip29.inviteLink(relayUrl, groupId)
     val codedInviteLink = latestInviteCode?.let { Nip29.inviteLink(relayUrl, groupId, it) }
 
@@ -120,6 +124,9 @@ fun GroupDetailScreen(
                 },
                 actions = {
                     if (isAdmin) {
+                        IconButton(onClick = onReports) {
+                            Icon(Icons.Outlined.Flag, contentDescription = stringResource(R.string.cd_reports))
+                        }
                         IconButton(onClick = { showEditDialog = true }) {
                             Icon(Icons.Outlined.Edit, contentDescription = stringResource(R.string.cd_edit_group))
                         }
@@ -370,6 +377,40 @@ fun GroupDetailScreen(
                                         modifier = Modifier.size(20.dp)
                                     )
                                 }
+                                // Share the coded invite link out via the system share sheet (ACTION_SEND).
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            try {
+                                                val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                                    type = "text/plain"
+                                                    putExtra(android.content.Intent.EXTRA_TEXT, link)
+                                                }
+                                                context.startActivity(
+                                                    android.content.Intent.createChooser(
+                                                        send,
+                                                        context.getString(R.string.action_share_invite)
+                                                    )
+                                                )
+                                            } catch (_: Exception) {}
+                                        }
+                                        .padding(horizontal = 16.dp, vertical = 10.dp)
+                                ) {
+                                    Text(
+                                        stringResource(R.string.action_share_invite),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Icon(
+                                        Icons.Outlined.Share,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
                             }
                         }
                         HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outline)
@@ -597,7 +638,7 @@ private fun GroupHeader(room: GroupRoom?) {
         ProfilePicture(url = metadata?.picture, size = 72)
         Spacer(Modifier.height(12.dp))
         Text(
-            text = metadata?.name ?: room?.groupId ?: "Chat Room",
+            text = metadata?.name ?: room?.groupId ?: stringResource(R.string.group_fallback_title),
             style = MaterialTheme.typography.titleLarge,
             color = MaterialTheme.colorScheme.onSurface
         )

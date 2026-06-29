@@ -1,6 +1,8 @@
 package cooking.zap.app.ui.screen
 
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -14,6 +16,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -26,9 +29,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
@@ -74,6 +80,9 @@ import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import cooking.zap.app.R
 import cooking.zap.app.auth.NostrCredentialSaver
+import cooking.zap.app.nostr.Nip19
+import cooking.zap.app.nostr.RemoteSignerBridge
+import cooking.zap.app.nostr.toHex
 import cooking.zap.app.ui.component.QrScanner
 import cooking.zap.app.viewmodel.AuthViewModel
 import cooking.zap.app.viewmodel.SplashViewModel
@@ -144,12 +153,37 @@ fun SplashScreen(
     authViewModel: AuthViewModel,
     onAccountCreated: () -> Unit,
     onLoggedIn: () -> Unit,
-    onContinueWithGoogle: () -> Unit
+    onContinueWithGoogle: () -> Unit,
+    onCancel: (() -> Unit)? = null
 ) {
     val foodPhotos by viewModel.foodPhotos.collectAsState()
+    val context = LocalContext.current
 
     var showNostrSheet by remember { mutableStateOf(false) }
     var showQrScanner by remember { mutableStateOf(false) }
+
+    var signerLoginComplete by remember { mutableStateOf(false) }
+    if (signerLoginComplete) {
+        LaunchedEffect(Unit) {
+            signerLoginComplete = false
+            onLoggedIn()
+        }
+    }
+
+    val signerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val data = result.data ?: return@rememberLauncherForActivityResult
+        val pubkeyResult = data.getStringExtra("result") ?: return@rememberLauncherForActivityResult
+        val pkg = data.getStringExtra("package")
+        val pubkeyHex = if (pubkeyResult.startsWith("npub1")) {
+            try { Nip19.npubDecode(pubkeyResult).toHex() } catch (_: Exception) { return@rememberLauncherForActivityResult }
+        } else {
+            pubkeyResult
+        }
+        authViewModel.loginWithSigner(pubkeyHex, pkg)
+        signerLoginComplete = true
+    }
 
     BoxWithConstraints(
         modifier = Modifier
@@ -199,6 +233,22 @@ fun SplashScreen(
                     )
                 )
         )
+
+        // Cancel pill — only shown when adding an account over an existing session
+        if (onCancel != null) {
+            Text(
+                text = stringResource(R.string.btn_cancel),
+                style = MaterialTheme.typography.labelLarge,
+                color = Color.White,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 120.dp)
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.15f))
+                    .clickable(onClick = onCancel)
+                    .padding(horizontal = 28.dp, vertical = 12.dp)
+            )
+        }
 
         // Content — centered as one block
         Column(
@@ -277,7 +327,7 @@ fun SplashScreen(
             Text(
                 text = stringResource(R.string.auth_tagline),
                 style = MaterialTheme.typography.bodyMedium.copy(
-                    fontFamily = FontFamily.SansSerif,
+                    fontFamily = cooking.zap.app.ui.theme.WispBodyFont,
                     fontWeight = FontWeight.Bold,
                     fontSize = 17.sp
                 ),
@@ -309,7 +359,7 @@ fun SplashScreen(
                 Text(
                     text = stringResource(R.string.splash_continue_with_google),
                     style = MaterialTheme.typography.labelLarge.copy(
-                        fontFamily = FontFamily.SansSerif,
+                        fontFamily = cooking.zap.app.ui.theme.WispBodyFont,
                         fontWeight = FontWeight.Medium,
                         fontSize = 15.sp
                     )
@@ -340,7 +390,7 @@ fun SplashScreen(
                 Text(
                     text = stringResource(R.string.splash_continue_with_nostr),
                     style = MaterialTheme.typography.labelLarge.copy(
-                        fontFamily = FontFamily.SansSerif,
+                        fontFamily = cooking.zap.app.ui.theme.WispBodyFont,
                         fontWeight = FontWeight.Medium,
                         fontSize = 15.sp
                     )
@@ -348,11 +398,28 @@ fun SplashScreen(
             }
 
         }
+
+        if (onCancel != null) {
+            IconButton(
+                onClick = onCancel,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .statusBarsPadding()
+                    .padding(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Close,
+                    contentDescription = stringResource(R.string.btn_cancel),
+                    tint = Color.White
+                )
+            }
+        }
     }
 
     if (showNostrSheet) {
         NostrLoginSheet(
             authViewModel = authViewModel,
+            signerAvailable = remember { RemoteSignerBridge.isSignerAvailable(context) },
             onDismiss = { showNostrSheet = false },
             onAccountCreated = {
                 showNostrSheet = false
@@ -365,6 +432,10 @@ fun SplashScreen(
             onScanQr = {
                 showNostrSheet = false
                 showQrScanner = true
+            },
+            onLoginWithSigner = {
+                showNostrSheet = false
+                signerLauncher.launch(RemoteSignerBridge.buildGetPublicKeyIntent(RemoteSignerBridge.DEFAULT_PERMISSIONS))
             }
         )
     }
@@ -401,10 +472,12 @@ fun SplashScreen(
 @Composable
 private fun NostrLoginSheet(
     authViewModel: AuthViewModel,
+    signerAvailable: Boolean = false,
     onDismiss: () -> Unit,
     onAccountCreated: () -> Unit,
     onLoggedIn: () -> Unit,
-    onScanQr: () -> Unit = {}
+    onScanQr: () -> Unit = {},
+    onLoginWithSigner: () -> Unit = {}
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
@@ -503,6 +576,20 @@ private fun NostrLoginSheet(
                 shape = RoundedCornerShape(24.dp)
             ) {
                 Text(stringResource(R.string.auth_log_in))
+            }
+
+            if (signerAvailable) {
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = onLoginWithSigner,
+                    enabled = !isCreating,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp),
+                    shape = RoundedCornerShape(24.dp)
+                ) {
+                    Text(stringResource(R.string.auth_login_with_signer))
+                }
             }
 
             Spacer(Modifier.height(20.dp))

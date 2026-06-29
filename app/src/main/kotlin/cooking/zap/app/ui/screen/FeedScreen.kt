@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -73,6 +74,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import cooking.zap.app.nostr.FollowSet
@@ -161,6 +164,7 @@ fun FeedScreen(
     onNoteClick: (NostrEvent) -> Unit = {},
     onQuotedNoteClick: ((String) -> Unit)? = null,
     onSearch: () -> Unit = {},
+    onKitchenTools: () -> Unit = {},
     onSousChef: () -> Unit = {},
     onCheffy: () -> Unit = {},
     onNourish: () -> Unit = {},
@@ -273,6 +277,8 @@ fun FeedScreen(
     val newNotesButtonHidden by viewModel.newNotesButtonHidden.collectAsState()
     val initLoadingState by viewModel.initLoadingState.collectAsState()
     val relayFeedStatus by viewModel.relayFeedStatus.collectAsState()
+    val onlyFoodWotDropped by viewModel.onlyFoodWotDropped.collectAsState()
+    val onlyFoodWotEnabled by viewModel.safetyPrefs.onlyFoodWotEnabled.collectAsState()
     val pendingFirstFollow by viewModel.pendingFirstFollow.collectAsState()
     val firstFollowCheckDone by viewModel.firstFollowCheckDone.collectAsState()
     val zapInProgress by viewModel.zapInProgress.collectAsState()
@@ -594,6 +600,7 @@ fun FeedScreen(
                                                     selectedList!!.name
                                                 } else stringResource(R.string.tab_list)
                                                 FeedType.TRENDING -> stringResource(R.string.tab_trending)
+                                                FeedType.ONLY_FOOD -> stringResource(R.string.tab_onlyfood)
                                             }
                                             Text(
                                                 feedLabel,
@@ -615,6 +622,22 @@ fun FeedScreen(
                                     onDismissRequest = { showFeedTypeDropdown = false },
                                     containerColor = MaterialTheme.colorScheme.surface
                                 ) {
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.tab_onlyfood)) },
+                                        onClick = {
+                                            showFeedTypeDropdown = false
+                                            viewModel.setFeedType(FeedType.ONLY_FOOD)
+                                            // WoT is on but the graph isn't ready (missing OR stale) → nudge
+                                            // the user to (re)compute it. WoT no-ops until then, so the feed
+                                            // still works; this matches the no-op condition (isNetworkReady).
+                                            if (onlyFoodWotEnabled && !viewModel.extendedNetworkRepo.isNetworkReady()) {
+                                                showSocialGraphDialog = true
+                                            }
+                                        },
+                                        trailingIcon = if (feedType == FeedType.ONLY_FOOD) {{
+                                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        }} else null
+                                    )
                                     DropdownMenuItem(
                                         text = { Text(stringResource(R.string.tab_for_you)) },
                                         onClick = {
@@ -669,16 +692,12 @@ fun FeedScreen(
                                             Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
                                         }} else null
                                     )
-                                    DropdownMenuItem(
-                                        text = { Text(stringResource(R.string.tab_list)) },
-                                        onClick = {
-                                            showFeedTypeDropdown = false
-                                            showListPicker = true
-                                        },
-                                        trailingIcon = if (feedType == FeedType.LIST) {{
-                                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
-                                        }} else null
-                                    )
+                                    // "List" feed-type entry removed from the dropdown. This
+                                    // was the only in-screen trigger for the list picker, so
+                                    // ListPickerDialog (below) is now unreachable from here by
+                                    // design; FeedType.LIST and the picker code are retained.
+                                    // A user already on FeedType.LIST can still switch to any
+                                    // other feed via this menu.
                                     DropdownMenuItem(
                                         text = { Text(stringResource(R.string.tab_hashtags)) },
                                         onClick = {
@@ -728,6 +747,13 @@ fun FeedScreen(
                             Icon(
                                 Icons.Outlined.Search,
                                 contentDescription = stringResource(R.string.title_search),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        IconButton(onClick = onKitchenTools) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_cooking_pot),
+                                contentDescription = stringResource(R.string.drawer_kitchen_tools),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
@@ -878,6 +904,39 @@ fun FeedScreen(
                                         FeedContentFilter.TEXT_ONLY -> "No notes in your feed yet"
                                         else -> "No posts yet"
                                     },
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            feedType == FeedType.ONLY_FOOD && onlyFoodWotEnabled && onlyFoodWotDropped > 0 -> {
+                                // WoT removed everything we received — explain, don't show a silent blank.
+                                // Gated on onlyFoodWotEnabled so a stale drop count from a now-disabled
+                                // filter can't claim posts were hidden once the toggle is off.
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text(
+                                        pluralStringResource(
+                                            R.plurals.feed_onlyfood_wot_hidden,
+                                            onlyFoodWotDropped,
+                                            onlyFoodWotDropped
+                                        ),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        textAlign = TextAlign.Center
+                                    )
+                                    Spacer(Modifier.height(12.dp))
+                                    Button(onClick = {
+                                        viewModel.safetyPrefs.setOnlyFoodWotEnabled(false)
+                                        viewModel.setFeedType(FeedType.ONLY_FOOD)
+                                    }) {
+                                        Text(stringResource(R.string.feed_onlyfood_show_all))
+                                    }
+                                    Spacer(Modifier.height(8.dp))
+                                    OutlinedButton(onClick = { onSocialGraph() }) {
+                                        Text(stringResource(R.string.btn_go_to_social_graph))
+                                    }
+                                }
+                            }
+                            feedType == FeedType.ONLY_FOOD -> {
+                                Text(
+                                    stringResource(R.string.feed_onlyfood_empty),
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }

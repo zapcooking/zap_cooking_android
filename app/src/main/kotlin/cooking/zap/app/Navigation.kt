@@ -42,7 +42,11 @@ import cooking.zap.app.nostr.Nip19
 import cooking.zap.app.nostr.NostrUriData
 import cooking.zap.app.nostr.NostrEvent
 import cooking.zap.app.nostr.ProfileData
+import android.app.Activity
 import cooking.zap.app.nostr.LocalSigner
+import cooking.zap.app.nostr.RemoteSigner
+import cooking.zap.app.nostr.SignResult
+import cooking.zap.app.nostr.SignerIntentBridge
 import cooking.zap.app.repo.SigningMode
 import android.content.Context
 import androidx.compose.runtime.rememberCoroutineScope
@@ -91,6 +95,7 @@ import cooking.zap.app.ui.screen.NourishHubScreen
 import cooking.zap.app.ui.screen.SousChefScreen
 import cooking.zap.app.ui.screen.BookmarksScreen
 import cooking.zap.app.ui.screen.HashtagFeedScreen
+import cooking.zap.app.ui.screen.BackupKeyScreen
 import cooking.zap.app.ui.screen.KeysScreen
 import cooking.zap.app.ui.screen.ListScreen
 import cooking.zap.app.ui.screen.LiveStreamScreen
@@ -109,9 +114,11 @@ import cooking.zap.app.ui.component.FloatingVideoPlayer
 import cooking.zap.app.ui.component.PipController
 import cooking.zap.app.ui.component.FullScreenVideoPlayer
 import cooking.zap.app.ui.component.FullScreenVideoState
+import cooking.zap.app.ui.component.KeyBackupBanner
 import cooking.zap.app.ui.component.NsecPasteWarningOverlay
 import cooking.zap.app.ui.screen.OnboardingSuggestionsScreen
 import cooking.zap.app.ui.screen.OnboardingTopicsScreen
+import cooking.zap.app.ui.screen.OnboardingSaveRecipesScreen
 import cooking.zap.app.ui.screen.OnboardingFirstPostScreen
 import cooking.zap.app.ui.screen.RelayDetailScreen
 import cooking.zap.app.ui.screen.WalletScreen
@@ -156,6 +163,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.CompositionLocalProvider
 import cooking.zap.app.ui.util.LocalCanSign
+import cooking.zap.app.ui.component.CookingUtilitiesSheet
+import cooking.zap.app.ui.component.FloatingTimerBar
+import cooking.zap.app.ui.component.TimerCompletionOverlay
+import cooking.zap.app.viewmodel.CookingTimerViewModel
 
 object Routes {
     const val SPLASH = "splash"
@@ -173,6 +184,7 @@ object Routes {
     const val CONTACT_PICKER = "contact_picker"
     const val GROUP_ROOM = "group_room/{encodedRelay}/{groupId}?scrollTo={scrollTo}"
     const val GROUP_DETAIL = "group_detail/{encodedRelay}/{groupId}"
+    const val REPORTS = "reports?groupId={groupId}"
     const val NOTIFICATIONS = "notifications"
     const val BLOSSOM_SERVERS = "blossom_servers"
     const val WALLET = "wallet"
@@ -185,9 +197,11 @@ object Routes {
     const val BOOKMARKS = "bookmarks"
     const val BOOKMARK_SET_DETAIL = "bookmark_set/{pubkey}/{dTag}"
     const val LOADING = "loading"
+    const val BACKUP_KEY = "backup_key?reprompt={reprompt}"
     const val ONBOARDING_PROFILE = "onboarding/profile"
     const val ONBOARDING_SUGGESTIONS = "onboarding/suggestions"
     const val ONBOARDING_TOPICS = "onboarding/topics"
+    const val ONBOARDING_SAVE_RECIPES = "onboarding/save-recipes"
     const val ONBOARDING_FIRST_POST = "onboarding/first-post"
     const val RELAY_DETAIL = "relay_detail/{relayUrl}"
     const val CUSTOM_EMOJIS = "custom_emojis"
@@ -244,6 +258,13 @@ object Routes {
     /** The plain article route (kind 30023 long-form that isn't a recipe). */
     fun article(kind: Int, author: String, dTag: String): String =
         "article/$kind/$author/${java.net.URLEncoder.encode(dTag, "UTF-8")}"
+
+    /**
+     * Build the key-backup route. `reprompt=false` (creation flow) advances to
+     * onboarding on dismiss; `reprompt=true` (banner / cold-launch nudge) sits on
+     * top of the feed and pops back to it.
+     */
+    fun backupKey(reprompt: Boolean): String = "backup_key?reprompt=$reprompt"
 }
 
 /**
@@ -298,6 +319,7 @@ fun WispNavHost(
     val dmListViewModel: DmListViewModel = viewModel()
     val groupListViewModel: cooking.zap.app.viewmodel.GroupListViewModel = viewModel()
     val blossomServersViewModel: BlossomServersViewModel = viewModel()
+    val appContentResolver = LocalContext.current.contentResolver
     val walletViewModel: WalletViewModel = viewModel(
         factory = object : androidx.lifecycle.ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
@@ -309,6 +331,7 @@ fun WispNavHost(
                     feedViewModel.eventRepo,
                     feedViewModel.relayPool,
                     feedViewModel.keyRepo,
+                    contentResolver = appContentResolver,
                 ) as T
             }
         }
@@ -316,16 +339,29 @@ fun WispNavHost(
     val notificationsViewModel: NotificationsViewModel = viewModel()
     val draftsViewModel: DraftsViewModel = viewModel()
     val searchViewModel: SearchViewModel = viewModel()
+    val followRecoveryViewModel: cooking.zap.app.viewmodel.FollowRecoveryViewModel = viewModel(
+        factory = object : androidx.lifecycle.ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
+                return cooking.zap.app.viewmodel.FollowRecoveryViewModel(
+                    feedViewModel.relayPool,
+                    feedViewModel.contactRepo,
+                    feedViewModel.keyRepo
+                ) as T
+            }
+        }
+    )
     val consoleViewModel: ConsoleViewModel = viewModel()
     val relayHealthViewModel: RelayHealthViewModel = viewModel()
     val onboardingViewModel: OnboardingViewModel = viewModel()
     val topicOnboardingViewModel: cooking.zap.app.viewmodel.TopicOnboardingViewModel = viewModel()
+    val recipeOnboardingViewModel: cooking.zap.app.viewmodel.RecipeOnboardingViewModel = viewModel()
     val splashViewModel: SplashViewModel = viewModel()
+    val cookingTimerViewModel: CookingTimerViewModel = viewModel()
 
     relayViewModel.relayPool = feedViewModel.relayPool
 
-    // Signer for the active account: LOCAL → LocalSigner; READ_ONLY (or signed out) → null.
-    // Reactive: recomposes on login, logout, and account switch.
+    // Signer for the active account — reactive on login/logout/account-switch.
     val context = LocalContext.current
     val signingMode by authViewModel.signingModeFlow.collectAsState()
     val npub by authViewModel.npub.collectAsState()
@@ -334,8 +370,39 @@ fun WispNavHost(
             SigningMode.LOCAL -> {
                 authViewModel.keyRepo.getKeypair()?.let { LocalSigner(it.privkey, it.pubkey) }
             }
+            SigningMode.REMOTE -> {
+                val pubkeyHex = authViewModel.keyRepo.getPubkeyHex()
+                val pkg = authViewModel.keyRepo.getSignerPackage()
+                if (pubkeyHex != null && pkg != null) RemoteSigner(pubkeyHex, context.contentResolver, pkg)
+                else null
+            }
             SigningMode.READ_ONLY -> null
             null -> null
+        }
+    }
+
+    // NIP-55 intent-based signing fallback — launches signer UI when ContentResolver fails
+    val signerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { activityResult ->
+        if (activityResult.resultCode == Activity.RESULT_OK) {
+            val data = activityResult.data
+            val signature = data?.getStringExtra("signature") ?: data?.getStringExtra("result") ?: ""
+            val event = data?.getStringExtra("event")
+            if (signature.isNotEmpty() || !event.isNullOrBlank()) {
+                SignerIntentBridge.deliverResult(SignResult.Success(signature, event))
+            } else {
+                SignerIntentBridge.deliverResult(SignResult.Rejected)
+            }
+        } else {
+            SignerIntentBridge.deliverResult(SignResult.Cancelled)
+        }
+    }
+
+    val pendingSignRequest by SignerIntentBridge.pendingRequest.collectAsState()
+    LaunchedEffect(pendingSignRequest) {
+        pendingSignRequest?.let { request ->
+            signerLauncher.launch(request.intent)
         }
     }
 
@@ -372,6 +439,7 @@ fun WispNavHost(
     }
 
     val onAddAccount: () -> Unit = {
+        authViewModel.previousAccountPubkey = authViewModel.keyRepo.getPubkeyHex()
         authViewModel.isAddingAccount = true
         feedViewModel.resetForAccountSwitch()
         walletViewModel.suspendForAccountSwitch()  // disconnect only, preserve credentials
@@ -476,8 +544,21 @@ fun WispNavHost(
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
 
-    val nonAppRoutes = setOf(Routes.SPLASH, Routes.AUTH, Routes.GOOGLE_AUTH, Routes.LOADING, Routes.ONBOARDING_PROFILE, Routes.ONBOARDING_SUGGESTIONS, Routes.ONBOARDING_TOPICS, Routes.ONBOARDING_FIRST_POST, Routes.EXISTING_USER_ONBOARDING, Routes.WATCH_ONLY_ONBOARDING)
-    val hideBottomBarRoutes = nonAppRoutes + Routes.DM_CONVERSATION + Routes.DM_CONVERSATION_GROUP + Routes.CONTACT_PICKER + Routes.GROUP_ROOM + Routes.GROUP_DETAIL + Routes.LIVE_STREAM
+    // Active key-backup re-prompt: once per process, when we first land on the feed and
+    // the deferred reminder is due (1st skip → next launch, then backing off), re-show
+    // the backup screen on top of the feed. The passive banner handles ongoing nudging.
+    var launchRepromptHandled by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(currentRoute) {
+        if (!launchRepromptHandled && currentRoute == Routes.FEED) {
+            launchRepromptHandled = true
+            if (authViewModel.isLoggedIn && authViewModel.shouldRepromptKeyBackup()) {
+                navController.navigate(Routes.backupKey(reprompt = true))
+            }
+        }
+    }
+
+    val nonAppRoutes = setOf(Routes.SPLASH, Routes.AUTH, Routes.GOOGLE_AUTH, Routes.LOADING, Routes.BACKUP_KEY, Routes.ONBOARDING_PROFILE, Routes.ONBOARDING_SUGGESTIONS, Routes.ONBOARDING_TOPICS, Routes.ONBOARDING_SAVE_RECIPES, Routes.ONBOARDING_FIRST_POST, Routes.EXISTING_USER_ONBOARDING, Routes.WATCH_ONLY_ONBOARDING)
+    val hideBottomBarRoutes = nonAppRoutes + Routes.DM_CONVERSATION + Routes.DM_CONVERSATION_GROUP + Routes.CONTACT_PICKER + Routes.GROUP_ROOM + Routes.GROUP_DETAIL + Routes.REPORTS + Routes.LIVE_STREAM
     val socialGraphDiscoveryState by feedViewModel.extendedNetworkRepo.discoveryState.collectAsState()
     val socialGraphComputing = currentRoute == Routes.SOCIAL_GRAPH && (
         socialGraphDiscoveryState is cooking.zap.app.repo.DiscoveryState.FetchingFollowLists ||
@@ -703,6 +784,11 @@ fun WispNavHost(
     val drawerOnlinePubkeys by feedViewModel.eventRepo.onlinePubkeys.collectAsState()
     val drawerGlobalOnlineCount by feedViewModel.globalOnlineCount.collectAsState()
     var showOnlineNowSheet by remember { mutableStateOf(false) }
+    var showFollowRecoverySheet by remember { mutableStateOf(false) }
+    var showCookingUtilitiesSheet by remember { mutableStateOf(false) }
+
+    // Active account still needs to back up its key — drives the drawer dot + feed banner.
+    val keyBackupNudge by authViewModel.keyBackupNudge.collectAsState()
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -755,13 +841,27 @@ fun WispNavHost(
                 onOnlyFood = { closeDrawerAndNavigate(Routes.ONLY_FOOD) },
                 onLists = { closeDrawerAndNavigate(Routes.LISTS_HUB) },
                 onDrafts = { closeDrawerAndNavigate(Routes.DRAFTS) },
+                onKitchenTools = {
+                    drawerScope.launch {
+                        drawerState.close()
+                        showCookingUtilitiesSheet = true
+                    }
+                },
                 onMediaServers = { closeDrawerAndNavigate(Routes.BLOSSOM_SERVERS) },
                 onSocialGraph = { closeDrawerAndNavigate(Routes.SOCIAL_GRAPH) },
                 onSafety = { closeDrawerAndNavigate(Routes.SAFETY) },
+                onFollowRecovery = {
+                    drawerScope.launch {
+                        drawerState.close()
+                        showFollowRecoverySheet = true
+                    }
+                },
                 onCustomEmojis = { closeDrawerAndNavigate(Routes.CUSTOM_EMOJIS) },
                 onKeys = { closeDrawerAndNavigate(Routes.KEYS) },
+                keyBackupNeeded = keyBackupNudge,
                 onPowSettings = { closeDrawerAndNavigate(Routes.POW_SETTINGS) },
                 onConsole = { closeDrawerAndNavigate(Routes.CONSOLE) },
+                onReports = { closeDrawerAndNavigate("reports") },
                 connectedRelayCount = drawerConnectedCount,
                 onlineCount = drawerOnlinePubkeys.size,
                 onNetworkStatus = { closeDrawerAndNavigate(Routes.RELAY_HEALTH) },
@@ -828,10 +928,30 @@ fun WispNavHost(
         )
     }
 
+    if (showFollowRecoverySheet) {
+        cooking.zap.app.ui.component.FollowRecoverySheet(
+            viewModel = followRecoveryViewModel,
+            onDismiss = { showFollowRecoverySheet = false }
+        )
+    }
+
+    if (showCookingUtilitiesSheet) {
+        CookingUtilitiesSheet(
+            timerViewModel = cookingTimerViewModel,
+            onMinimize = { showCookingUtilitiesSheet = false },
+            onDismiss = { showCookingUtilitiesSheet = false }
+        )
+    }
+
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         bottomBar = {
             Column {
+                FloatingTimerBar(
+                    viewModel = cookingTimerViewModel,
+                    isSheetVisible = showCookingUtilitiesSheet,
+                    onExpand = { showCookingUtilitiesSheet = true }
+                )
                 FloatingAudioPlayer()
                 if (showBottomBar) {
                     WispBottomBar(
@@ -839,6 +959,7 @@ fun WispNavHost(
                         hasUnreadHome = newNoteCount > 0,
                         hasUnreadMessages = hasUnreadDms,
                         hasUnreadNotifications = hasUnreadNotifications,
+                        isDarkTheme = isDarkTheme,
                         isZapAnimating = isZapAnimating,
                         isReplyAnimating = isReplyAnimating,
                         notifSoundEnabled = notifSoundEnabled,
@@ -878,7 +999,8 @@ fun WispNavHost(
                 viewModel = splashViewModel,
                 authViewModel = authViewModel,
                 onAccountCreated = {
-                    navController.navigate(Routes.ONBOARDING_PROFILE) {
+                    // New key generated → show the backup step before profile setup.
+                    navController.navigate(Routes.backupKey(reprompt = false)) {
                         popUpTo(Routes.SPLASH) { inclusive = true }
                     }
                 },
@@ -900,7 +1022,26 @@ fun WispNavHost(
                 },
                 onContinueWithGoogle = {
                     navController.navigate(Routes.GOOGLE_AUTH)
-                }
+                },
+                onCancel = if (authViewModel.isAddingAccount) {
+                    {
+                        authViewModel.isAddingAccount = false
+                        val prev = authViewModel.previousAccountPubkey
+                        authViewModel.previousAccountPubkey = null
+                        if (prev != null) {
+                            authViewModel.switchAccount(prev)
+                        }
+                        feedViewModel.reloadForNewAccount()
+                        relayViewModel.reload()
+                        blossomServersViewModel.reload()
+                        composeViewModel.reloadBlossomRepo()
+                        feedViewModel.initRelays()
+                        walletViewModel.refreshState()
+                        navController.navigate(Routes.LOADING) {
+                            popUpTo(0) { inclusive = true }
+                        }
+                    }
+                } else null
             )
         }
 
@@ -915,10 +1056,11 @@ fun WispNavHost(
                 onDone = { isNewAccount ->
                     val wasAddingAccount = authViewModel.isAddingAccount
                     authViewModel.isAddingAccount = false
+                    authViewModel.previousAccountPubkey = null
                     authViewModel.refreshAfterExternalLogin()
 
                     if (isNewAccount) {
-                        navController.navigate(Routes.ONBOARDING_PROFILE) {
+                        navController.navigate(Routes.backupKey(reprompt = false)) {
                             popUpTo(Routes.SPLASH) { inclusive = true }
                         }
                     } else if (wasAddingAccount && authViewModel.keyRepo.isOnboardingComplete()) {
@@ -954,10 +1096,11 @@ fun WispNavHost(
                 onAuthenticated = { isNewAccount ->
                     val wasAddingAccount = authViewModel.isAddingAccount
                     authViewModel.isAddingAccount = false
+                    authViewModel.previousAccountPubkey = null
 
                     if (isNewAccount) {
-                        // New key generation always goes through full onboarding
-                        navController.navigate(Routes.ONBOARDING_PROFILE)
+                        // New key generation: back up the key, then full onboarding.
+                        navController.navigate(Routes.backupKey(reprompt = false))
                     } else if (wasAddingAccount && authViewModel.keyRepo.isOnboardingComplete()) {
                         // Adding an existing account that already completed onboarding — skip straight to loading
                         feedViewModel.reloadForNewAccount()
@@ -1094,6 +1237,7 @@ fun WispNavHost(
                         restoreState = true
                     }
                 },
+                onKitchenTools = { showCookingUtilitiesSheet = true },
                 onSousChef = { navController.navigate(Routes.SOUS_CHEF) { launchSingleTop = true } },
                 onCheffy = { navController.navigate(Routes.CHEFFY) { launchSingleTop = true } },
                 onNourish = { navController.navigate(Routes.nourish()) { launchSingleTop = true } },
@@ -1392,7 +1536,8 @@ fun WispNavHost(
                     val ref = cooking.zap.app.nostr.Nip30.buildSetReference(pk, dTag)
                     feedViewModel.customEmojiRepo.userEmojiList.value?.setReferences?.contains(ref) ?: false
                 },
-                onMuteUser = if (!isOwnProfile) { { feedViewModel.blockUser(pubkey) } } else null
+                onMuteUser = if (!isOwnProfile) { { feedViewModel.blockUser(pubkey) } } else null,
+                onRestoreFollows = if (isOwnProfile) { { showFollowRecoverySheet = true } } else null
             )
             if (showProfileEmojiLibrary) {
                 cooking.zap.app.ui.component.EmojiLibrarySheet(
@@ -1547,7 +1692,7 @@ fun WispNavHost(
                         navController.navigate("dm/${convo.peerPubkey}")
                     }
                 },
-                onNewGroupDm = {
+                onNewDm = {
                     navController.navigate(Routes.CONTACT_PICKER)
                 },
                 onGroupRoom = { relayUrl, groupId ->
@@ -1561,17 +1706,16 @@ fun WispNavHost(
         }
 
         composable(Routes.CONTACT_PICKER) {
-            val userPubkey = feedViewModel.getUserPubkey() ?: return@composable
+            // DMs are 1:1 only: picking a contact opens a one-on-one conversation.
+            if (feedViewModel.getUserPubkey() == null) return@composable
             ContactPickerScreen(
-                viewModel = dmListViewModel,
                 eventRepo = feedViewModel.eventRepo,
                 contactRepo = feedViewModel.contactRepo,
                 onBack = { navController.popBackStack() },
-                onConfirm = { conversationKey ->
+                onConfirm = { pubkey ->
                     navController.popBackStack()
-                    navController.navigate("dm/group/${conversationKey.replace(",", "~")}")
-                },
-                myPubkey = userPubkey
+                    navController.navigate("dm/$pubkey")
+                }
             )
         }
 
@@ -1764,7 +1908,7 @@ fun WispNavHost(
                 feedViewModel.groupRepo.getRoom(relayUrl, groupId)
             }
             LaunchedEffect(relayUrl, groupId) {
-                groupRoomViewModel.init(groupId, relayUrl, feedViewModel.groupRepo, feedViewModel.relayPool)
+                groupRoomViewModel.init(groupId, relayUrl, feedViewModel.groupRepo, feedViewModel.relayPool, feedViewModel.getUserPubkey())
                 feedViewModel.metadataFetcher.queueProfileFetch(feedViewModel.getUserPubkey() ?: "")
                 groupListViewModel.markGroupRead(relayUrl, groupId)
             }
@@ -1774,6 +1918,10 @@ fun WispNavHost(
             DisposableEffect(relayUrl, groupId) {
                 if (initialRoom != null) {
                     groupListViewModel.subscribeToGroup(relayUrl, groupId)
+                    // Re-pull replaceable state (39000/39001/39002) even if already subscribed this
+                    // session, so the member list + in-context remove/ban reflect users who joined
+                    // since the first subscribe.
+                    groupListViewModel.refreshGroupReplaceableState(relayUrl, groupId)
                 }
                 onDispose {
                     groupListViewModel.markGroupRead(relayUrl, groupId)
@@ -1952,7 +2100,10 @@ fun WispNavHost(
                         onOpenEmojiLibrary = { showGroupRoomEmojiLibrary = true }
                     )
                 },
-                onEmojiUsed = { feedViewModel.customEmojiRepo.recordEmojiUsage(it) }
+                onEmojiUsed = { feedViewModel.customEmojiRepo.recordEmojiUsage(it) },
+                onRemoveUser = { pubkey ->
+                    groupListViewModel.removeUser(relayUrl, groupId, pubkey, activeSigner)
+                }
             )
             if (showGroupRoomEmojiLibrary) {
                 val groupRoomSheetUnicodeEmojis by feedViewModel.customEmojiRepo.unicodeEmojis.collectAsState()
@@ -1988,6 +2139,23 @@ fun WispNavHost(
                 android.util.Base64.decode(encodedRelay, android.util.Base64.URL_SAFE),
                 Charsets.UTF_8
             )
+            // Admin tools (member list + Remove & ban) gate on room.members; re-pull the latest
+            // 39000/39001/39002 on open so a just-joined user appears without re-entering the room.
+            val groupAlreadySubscribed = remember(relayUrl, groupId) {
+                groupListViewModel.isGroupSubscribed(relayUrl, groupId)
+            }
+            DisposableEffect(relayUrl, groupId) {
+                groupListViewModel.refreshGroupReplaceableState(relayUrl, groupId)
+                onDispose {
+                    // Only tear down subscriptions this screen opened standalone. When detail sits
+                    // on top of an open room, that room owns the subscription and cleans it up on
+                    // its own dispose — closing it here would kill the room's live updates after
+                    // the user navigates back. (unsubscribeFromGroup no-ops when notifications are on.)
+                    if (!groupAlreadySubscribed) {
+                        groupListViewModel.unsubscribeFromGroup(relayUrl, groupId)
+                    }
+                }
+            }
             val groupDetailContext = LocalContext.current
             val groupPictureUploadScope = rememberCoroutineScope()
             var pendingPictureCallback by remember { mutableStateOf<((String) -> Unit)?>(null) }
@@ -2034,7 +2202,59 @@ fun WispNavHost(
                             androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly
                         )
                     )
+                },
+                onReports = {
+                    navController.navigate("reports?groupId=${android.net.Uri.encode(groupId)}")
                 }
+            )
+        }
+
+        composable(
+            Routes.REPORTS,
+            arguments = listOf(navArgument("groupId") {
+                type = NavType.StringType; nullable = true; defaultValue = null
+            })
+        ) { backStackEntry ->
+            val scopedGroupId = backStackEntry.arguments?.getString("groupId")?.takeIf { it.isNotEmpty() }
+            val reportsViewModel: cooking.zap.app.viewmodel.ReportsViewModel = viewModel()
+            val reportsPubkey = feedViewModel.getUserPubkey()
+            LaunchedEffect(scopedGroupId, reportsPubkey) {
+                reportsViewModel.init(
+                    feedViewModel.relayPool,
+                    feedViewModel.metadataFetcher,
+                    reportsPubkey,
+                    scopedGroupId,
+                )
+            }
+            fun encodeRelay(relay: String) = android.util.Base64.encodeToString(
+                relay.toByteArray(Charsets.UTF_8),
+                android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP or android.util.Base64.NO_PADDING
+            )
+            cooking.zap.app.ui.screen.ReportsScreen(
+                viewModel = reportsViewModel,
+                eventRepo = feedViewModel.eventRepo,
+                onBack = { navController.popBackStack() },
+                groupNameFor = { gid ->
+                    feedViewModel.groupRepo.getRelayForGroup(gid)
+                        ?.let { relay -> feedViewModel.groupRepo.getRoom(relay, gid)?.metadata?.name }
+                },
+                onOpenReportedUser = { gid, reportedPubkey ->
+                    if (gid != null) {
+                        // Land on the group's member list, where the existing kick/Remove & ban lives.
+                        val relay = feedViewModel.groupRepo.getRelayForGroup(gid)
+                            ?: cooking.zap.app.relay.RelayConfig.MEMBERS_RELAY
+                        navController.navigate("group_detail/${encodeRelay(relay)}/${android.net.Uri.encode(gid)}")
+                    } else {
+                        navController.navigate("profile/$reportedPubkey")
+                    }
+                },
+                onOpenReportedMessage = { gid, eventId ->
+                    val relay = feedViewModel.groupRepo.getRelayForGroup(gid)
+                        ?: cooking.zap.app.relay.RelayConfig.MEMBERS_RELAY
+                    navController.navigate(
+                        "group_room/${encodeRelay(relay)}/${android.net.Uri.encode(gid)}?scrollTo=${android.net.Uri.encode(eventId)}"
+                    )
+                },
             )
         }
 
@@ -2902,6 +3122,7 @@ fun WispNavHost(
                         restoreState = true
                     }
                 },
+                onKitchenTools = { showCookingUtilitiesSheet = true },
                 onSousChef = { navController.navigate(Routes.SOUS_CHEF) { launchSingleTop = true } },
                 onCheffy = { navController.navigate(Routes.CHEFFY) { launchSingleTop = true } },
                 onNourish = { navController.navigate(Routes.nourish()) { launchSingleTop = true } },
@@ -3683,6 +3904,46 @@ fun WispNavHost(
             )
         }
 
+        composable(
+            Routes.BACKUP_KEY,
+            arguments = listOf(
+                navArgument("reprompt") { type = NavType.BoolType; defaultValue = false }
+            )
+        ) { backStackEntry ->
+            val reprompt = backStackEntry.arguments?.getBoolean("reprompt") ?: false
+            val backupPubkey = authViewModel.keyRepo.getPubkeyHex()
+            val backupAvatar = backupPubkey?.let { feedViewModel.eventRepo.getProfileData(it)?.picture }
+            // Creation flow → advance into onboarding. Re-prompt (banner / cold launch)
+            // sits on top of the feed → pop back to it.
+            val proceed: () -> Unit = {
+                if (reprompt) {
+                    navController.popBackStack()
+                } else {
+                    navController.navigate(Routes.ONBOARDING_PROFILE) {
+                        popUpTo(Routes.BACKUP_KEY) { inclusive = true }
+                    }
+                }
+            }
+            BackHandler {
+                // System back behaves like "Skip for now": keep the need alive, back off.
+                authViewModel.recordKeyBackupSkip()
+                proceed()
+            }
+            BackupKeyScreen(
+                keyRepository = authViewModel.keyRepo,
+                avatarUrl = backupAvatar,
+                onSaved = {
+                    authViewModel.markKeyBackedUp()
+                    proceed()
+                },
+                onSkip = {
+                    authViewModel.recordKeyBackupSkip()
+                    proceed()
+                },
+                onBackupExported = { authViewModel.markKeyBackedUp() }
+            )
+        }
+
         composable(Routes.ONBOARDING_PROFILE) {
             val onBack: () -> Unit = {
                 authViewModel.keyRepo.clearKeypair()
@@ -3703,7 +3964,17 @@ fun WispNavHost(
                                 walletModeRepo = feedViewModel.walletModeRepo,
                                 signer = activeSigner
                             )) {
-                            navController.navigate(Routes.ONBOARDING_SUGGESTIONS) {
+                            // Re-key all per-account state to the new pubkey now, BEFORE
+                            // the Topics step publishes its interest set. reloadForNewAccount()
+                            // runs clearAll() + switches contactRepo/interestRepo to the
+                            // pubkey-scoped prefs; if it ran later, the topic/follow writes
+                            // would land in the null-keyed prefs and be wiped on reload.
+                            feedViewModel.reloadForNewAccount()
+                            relayViewModel.reload()
+                            blossomServersViewModel.reload()
+                            composeViewModel.reloadBlossomRepo()
+                            walletViewModel.refreshState()
+                            navController.navigate(Routes.ONBOARDING_TOPICS) {
                                 popUpTo(Routes.ONBOARDING_PROFILE) { inclusive = true }
                             }
                         }
@@ -3716,51 +3987,38 @@ fun WispNavHost(
 
         composable(Routes.ONBOARDING_SUGGESTIONS) {
             LaunchedEffect(Unit) {
-                onboardingViewModel.loadSuggestions(feedViewModel.relayPool)
+                onboardingViewModel.loadSuggestions(feedViewModel.relayPool, feedViewModel.extendedNetworkRepo)
             }
             val activeNow by onboardingViewModel.activeNow.collectAsState()
             val creators by onboardingViewModel.creators.collectAsState()
-            val news by onboardingViewModel.news.collectAsState()
             val selectedPubkeys by onboardingViewModel.selectedPubkeys.collectAsState()
             val scope = rememberCoroutineScope()
 
             OnboardingSuggestionsScreen(
                 activeNow = activeNow,
                 creators = creators,
-                news = news,
                 selectedPubkeys = selectedPubkeys,
                 onToggleFollowAll = { section -> onboardingViewModel.toggleFollowAll(section) },
                 onTogglePubkey = { pubkey -> onboardingViewModel.togglePubkey(pubkey) },
                 totalSelected = selectedPubkeys.size,
                 onContinue = {
                     scope.launch {
-                        feedViewModel.setFeedType(FeedType.FOLLOWS)
-                        feedViewModel.reloadForNewAccount()
-                        relayViewModel.reload()
-                        blossomServersViewModel.reload()
-                        composeViewModel.reloadBlossomRepo()
-                        walletViewModel.refreshState()
-                        // finishOnboarding must run after reloadForNewAccount so contactRepo
-                        // is already switched to the new pubkey-specific prefs file.
-                        // Otherwise the follow list is saved to the null-keyed prefs and
-                        // wiped when reloadForNewAccount reloads to the correct prefs.
+                        // The account was already re-keyed at the Profile step, so
+                        // contactRepo points at the correct pubkey-scoped prefs here.
+                        // finishOnboarding publishes the kind-3 follow list and marks
+                        // onboarding complete — keeping markOnboardingComplete() at the
+                        // Creators step means a drop-off after this still completes.
                         onboardingViewModel.finishOnboarding(
                             relayPool = feedViewModel.relayPool,
                             contactRepo = feedViewModel.contactRepo,
                             selectedPubkeys = selectedPubkeys,
                             signer = activeSigner
                         )
-                        navController.navigate(Routes.ONBOARDING_TOPICS)
+                        navController.navigate(Routes.ONBOARDING_SAVE_RECIPES)
                     }
                 },
                 onSkip = {
                     scope.launch {
-                        feedViewModel.setFeedType(FeedType.EXTENDED_FOLLOWS)
-                        feedViewModel.reloadForNewAccount()
-                        relayViewModel.reload()
-                        blossomServersViewModel.reload()
-                        composeViewModel.reloadBlossomRepo()
-                        walletViewModel.refreshState()
                         // Publish a kind 3 that at least follows the user themselves so
                         // their own posts land in their feed — finishOnboarding also
                         // marks onboarding complete.
@@ -3770,16 +4028,13 @@ fun WispNavHost(
                             selectedPubkeys = emptySet(),
                             signer = activeSigner
                         )
-                        navController.navigate(Routes.ONBOARDING_TOPICS)
+                        navController.navigate(Routes.ONBOARDING_SAVE_RECIPES)
                     }
                 }
             )
         }
 
         composable(Routes.ONBOARDING_TOPICS) {
-            LaunchedEffect(Unit) {
-                topicOnboardingViewModel.load(feedViewModel.relayPool)
-            }
             OnboardingTopicsScreen(
                 viewModel = topicOnboardingViewModel,
                 onContinue = {
@@ -3790,12 +4045,52 @@ fun WispNavHost(
                         // API to produce one atomic event with a nice title.
                         feedViewModel.followHashtags(selected, dTag = "interests", setTitle = "Interests")
                     }
-                    navController.navigate(Routes.ONBOARDING_FIRST_POST)
+                    navController.navigate(Routes.ONBOARDING_SUGGESTIONS)
                 },
                 onSkip = {
-                    navController.navigate(Routes.ONBOARDING_FIRST_POST)
+                    navController.navigate(Routes.ONBOARDING_SUGGESTIONS)
                 }
             )
+        }
+
+        composable(Routes.ONBOARDING_SAVE_RECIPES) {
+            // Gate behind signing capability: RecipeBookmarkRepository.toggle needs a
+            // signer, so a READ_ONLY account can't save. The new-key flow always has a
+            // signer; watch-only never reaches here (separate path), but gate anyway so
+            // the bookmark action can't render in a broken state — skip straight on.
+            if (activeSigner == null) {
+                LaunchedEffect(Unit) {
+                    navController.navigate(Routes.ONBOARDING_FIRST_POST) {
+                        popUpTo(Routes.ONBOARDING_SAVE_RECIPES) { inclusive = true }
+                    }
+                }
+            } else {
+                LaunchedEffect(Unit) {
+                    // Browse happens AFTER the Profile-step reloadForNewAccount()/clearAll(),
+                    // so this fresh load isn't wiped. loadRecipeBookmarks() keys the
+                    // bookmark repo to the new pubkey for correct saved-state + carry-forward.
+                    recipeOnboardingViewModel.load(feedViewModel.recipeRepo)
+                    feedViewModel.loadRecipeBookmarks()
+                }
+                val featured by recipeOnboardingViewModel.featured.collectAsState()
+                val recipesLoading by recipeOnboardingViewModel.loading.collectAsState()
+                val bookmarked by feedViewModel.recipeBookmarkRepo.bookmarkedCoordinates.collectAsState()
+
+                OnboardingSaveRecipesScreen(
+                    recipes = featured,
+                    loading = recipesLoading,
+                    bookmarkedCoordinates = bookmarked,
+                    onToggleBookmark = { recipeId -> feedViewModel.toggleRecipeBookmark(recipeId) },
+                    onContinue = {
+                        recipeOnboardingViewModel.reset()
+                        navController.navigate(Routes.ONBOARDING_FIRST_POST)
+                    },
+                    onSkip = {
+                        recipeOnboardingViewModel.reset()
+                        navController.navigate(Routes.ONBOARDING_FIRST_POST)
+                    }
+                )
+            }
         }
 
         composable(Routes.ONBOARDING_FIRST_POST) {
@@ -4138,7 +4433,23 @@ fun WispNavHost(
             .align(Alignment.BottomCenter)
             .padding(bottom = 16.dp)
     )
+    // Persistent key-backup nudge — only on the feed, only while the active account
+    // has an unconfirmed key backup. Collapse is per-session; it returns next launch.
+    var keyBackupBannerCollapsed by remember { mutableStateOf(false) }
+    KeyBackupBanner(
+        visible = keyBackupNudge && currentRoute == Routes.FEED && !keyBackupBannerCollapsed,
+        onBackup = { navController.navigate(Routes.backupKey(reprompt = true)) },
+        onDismiss = { keyBackupBannerCollapsed = true },
+        modifier = Modifier.align(Alignment.BottomCenter)
+    )
+
     NsecPasteWarningOverlay()
+
+    val completionEvent by cookingTimerViewModel.completionEvent.collectAsState()
+    TimerCompletionOverlay(
+        timer = completionEvent,
+        onDismiss = { cookingTimerViewModel.dismissCompletion() }
+    )
     } // CompositionLocalProvider
     } // Box
 
