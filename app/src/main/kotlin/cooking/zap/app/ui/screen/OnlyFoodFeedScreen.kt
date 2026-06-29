@@ -28,6 +28,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
@@ -196,23 +197,26 @@ private fun OnlyFoodNote(
     zapAnimatingIds: Set<String>,
     zapInProgressIds: Set<String>,
 ) {
-    val reactionVersion by eventRepo.reactionVersion.collectAsState()
-    val replyCountVersion by eventRepo.replyCountVersion.collectAsState()
-    val zapVersion by eventRepo.zapVersion.collectAsState()
-    val repostVersion by eventRepo.repostVersion.collectAsState()
-    val profileVersion by eventRepo.profileVersion.collectAsState()
+    // Per-event reactive engagement (mirrors FeedItem): collect the global "version"
+    // signals and route each lookup through derivedStateOf, so a global bump only
+    // recomposes the note whose value actually changed instead of every visible card.
+    val reactionV = eventRepo.reactionVersion.collectAsState()
+    val replyV = eventRepo.replyCountVersion.collectAsState()
+    val zapV = eventRepo.zapVersion.collectAsState()
+    val repostV = eventRepo.repostVersion.collectAsState()
+    val profileV = eventRepo.profileVersion.collectAsState()
 
-    val profile = remember(profileVersion, event.pubkey) { eventRepo.getProfileData(event.pubkey) }
-    val likeCount = remember(reactionVersion, event.id) { eventRepo.getReactionCount(event.id) }
-    val replyCount = remember(replyCountVersion, event.id) { eventRepo.getReplyCount(event.id) }
-    val zapSats = remember(zapVersion, event.id) { eventRepo.getZapSats(event.id) }
-    val userEmojis = remember(reactionVersion, event.id, userPubkey) {
-        userPubkey?.let { eventRepo.getUserReactionEmojis(event.id, it) } ?: emptySet()
+    val profile by remember(event.pubkey) { derivedStateOf { profileV.value; eventRepo.getProfileData(event.pubkey) } }
+    val likeCount by remember(event.id) { derivedStateOf { reactionV.value; eventRepo.getReactionCount(event.id) } }
+    val replyCount by remember(event.id) { derivedStateOf { replyV.value; eventRepo.getReplyCount(event.id) } }
+    val zapSats by remember(event.id) { derivedStateOf { zapV.value; eventRepo.getZapSats(event.id) } }
+    val userEmojis by remember(event.id, userPubkey) {
+        derivedStateOf { reactionV.value; userPubkey?.let { eventRepo.getUserReactionEmojis(event.id, it) } ?: emptySet() }
     }
-    val repostCount = remember(repostVersion, event.id) { eventRepo.getRepostCount(event.id) }
-    val hasUserReposted = remember(repostVersion, event.id) { eventRepo.hasUserReposted(event.id) }
-    val hasUserZapped = remember(zapVersion, event.id) { eventRepo.hasUserZapped(event.id) }
-    val reactionEmojiUrls = remember(reactionVersion, event.id) { eventRepo.getReactionEmojiUrls(event.id) }
+    val repostCount by remember(event.id) { derivedStateOf { repostV.value; eventRepo.getRepostCount(event.id) } }
+    val hasUserReposted by remember(event.id) { derivedStateOf { repostV.value; eventRepo.hasUserReposted(event.id) } }
+    val hasUserZapped by remember(event.id) { derivedStateOf { zapV.value; eventRepo.hasUserZapped(event.id) } }
+    val reactionEmojiUrls by remember(event.id) { derivedStateOf { reactionV.value; eventRepo.getReactionEmojiUrls(event.id) } }
 
     PostCard(
         event = event,

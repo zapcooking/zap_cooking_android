@@ -185,17 +185,12 @@ fun FeedScreen(
     val contentFilter by viewModel.feedContentFilter.collectAsState()
     val selectedRelay by viewModel.selectedRelay.collectAsState()
     val selectedRelaySet by viewModel.selectedRelaySet.collectAsState()
-    val replyCountVersion by viewModel.eventRepo.replyCountVersion.collectAsState()
-    val zapVersion by viewModel.eventRepo.zapVersion.collectAsState()
-    val reactionVersion by viewModel.eventRepo.reactionVersion.collectAsState()
-    val repostVersion by viewModel.eventRepo.repostVersion.collectAsState()
-    val relaySourceVersion by viewModel.eventRepo.relaySourceVersion.collectAsState()
     val followList by viewModel.contactRepo.followList.collectAsState()
+    // Engagement "version" signals are now collected per-item inside FeedItem /
+    // FeedArticleItem and funneled through derivedStateOf, so a global bump only
+    // recomposes the affected card rather than the whole list. profileVersion stays
+    // here for the screen header's own avatar lookup below.
     val profileVersion by viewModel.eventRepo.profileVersion.collectAsState()
-    val statusVersion by viewModel.eventRepo.statusVersion.collectAsState()
-    val nip05Version by viewModel.nip05Repo.version.collectAsState()
-    val pollVoteVersion by viewModel.eventRepo.pollVoteVersion.collectAsState()
-    val translationVersion by viewModel.translationRepo.version.collectAsState()
     val liveNowStreams by viewModel.liveNowStreams.collectAsState()
     val listState = rememberLazyListState()
 
@@ -973,11 +968,6 @@ fun FeedScreen(
                                         event = event,
                                         viewModel = viewModel,
                                         userPubkey = userPubkey,
-                                        profileVersion = profileVersion,
-                                        reactionVersion = reactionVersion,
-                                        replyCountVersion = replyCountVersion,
-                                        zapVersion = zapVersion,
-                                        repostVersion = repostVersion,
                                         isZapAnimating = event.id in zapAnimatingIds,
                                         isZapInProgress = event.id in zapInProgress,
                                         isInList = event.id in listedIds,
@@ -996,13 +986,6 @@ fun FeedScreen(
                                     event = event,
                                     viewModel = viewModel,
                                     userPubkey = userPubkey,
-                                    profileVersion = profileVersion,
-                                    reactionVersion = reactionVersion,
-                                    replyCountVersion = replyCountVersion,
-                                    zapVersion = zapVersion,
-                                    repostVersion = repostVersion,
-                                    relaySourceVersion = relaySourceVersion,
-                                    nip05Version = nip05Version,
                                     followList = followList,
                                     isZapAnimating = event.id in zapAnimatingIds,
                                     isZapInProgress = event.id in zapInProgress,
@@ -1026,8 +1009,6 @@ fun FeedScreen(
                                     },
                                     noteActions = noteActions,
                                     onOpenEmojiLibrary = { showEmojiLibrary = true },
-                                    translationVersion = translationVersion,
-                                    pollVoteVersion = pollVoteVersion,
                                     onPollVote = { optionIds -> viewModel.publishPollVote(event.id, optionIds) },
                                     onZapPollVote = { optionIndex -> zapPollTarget = Pair(event, optionIndex) }
                                 )
@@ -1096,13 +1077,6 @@ private fun FeedItem(
     event: NostrEvent,
     viewModel: FeedViewModel,
     userPubkey: String?,
-    profileVersion: Int,
-    reactionVersion: Int,
-    replyCountVersion: Int,
-    zapVersion: Int,
-    repostVersion: Int = 0,
-    relaySourceVersion: Int,
-    nip05Version: Int = 0,
     followList: List<cooking.zap.app.nostr.Nip02.FollowEntry> = emptyList(),
     isZapAnimating: Boolean,
     isZapInProgress: Boolean = false,
@@ -1123,80 +1097,91 @@ private fun FeedItem(
     onRelayClick: (String) -> Unit = {},
     noteActions: NoteActions? = null,
     onOpenEmojiLibrary: (() -> Unit)? = null,
-    translationVersion: Int = 0,
-    pollVoteVersion: Int = 0,
     onPollVote: (List<String>) -> Unit = {},
     onZapPollVote: (Int) -> Unit = {}
 ) {
-    val profileData = remember(profileVersion, event.pubkey) {
-        viewModel.eventRepo.getProfileData(event.pubkey)
+    val eventRepo = viewModel.eventRepo
+    // Per-event reactive engagement: collect the global "version" signals here and run
+    // every lookup through derivedStateOf. A global bump re-runs the (cheap) getters for
+    // each visible item, but derivedStateOf only invalidates readers when the computed
+    // value actually changes — so the heavy card subtree recomposes only for the event
+    // whose engagement changed, not every visible card.
+    val reactionV = eventRepo.reactionVersion.collectAsState()
+    val replyV = eventRepo.replyCountVersion.collectAsState()
+    val zapV = eventRepo.zapVersion.collectAsState()
+    val repostV = eventRepo.repostVersion.collectAsState()
+    val profileV = eventRepo.profileVersion.collectAsState()
+    val relaySrcV = eventRepo.relaySourceVersion.collectAsState()
+    val translationV = viewModel.translationRepo.version.collectAsState()
+    val pollVoteV = eventRepo.pollVoteVersion.collectAsState()
+
+    val profileData by remember(event.pubkey) {
+        derivedStateOf { profileV.value; eventRepo.getProfileData(event.pubkey) }
     }
-    val likeCount = remember(reactionVersion, event.id) {
-        viewModel.eventRepo.getReactionCount(event.id)
+    val likeCount by remember(event.id) {
+        derivedStateOf { reactionV.value; eventRepo.getReactionCount(event.id) }
     }
-    val replyCount = remember(replyCountVersion, event.id) {
-        viewModel.eventRepo.getReplyCount(event.id)
+    val replyCount by remember(event.id) {
+        derivedStateOf { replyV.value; eventRepo.getReplyCount(event.id) }
     }
-    val zapSats = remember(zapVersion, event.id) {
-        viewModel.eventRepo.getZapSats(event.id)
+    val zapSats by remember(event.id) {
+        derivedStateOf { zapV.value; eventRepo.getZapSats(event.id) }
     }
-    val userEmojis = remember(reactionVersion, event.id, userPubkey) {
-        userPubkey?.let { viewModel.eventRepo.getUserReactionEmojis(event.id, it) } ?: emptySet()
+    val userEmojis by remember(event.id, userPubkey) {
+        derivedStateOf { reactionV.value; userPubkey?.let { eventRepo.getUserReactionEmojis(event.id, it) } ?: emptySet() }
     }
-    val relayIcons = remember(relaySourceVersion, event.id) {
-        viewModel.eventRepo.getEventRelays(event.id).map { url ->
-            url to viewModel.relayInfoRepo.getIconUrl(url)
-        }
+    val relayIcons by remember(event.id) {
+        derivedStateOf { relaySrcV.value; eventRepo.getEventRelays(event.id).map { url -> url to viewModel.relayInfoRepo.getIconUrl(url) } }
     }
-    val repostTime = remember(repostVersion, event.id) {
-        viewModel.eventRepo.getRepostTime(event.id)
+    val repostTime by remember(event.id) {
+        derivedStateOf { repostV.value; eventRepo.getRepostTime(event.id) }
     }
-    val reactionDetails = remember(reactionVersion, event.id) {
-        viewModel.eventRepo.getReactionDetails(event.id)
+    val reactionDetails by remember(event.id) {
+        derivedStateOf { reactionV.value; eventRepo.getReactionDetails(event.id) }
     }
-    val zapDetails = remember(zapVersion, event.id) {
-        viewModel.eventRepo.getZapDetails(event.id)
+    val zapDetails by remember(event.id) {
+        derivedStateOf { zapV.value; eventRepo.getZapDetails(event.id) }
     }
-    val repostCount = remember(repostVersion, event.id) {
-        viewModel.eventRepo.getRepostCount(event.id)
+    val repostCount by remember(event.id) {
+        derivedStateOf { repostV.value; eventRepo.getRepostCount(event.id) }
     }
-    val repostPubkeys = remember(repostVersion, event.id) {
-        viewModel.eventRepo.getReposterPubkeys(event.id)
+    val repostPubkeys by remember(event.id) {
+        derivedStateOf { repostV.value; eventRepo.getReposterPubkeys(event.id) }
     }
-    val hasUserReposted = remember(repostVersion, event.id) {
-        viewModel.eventRepo.hasUserReposted(event.id)
+    val hasUserReposted by remember(event.id) {
+        derivedStateOf { repostV.value; eventRepo.hasUserReposted(event.id) }
     }
-    val hasUserZapped = remember(zapVersion, event.id) {
-        viewModel.eventRepo.hasUserZapped(event.id)
+    val hasUserZapped by remember(event.id) {
+        derivedStateOf { zapV.value; eventRepo.hasUserZapped(event.id) }
     }
     val isFollowing = remember(followList, event.pubkey) {
         viewModel.contactRepo.isFollowing(event.pubkey)
     }
     val resolvedEmojis by viewModel.customEmojiRepo.resolvedEmojis.collectAsState()
     val unicodeEmojis by viewModel.customEmojiRepo.sortedUnicodeEmojis.collectAsState()
-    val eventReactionEmojiUrls = remember(reactionVersion, event.id) {
-        viewModel.eventRepo.getReactionEmojiUrls(event.id)
+    val eventReactionEmojiUrls by remember(event.id) {
+        derivedStateOf { reactionV.value; eventRepo.getReactionEmojiUrls(event.id) }
     }
-    val translationState = remember(translationVersion, event.id) {
-        viewModel.translationRepo.getState(event.id)
+    val translationState by remember(event.id) {
+        derivedStateOf { translationV.value; viewModel.translationRepo.getState(event.id) }
     }
-    val pollVoteCounts = remember(pollVoteVersion, event.id) {
-        if (event.kind == 1068) viewModel.eventRepo.getPollVoteCounts(event.id) else emptyMap()
+    val pollVoteCounts by remember(event.id) {
+        derivedStateOf { pollVoteV.value; if (event.kind == 1068) eventRepo.getPollVoteCounts(event.id) else emptyMap() }
     }
-    val pollTotalVotes = remember(pollVoteVersion, event.id) {
-        if (event.kind == 1068) viewModel.eventRepo.getPollTotalVotes(event.id) else 0
+    val pollTotalVotes by remember(event.id) {
+        derivedStateOf { pollVoteV.value; if (event.kind == 1068) eventRepo.getPollTotalVotes(event.id) else 0 }
     }
-    val userPollVotes = remember(pollVoteVersion, event.id) {
-        if (event.kind == 1068) viewModel.eventRepo.getUserPollVotes(event.id) else emptyList()
+    val userPollVotes by remember(event.id) {
+        derivedStateOf { pollVoteV.value; if (event.kind == 1068) eventRepo.getUserPollVotes(event.id) else emptyList() }
     }
-    val zapPollSatsCounts = remember(pollVoteVersion, event.id) {
-        if (event.kind == 6969) viewModel.eventRepo.getZapPollSatsCounts(event.id) else emptyMap()
+    val zapPollSatsCounts by remember(event.id) {
+        derivedStateOf { pollVoteV.value; if (event.kind == 6969) eventRepo.getZapPollSatsCounts(event.id) else emptyMap() }
     }
-    val zapPollTotalSats = remember(pollVoteVersion, event.id) {
-        if (event.kind == 6969) viewModel.eventRepo.getZapPollTotalSats(event.id) else 0L
+    val zapPollTotalSats by remember(event.id) {
+        derivedStateOf { pollVoteV.value; if (event.kind == 6969) eventRepo.getZapPollTotalSats(event.id) else 0L }
     }
-    val userZapPollVote = remember(pollVoteVersion, event.id) {
-        if (event.kind == 6969) viewModel.eventRepo.getUserZapPollVote(event.id) else null
+    val userZapPollVote by remember(event.id) {
+        derivedStateOf { pollVoteV.value; if (event.kind == 6969) eventRepo.getUserZapPollVote(event.id) else null }
     }
     if (isGalleryEvent(event)) {
         GalleryCard(
@@ -1315,11 +1300,6 @@ private fun FeedArticleItem(
     event: NostrEvent,
     viewModel: FeedViewModel,
     userPubkey: String?,
-    profileVersion: Int,
-    reactionVersion: Int,
-    replyCountVersion: Int,
-    zapVersion: Int,
-    repostVersion: Int,
     isZapAnimating: Boolean,
     isZapInProgress: Boolean = false,
     isInList: Boolean = false,
@@ -1340,22 +1320,31 @@ private fun FeedArticleItem(
     val publishedAt = remember(event) {
         event.tags.firstOrNull { it.size >= 2 && it[0] == "published_at" }?.get(1)?.toLongOrNull()
     }
-    val profileData = remember(profileVersion, event.pubkey) {
-        viewModel.eventRepo.getProfileData(event.pubkey)
+    val eventRepo = viewModel.eventRepo
+    // Per-event reactive engagement (see FeedItem) — global bumps only recompose the
+    // article card whose value changed.
+    val reactionV = eventRepo.reactionVersion.collectAsState()
+    val replyV = eventRepo.replyCountVersion.collectAsState()
+    val zapV = eventRepo.zapVersion.collectAsState()
+    val repostV = eventRepo.repostVersion.collectAsState()
+    val profileV = eventRepo.profileVersion.collectAsState()
+
+    val profileData by remember(event.pubkey) {
+        derivedStateOf { profileV.value; eventRepo.getProfileData(event.pubkey) }
     }
-    val likeCount = remember(reactionVersion, event.id) { viewModel.eventRepo.getReactionCount(event.id) }
-    val replyCount = remember(replyCountVersion, event.id) { viewModel.eventRepo.getReplyCount(event.id) }
-    val zapSats = remember(zapVersion, event.id) { viewModel.eventRepo.getZapSats(event.id) }
-    val userEmojis = remember(reactionVersion, event.id, userPubkey) {
-        userPubkey?.let { viewModel.eventRepo.getUserReactionEmojis(event.id, it) } ?: emptySet()
+    val likeCount by remember(event.id) { derivedStateOf { reactionV.value; eventRepo.getReactionCount(event.id) } }
+    val replyCount by remember(event.id) { derivedStateOf { replyV.value; eventRepo.getReplyCount(event.id) } }
+    val zapSats by remember(event.id) { derivedStateOf { zapV.value; eventRepo.getZapSats(event.id) } }
+    val userEmojis by remember(event.id, userPubkey) {
+        derivedStateOf { reactionV.value; userPubkey?.let { eventRepo.getUserReactionEmojis(event.id, it) } ?: emptySet() }
     }
-    val repostCount = remember(repostVersion, event.id) { viewModel.eventRepo.getRepostCount(event.id) }
-    val hasUserReposted = remember(repostVersion, event.id) { viewModel.eventRepo.hasUserReposted(event.id) }
-    val hasUserZapped = remember(zapVersion, event.id) { viewModel.eventRepo.hasUserZapped(event.id) }
+    val repostCount by remember(event.id) { derivedStateOf { repostV.value; eventRepo.getRepostCount(event.id) } }
+    val hasUserReposted by remember(event.id) { derivedStateOf { repostV.value; eventRepo.hasUserReposted(event.id) } }
+    val hasUserZapped by remember(event.id) { derivedStateOf { zapV.value; eventRepo.hasUserZapped(event.id) } }
     val resolvedEmojis by viewModel.customEmojiRepo.resolvedEmojis.collectAsState()
     val unicodeEmojis by viewModel.customEmojiRepo.sortedUnicodeEmojis.collectAsState()
-    val eventReactionEmojiUrls = remember(reactionVersion, event.id) {
-        viewModel.eventRepo.getReactionEmojiUrls(event.id)
+    val eventReactionEmojiUrls by remember(event.id) {
+        derivedStateOf { reactionV.value; eventRepo.getReactionEmojiUrls(event.id) }
     }
 
     val displayName = profileData?.displayString
