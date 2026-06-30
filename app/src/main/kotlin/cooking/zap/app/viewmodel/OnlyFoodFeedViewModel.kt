@@ -224,10 +224,15 @@ class OnlyFoodFeedViewModel : ViewModel() {
             // order (Correction 1 — the mid-build-reconnect interleave). PAGE is
             // append-only and keeps the existing settled order. Done after
             // cancelAndJoin so the previous load can't write into a just-reset cache.
-            if (load == Load.INITIAL || load == Load.REFRESH) {
-                state.unsettle()
-                _wotDropped.value = 0  // mirror the home feed: WoT-drop count is per-load
-            }
+            if (load == Load.INITIAL || load == Load.REFRESH) state.unsettle()
+            // Reset the WoT-drop counter ONLY on an explicit refresh (a genuine
+            // reload). The initial load starts from the StateFlow's 0, so no reset is
+            // needed there — and resetting on INITIAL would race seedGlobalFromCache()'s
+            // concurrent counting (its accept() loop runs after a Dispatchers.IO hop)
+            // and would also wipe live counts on every auto-recover/reconnect re-submit.
+            // On REFRESH the cache seed is long done and the prior collector has been
+            // cancelAndJoin'd above, so reset-then-count is clean.
+            if (load == Load.REFRESH) _wotDropped.value = 0
 
             val follows: Set<String>? = if (mode == Mode.FOLLOWING) {
                 d.contactRepo.getFollowList().map { it.pubkey }.toSet()

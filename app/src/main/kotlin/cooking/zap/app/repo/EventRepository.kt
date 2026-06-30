@@ -139,8 +139,9 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
     // by the drawer OnlyFoodFeedViewModel — the SAME instance, so the two surfaces
     // can't drift. Deps injected (read at call time, so the lazily-set repos resolve
     // correctly) so the decision is pure. [isOnlyFoodWotFiltered] carries the
-    // !networkReady no-op.
-    val onlyFoodFilter = OnlyFoodFilter(
+    // !networkReady no-op. `internal`: shared with OnlyFoodFeedViewModel within the
+    // app module, not part of EventRepository's public API.
+    internal val onlyFoodFilter = OnlyFoodFilter(
         isUserBlocked = { muteRepo?.isBlocked(it) == true },
         containsMutedWord = { muteRepo?.containsMutedWord(it) == true },
         isThreadMuted = { muteRepo?.isThreadMuted(it) == true },
