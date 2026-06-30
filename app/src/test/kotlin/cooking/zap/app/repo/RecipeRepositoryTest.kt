@@ -3,6 +3,7 @@ package cooking.zap.app.repo
 import cooking.zap.app.nostr.NostrEvent
 import cooking.zap.app.nostr.RecipeParser
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -113,4 +114,32 @@ class RecipeRepositoryTest {
         content = "",
         sig = "0".repeat(128),
     )
+
+    // ---- hasRecipeFeedTag: cache-first paint must mirror the live tag scoping ----
+
+    private fun withTags(vararg tTags: String): NostrEvent = NostrEvent(
+        id = "i".repeat(64),
+        pubkey = "p".repeat(64),
+        created_at = 1,
+        kind = RecipeParser.RECIPE_KIND,
+        tags = listOf(listOf("d", "x")) + tTags.map { listOf("t", it) },
+        content = "",
+        sig = "0".repeat(128),
+    )
+
+    @Test
+    fun hasRecipeFeedTag_matchesRecipeHashtags_caseInsensitive() {
+        // The cache paint must accept exactly what the live filter (tTags =
+        // RECIPE_HASHTAGS) would return — no wider, no narrower.
+        assertTrue(hasRecipeFeedTag(withTags("zapcooking")))
+        assertTrue(hasRecipeFeedTag(withTags("nostrcooking")))
+        assertTrue(hasRecipeFeedTag(withTags("ZapCooking"))) // case-insensitive
+        assertTrue(hasRecipeFeedTag(withTags("food", "nostrcooking"))) // a recipe tag among others
+    }
+
+    @Test
+    fun hasRecipeFeedTag_rejectsNonRecipeTaggedEvents() {
+        assertFalse(hasRecipeFeedTag(withTags("food"))) // long-form article, not a recipe
+        assertFalse(hasRecipeFeedTag(withTags()))       // no t-tags
+    }
 }
