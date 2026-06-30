@@ -39,27 +39,38 @@ class MemoriesViewModel : ViewModel() {
     /** True once a load has completed (so the UI can distinguish "loading" from "empty"). */
     val loaded: StateFlow<Boolean> = _loaded
 
+    /**
+     * Idempotent per account. Re-initializing with a DIFFERENT pubkey (an account
+     * switch while this screen stays alive) resets the state and reloads for the
+     * new account, so it never shows the prior account's memories. Same-account
+     * re-calls (recomposition) are a no-op.
+     */
     fun init(repo: MemoriesRepository, pubkey: String?) {
-        if (this.repo != null) return
+        if (this.repo === repo && this.pubkey == pubkey) return
         this.repo = repo
         this.pubkey = pubkey
+        // Drop the prior account's data so the switch can't flash stale memories.
+        _groups.value = emptyList()
+        _loaded.value = false
+        _refreshNotice.value = null
         load()
     }
 
     fun load() {
         val repo = repo ?: return
         val pk = pubkey ?: return
-        if (_loading.value) return
         _loading.value = true
         viewModelScope.launch {
             try {
                 val result = withContext(Dispatchers.IO) { repo.getMemoriesCached(pk) }
+                // Discard if an account switch superseded this load mid-flight.
+                if (pk != pubkey) return@launch
                 _groups.value = result.sortedBy { it.yearsAgo }
                 _loaded.value = true
             } catch (_: Exception) {
                 // Never-throw contract: leave whatever we have.
             } finally {
-                _loading.value = false
+                if (pk == pubkey) _loading.value = false
             }
         }
     }
@@ -73,6 +84,7 @@ class MemoriesViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 val (fresh, refreshed) = withContext(Dispatchers.IO) { repo.refreshMemories(pk) }
+                if (pk != pubkey) return@launch // account switched mid-refresh — discard
                 if (refreshed) {
                     _groups.value = fresh.sortedBy { it.yearsAgo }
                     _loaded.value = true
@@ -81,9 +93,9 @@ class MemoriesViewModel : ViewModel() {
                     _refreshNotice.value = "Couldn't refresh — showing cached memories."
                 }
             } catch (_: Exception) {
-                _refreshNotice.value = "Couldn't refresh — showing cached memories."
+                if (pk == pubkey) _refreshNotice.value = "Couldn't refresh — showing cached memories."
             } finally {
-                _refreshing.value = false
+                if (pk == pubkey) _refreshing.value = false
             }
         }
     }

@@ -263,10 +263,26 @@ class MemoriesRepository(
      * day) — but only when at least one window received EOSE.
      */
     suspend fun getMemoriesCached(pubkey: String, now: Calendar = Calendar.getInstance()): List<MemoryGroup> {
-        readCache(pubkey, now)?.let { return it }
+        readCache(pubkey, now)?.let { cached ->
+            // The live fetch primes EventRepository per event; the cache-read path must
+            // do the same so cache-first PostCards resolve profiles (and other
+            // eventRepo-backed lookups) instead of rendering with missing author data.
+            primeEventCache(cached)
+            return cached
+        }
         val groups = fetchMemories(pubkey, now)
         if (shouldCacheMemories(groups)) writeCache(pubkey, now, groups)
         return groups
+    }
+
+    /** Seed the shared event store from cached memory events (cache-first parity). */
+    private fun primeEventCache(groups: List<MemoryGroup>) {
+        for (group in groups) {
+            for (ev in group.events) {
+                eventRepo.cacheEvent(ev)
+                eventRepo.requestProfileIfMissing(ev.pubkey)
+            }
+        }
     }
 
     /**

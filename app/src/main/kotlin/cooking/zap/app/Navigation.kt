@@ -3564,8 +3564,11 @@ fun WispNavHost(
 
         composable(Routes.MEMORIES) {
             val memoriesViewModel: cooking.zap.app.viewmodel.MemoriesViewModel = viewModel()
-            LaunchedEffect(Unit) {
-                memoriesViewModel.init(feedViewModel.memoriesRepo, feedViewModel.getUserPubkey())
+            // Key by the active pubkey so init re-runs on an account switch while this
+            // destination stays alive (the VM's init resets + reloads for the new account).
+            val memoriesPubkey = feedViewModel.getUserPubkey()
+            LaunchedEffect(memoriesPubkey) {
+                memoriesViewModel.init(feedViewModel.memoriesRepo, memoriesPubkey)
             }
 
             var memoriesZapTarget by remember { mutableStateOf<NostrEvent?>(null) }
@@ -3658,7 +3661,7 @@ fun WispNavHost(
             cooking.zap.app.ui.screen.MemoriesScreen(
                 viewModel = memoriesViewModel,
                 eventRepo = feedViewModel.eventRepo,
-                userPubkey = feedViewModel.getUserPubkey(),
+                userPubkey = memoriesPubkey,
                 noteActions = memoriesNoteActions,
                 onBack = { navController.popBackStack() },
                 zapAnimatingIds = memoriesZapAnimatingIds,
