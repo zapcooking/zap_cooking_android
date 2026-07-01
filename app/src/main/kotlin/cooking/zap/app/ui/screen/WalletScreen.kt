@@ -1326,8 +1326,7 @@ private fun WalletHomeContent(
                     if (fiat != null) {
                         Text(
                             fiat,
-                            style = MaterialTheme.typography.displayLarge,
-                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.displayLarge.copy(fontWeight = FontWeight.Bold),
                             color = MaterialTheme.colorScheme.onSurface
                         )
                     } else {
@@ -1336,8 +1335,7 @@ private fun WalletHomeContent(
                         // doesn't show a blank or a placeholder.
                         Text(
                             "%,d".format(balanceSats),
-                            style = MaterialTheme.typography.displayLarge,
-                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.displayLarge.copy(fontWeight = FontWeight.Bold),
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Spacer(Modifier.height(4.dp))
@@ -1356,15 +1354,13 @@ private fun WalletHomeContent(
                     if (fiatMode) {
                         Text(
                             AmountFormatter.formatShort(balanceSats, context),
-                            style = MaterialTheme.typography.displayLarge,
-                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.displayLarge.copy(fontWeight = FontWeight.Bold),
                             color = MaterialTheme.colorScheme.onSurface
                         )
                     } else {
                         Text(
                             "%,d".format(balanceSats),
-                            style = MaterialTheme.typography.displayLarge,
-                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.displayLarge.copy(fontWeight = FontWeight.Bold),
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Spacer(Modifier.height(4.dp))
