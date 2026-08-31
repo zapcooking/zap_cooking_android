@@ -298,7 +298,6 @@ class SparkRepository(
 
                 val config = defaultConfig(Network.MAINNET)
                 config.apiKey = BREEZ_API_KEY
-                config.supportLnurlVerify = true
 
                 val seed = Seed.Mnemonic(mnemonic, null)
                 val request = ConnectRequest(
@@ -601,7 +600,7 @@ class SparkRepository(
         try {
             val instance = sdk ?: return@withContext Result.failure(Exception("Not connected"))
             val response = instance.receivePayment(
-                ReceivePaymentRequest(ReceivePaymentMethod.BitcoinAddress)
+                ReceivePaymentRequest(ReceivePaymentMethod.BitcoinAddress(newAddress = null))
             )
             Result.success(response.paymentRequest)
         } catch (e: Exception) {
