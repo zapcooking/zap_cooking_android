@@ -338,7 +338,7 @@ member a members-only wall for two weeks (issue #247). **Current state
 
 | Endpoint | Auth | Android helper |
 |---|---|---|
-| `POST /api/zappy`, `/zappy/scan`, `/zappy/note-review`, `/zappy/meal-plan` | **NIP-98**, body-hash bound; body `pubkey` ignored | `authedRaw` |
+| `POST /api/zappy`, `/api/zappy/scan`, `/api/zappy/note-review`, `/api/zappy/meal-plan` | **NIP-98**, body-hash bound; body `pubkey` ignored | `authedRaw` |
 | `POST /api/extract-recipe` (image/text) | **NIP-98** | `authedPost` |
 | `POST /api/extract-recipe/public` | none (URL only, per-IP cap) | `postJson` |
 | `POST /api/nourish` | **pubkey-in-body** (the last one; `requireMembership(body.pubkey)`, header ignored) | bare compute call |
