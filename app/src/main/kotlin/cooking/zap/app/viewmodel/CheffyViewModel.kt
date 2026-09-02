@@ -8,6 +8,7 @@ import cooking.zap.app.api.CheffyRequest
 import cooking.zap.app.api.CheffyResult
 import cooking.zap.app.api.ZapCookingApi
 import cooking.zap.app.cheffy.Cheffy
+import cooking.zap.app.nostr.NostrSigner
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -64,13 +65,15 @@ class CheffyViewModel : ViewModel() {
     }
 
     /**
-     * Send a turn. [pubkey] is the signing account's (READ_ONLY is gated by the
-     * screen and never reaches here). For [CheffyMode.HUNGRY], [content] is
-     * ignored and the server supplies the prompt.
+     * Send a turn. [signer] is the account's [NostrSigner] — it signs the
+     * NIP-98 header that carries identity to the membership gate (READ_ONLY
+     * has none; the screen gates that and it never reaches here). For
+     * [CheffyMode.HUNGRY], [content] is ignored and the server supplies the
+     * prompt.
      */
-    fun send(content: String, mode: CheffyMode, api: ZapCookingApi, pubkey: String?) {
+    fun send(content: String, mode: CheffyMode, api: ZapCookingApi, signer: NostrSigner?) {
         if (_loading.value) return
-        if (pubkey == null) return // READ_ONLY — gated upstream
+        if (signer == null) return // READ_ONLY — gated upstream
         val text = content.trim().take(Cheffy.MAX_PROMPT_CHARS)
         if (mode != CheffyMode.HUNGRY && text.isEmpty()) return
 
@@ -82,17 +85,17 @@ class CheffyViewModel : ViewModel() {
 
         val promptForApi = if (mode == CheffyMode.HUNGRY) "" else text
         val expectRecipe = mode == CheffyMode.HUNGRY || Cheffy.looksLikeRecipeRequest(text)
-        dispatch(promptForApi, mode, history, expectRecipe, api, pubkey)
+        dispatch(promptForApi, mode, history, expectRecipe, api, signer)
     }
 
     /** Re-send the last turn after an error (drop the error bubble first). */
-    fun retry(api: ZapCookingApi, pubkey: String?) {
-        if (_loading.value || pubkey == null) return
+    fun retry(api: ZapCookingApi, signer: NostrSigner?) {
+        if (_loading.value || signer == null) return
         val (prompt, mode) = lastTurn ?: return
         _thread.update { list -> list.filterNot { it.kind == Kind.ERROR } }
         val history = buildHistory(excludeTrailingUser = true)
         val expectRecipe = mode == CheffyMode.HUNGRY || Cheffy.looksLikeRecipeRequest(prompt)
-        dispatch(prompt, mode, history, expectRecipe, api, pubkey)
+        dispatch(prompt, mode, history, expectRecipe, api, signer)
     }
 
     private fun dispatch(
@@ -101,7 +104,7 @@ class CheffyViewModel : ViewModel() {
         history: List<CheffyMessage>,
         expectRecipe: Boolean,
         api: ZapCookingApi,
-        pubkey: String,
+        signer: NostrSigner,
     ) {
         _loading.value = true
         val statusLine = Cheffy.pickLine(
@@ -123,7 +126,8 @@ class CheffyViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 val result = api.sendCheffy(
-                    CheffyRequest(prompt = prompt, mode = mode.wire, pubkey = pubkey, messages = history),
+                    CheffyRequest(prompt = prompt, mode = mode.wire, messages = history),
+                    signer,
                 )
                 val resolved = when (result) {
                     is CheffyResult.Reply -> {
