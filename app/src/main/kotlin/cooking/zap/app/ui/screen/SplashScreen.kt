@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -153,12 +154,16 @@ fun SplashScreen(
     onAccountCreated: () -> Unit,
     onLoggedIn: () -> Unit,
     onContinueWithGoogle: () -> Unit,
-    onCancel: (() -> Unit)? = null
+    onCancel: (() -> Unit)? = null,
+    // Adding an account opens sign-in straight away rather than making the
+    // user tap through the intro, which is first-run framing. Dismissing the
+    // sheet falls back to this screen, where the Cancel pill lives.
+    startOnSignIn: Boolean = false
 ) {
     val foodPhotos by viewModel.foodPhotos.collectAsState()
     val context = LocalContext.current
 
-    var showNostrSheet by remember { mutableStateOf(false) }
+    var showNostrSheet by remember { mutableStateOf(startOnSignIn) }
     var showQrScanner by remember { mutableStateOf(false) }
 
     var signerLoginComplete by remember { mutableStateOf(false) }
@@ -235,17 +240,22 @@ fun SplashScreen(
 
         // Cancel pill — only shown when adding an account over an existing session
         if (onCancel != null) {
+            // Pinned to the top-start corner so it's always reachable. At
+            // BottomCenter with a fixed 120dp inset it landed on top of the
+            // action buttons, and white-on-15%-white read as scenery rather
+            // than a button.
             Text(
                 text = stringResource(R.string.btn_cancel),
                 style = MaterialTheme.typography.labelLarge,
-                color = Color.White,
+                color = Color.Black,
                 modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 120.dp)
+                    .align(Alignment.TopStart)
+                    .statusBarsPadding()
+                    .padding(start = 16.dp, top = 16.dp)
                     .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.15f))
+                    .background(Color.White.copy(alpha = 0.92f))
                     .clickable(onClick = onCancel)
-                    .padding(horizontal = 28.dp, vertical = 12.dp)
+                    .padding(horizontal = 20.dp, vertical = 8.dp)
             )
         }
 
