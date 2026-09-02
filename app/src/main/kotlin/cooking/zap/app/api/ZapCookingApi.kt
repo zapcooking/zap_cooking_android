@@ -156,9 +156,11 @@ class ZapCookingApi(
     }
 
     /**
-     * Unauthenticated JSON POST on `Dispatchers.IO`. The Phase 2 AI endpoints
-     * gate on a client-supplied `pubkey` in the body (not NIP-98 — see build
-     * doc §Phase 2), so they use this rather than [authedPost]. Non-2xx throws
+     * Unauthenticated JSON POST on `Dispatchers.IO`, for endpoints that take
+     * no identity at all (today: `/api/extract-recipe/public`). Any
+     * member-gated endpoint belongs on [authedPost]/[authedRaw] — do not add
+     * a pubkey-in-body caller here without re-verifying the live server
+     * contract (see [computeNourish] for the one remaining case). Non-2xx throws
      * [ZapCookingApiException] carrying the HTTP code + body, so callers can
      * distinguish 400 (bad URL) / 429 (rate-limited) / 403 (membership).
      */
@@ -270,7 +272,12 @@ class ZapCookingApi(
 
     /**
      * `POST /api/nourish` — member-gated compute (concern 2.4b). pubkey-in-body
-     * (not NIP-98, same as the other AI endpoints). The response carries the
+     * — the server's `requireMembership(body.pubkey)` still trusts the body and
+     * ignores any `Authorization` header (verified against frontend `main` and
+     * production on 2026-09-01). This is now the LAST AI endpoint on that
+     * shape: `/api/zappy`, `/api/zappy/scan` and `/api/extract-recipe` all
+     * moved to NIP-98. When `/api/nourish` follows, swap this to [authedRaw]
+     * exactly as [sendCheffy] did (issue #247). The response carries the
      * score directly, so we parse it here (no pantry re-read); the server also
      * publishes to pantry for future viewers. Uses the long-timeout compute
      * client — LLM scoring + the awaited pantry publish routinely exceed 15s.
@@ -310,46 +317,45 @@ class ZapCookingApi(
     /**
      * `POST /api/zappy` — Cheffy, the member-gated kitchen-companion chat
      * (concern 2.3; endpoint stays `/zappy` for back-compat, the feature is
-     * "Cheffy"). pubkey-in-body (not NIP-98, same as the other AI endpoints).
+     * "Cheffy"). **NIP-98 with body-hash binding** — the server has required
+     * it since frontend commit 04cf67cd (2026-08-17): identity comes from the
+     * verified `Authorization` header and a body `pubkey` is ignored, so
+     * [CheffyRequest] carries none. Goes through [authedRaw] (header cache +
+     * one silent re-sign-and-retry on a 401). The body is serialized exactly
+     * once: that String is what we sign and what we send — re-serializing
+     * between the two would 401 on the payload hash.
+     *
      * **Stateless full-history**: the client passes the live thread
      * ([CheffyRequest.messages]) every request — the server keeps no session.
      * Whole-response (no streaming), so it uses the long-timeout compute client
-     * — `gpt-4.1-mini` replies routinely exceed the general 15s read timeout.
-     * 403 → [CheffyResult.MembersOnly], mirroring [computeNourish].
+     * — replies routinely exceed the general 15s read timeout.
+     *
+     * Status mapping lives in [mapCheffyResponse] (403 →
+     * [CheffyResult.MembersOnly]). A declined/cancelled signer
+     * ([SignerRejectedException] / [SignerCancelledException]) becomes a
+     * [CheffyResult.Error] with signer copy, not a "network error".
      */
-    suspend fun sendCheffy(request: CheffyRequest): CheffyResult =
-        withContext(Dispatchers.IO) {
-            try {
-                val bodyString = json.encodeToString(CheffyRequest.serializer(), request)
-                val httpRequest = Request.Builder()
-                    .url("$baseUrl/api/zappy")
-                    .post(bodyString.toRequestBody(jsonMediaType))
-                    .build()
-                HttpClientFactory.getComputeClient().newCall(httpRequest).execute().use { resp ->
-                    val body = resp.body?.string().orEmpty()
-                    if (resp.code == 403) return@withContext CheffyResult.MembersOnly
-                    // The server reports failures as { ok:false, error } even on
-                    // a 200, so parse the body rather than trusting the status.
-                    val obj = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull()
-                        ?: return@withContext CheffyResult.Error(parseError(body) ?: "Cheffy could not respond.")
-                    val ok = obj["ok"]?.let { it.toString() == "true" } == true
-                    if (!resp.isSuccessful || !ok) {
-                        val msg = obj["error"]?.let { runCatching { it.jsonPrimitive.content }.getOrNull() }
-                            ?: parseError(body)
-                        return@withContext CheffyResult.Error(msg ?: "Cheffy could not respond.")
-                    }
-                    val output = obj["output"]?.let { runCatching { it.jsonPrimitive.content }.getOrNull() }?.trim()
-                    if (output.isNullOrEmpty()) {
-                        return@withContext CheffyResult.Error("Cheffy went quiet. Please try again.")
-                    }
-                    CheffyResult.Reply(output)
-                }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                CheffyResult.Error("Network error — please try again.")
-            }
+    suspend fun sendCheffy(request: CheffyRequest, signer: NostrSigner): CheffyResult {
+        val bodyString = json.encodeToString(CheffyRequest.serializer(), request)
+        return try {
+            val resp = authedRaw(
+                method = "POST",
+                url = "$baseUrl/api/zappy",
+                bodyString = bodyString,
+                signer = signer,
+                httpClient = HttpClientFactory.getComputeClient(),
+            )
+            mapCheffyResponse(resp.code, resp.body)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: SignerRejectedException) {
+            CheffyResult.Error(CHEFFY_SIGN_FAILED_MESSAGE)
+        } catch (e: SignerCancelledException) {
+            CheffyResult.Error(CHEFFY_SIGN_FAILED_MESSAGE)
+        } catch (e: Exception) {
+            CheffyResult.Error("Network error — please try again.")
         }
+    }
 
     // --- Cheffy Note Review (CHEFFY_NOTE_REVIEW_PLAN.md, Phase 1) ---
 
@@ -612,6 +618,14 @@ class ZapCookingApi(
         private const val MEAL_PLAN_NOT_MEMBER_FALLBACK =
             "Cheffy is available to Cook+ members."
 
+        /** Signer declined or cancelled the NIP-98 approval (Amber). */
+        internal const val CHEFFY_SIGN_FAILED_MESSAGE =
+            "Cheffy needs your signer's approval to cook. Try again and approve the request."
+
+        /** Server rejected the NIP-98 header even after the one silent re-sign. */
+        internal const val CHEFFY_AUTH_REJECTED_MESSAGE =
+            "Cheffy couldn't verify your key. Check your device clock and try again."
+
         /** Companion-scope decoder for the pure response-mapping helpers below. */
         private val lenientJson = Json { ignoreUnknownKeys = true }
 
@@ -621,6 +635,29 @@ class ZapCookingApi(
             } catch (_: Exception) {
                 null
             }
+
+        /**
+         * Map a `/api/zappy` response onto [CheffyResult]. Pure — unit-tested
+         * against the server's real shapes. 403 → [CheffyResult.MembersOnly]
+         * (the membership gate); 401 → a header rejected even after
+         * [authedRaw]'s re-sign, surfaced with signer copy. The server
+         * reports failures as `{ ok:false, error }` even on a 200, so the body
+         * is parsed rather than trusting the status alone.
+         */
+        internal fun mapCheffyResponse(code: Int, body: String): CheffyResult {
+            if (code == 403) return CheffyResult.MembersOnly
+            if (code == 401) return CheffyResult.Error(CHEFFY_AUTH_REJECTED_MESSAGE)
+            val obj = runCatching { lenientJson.parseToJsonElement(body).jsonObject }.getOrNull()
+                ?: return CheffyResult.Error("Cheffy could not respond.")
+            val ok = obj["ok"]?.let { runCatching { it.jsonPrimitive.content }.getOrNull() } == "true"
+            if (code !in 200..299 || !ok) {
+                val msg = obj["error"]?.let { runCatching { it.jsonPrimitive.content }.getOrNull() }
+                return CheffyResult.Error(msg ?: "Cheffy could not respond.")
+            }
+            val output = obj["output"]?.let { runCatching { it.jsonPrimitive.content }.getOrNull() }?.trim()
+            if (output.isNullOrEmpty()) return CheffyResult.Error("Cheffy went quiet. Please try again.")
+            return CheffyResult.Reply(output)
+        }
 
         /**
          * Map a note-review response onto [NoteReviewResult]. Pure —
@@ -851,8 +888,10 @@ enum class CheffyMode(val wire: String) { CHAT("chat"), HUNGRY("hungry") }
 data class CheffyMessage(val role: String, val content: String)
 
 /**
- * `POST /api/zappy` request (concern 2.3). [pubkey] is the signed-in user's
- * (membership gate). [messages] is the live thread (stateless — re-sent every
+ * `POST /api/zappy` request (concern 2.3). Identity is NOT in the body: the
+ * membership gate reads the signing pubkey from the NIP-98 `Authorization`
+ * header ([ZapCookingApi.sendCheffy]), and the server ignores a body
+ * `pubkey`. [messages] is the live thread (stateless — re-sent every
  * request; server keeps no session). For [CheffyMode.HUNGRY] the server
  * supplies its own prompt, so [prompt] is empty.
  */
@@ -860,15 +899,15 @@ data class CheffyMessage(val role: String, val content: String)
 data class CheffyRequest(
     val prompt: String,
     val mode: String,
-    val pubkey: String,
     val messages: List<CheffyMessage>,
 )
 
 /** Outcome of [ZapCookingApi.sendCheffy]. Mirrors [NourishComputeResult]. */
 sealed interface CheffyResult {
     data class Reply(val output: String) : CheffyResult
-    /** 403 — the account isn't an active member. */
+    /** 403 — the NIP-98-verified account isn't an active member. */
     object MembersOnly : CheffyResult
+    /** Anything else, including a declined signer and a rejected header (401). */
     data class Error(val message: String) : CheffyResult
 }
 

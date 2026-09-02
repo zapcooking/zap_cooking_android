@@ -3830,11 +3830,11 @@ fun WispNavHost(
                         content = text,
                         mode = mode,
                         api = feedViewModel.zapCookingApi,
-                        pubkey = feedViewModel.getUserPubkey(),
+                        signer = feedViewModel.signer,
                     )
                 },
                 onRetry = {
-                    cheffyViewModel.retry(feedViewModel.zapCookingApi, feedViewModel.getUserPubkey())
+                    cheffyViewModel.retry(feedViewModel.zapCookingApi, feedViewModel.signer)
                 },
                 onSaveRecipe = { content ->
                     // Transient hand-off: pre-fill the compose editor with Cheffy's

@@ -326,13 +326,30 @@ app calls `zap.cooking` HTTPS endpoints; it never embeds model keys. Android
 work = API client + UI + branding + (for Sous Chef "save") a recipe-create
 pipeline.
 
-⚠️ **ARCHITECTURAL DRIFT from the kickoff assumption:** the four AI endpoints
-do **NOT** use NIP-98. They take **`pubkey` in the JSON body** and the server
-calls `hasActiveMembership(pubkey)` (an insecure, client-supplied trust model
-the web acknowledges — there's a planned `FOLLOWUPS-auth-migration` to NIP-98).
-So Android needs a **plain `postJson`** helper (no NIP-98 signing) — NOT
-`authedPost`. `getJson` (GET) + new `postJson` cover all four. NIP-98 stays
-for `membership/check-status` only. When the server migrates, swap to NIP-98.
+⚠️ **AUTH SHAPE — verify against the live server, never against prose.**
+The kickoff assumed NIP-98 everywhere; the Phase 2 build then found the AI
+endpoints took **`pubkey` in the JSON body** (`hasActiveMembership(pubkey)`,
+a client-supplied trust model the web acknowledged as temporary). The web
+has since migrated most of them: frontend `04cf67cd` (2026-08-17, "require
+NIP-98 on AI-backed and gated-content endpoints") moved `/api/zappy` and
+`/api/zappy/scan` to NIP-98 — Android missed it and served every paying
+member a members-only wall for two weeks (issue #247). **Current state
+(verified against frontend `main` + production probes, 2026-09-01):**
+
+| Endpoint | Auth | Android helper |
+|---|---|---|
+| `POST /api/zappy`, `/zappy/scan`, `/zappy/note-review`, `/zappy/meal-plan` | **NIP-98**, body-hash bound; body `pubkey` ignored | `authedRaw` |
+| `POST /api/extract-recipe` (image/text) | **NIP-98** | `authedPost` |
+| `POST /api/extract-recipe/public` | none (URL only, per-IP cap) | `postJson` |
+| `POST /api/nourish` | **pubkey-in-body** (the last one; `requireMembership(body.pubkey)`, header ignored) | bare compute call |
+| `POST /api/membership/check-status` | NIP-98 | `authedPost` |
+| `GET /api/membership`, `/api/pantry/recipes-by-week` | none | `getJson` |
+
+This is the second time a doc comment about auth shape was wrong (Sous Chef
+gating was the first). Treat every auth comment as unverified until probed:
+a bogus `Authorization: Nostr …` header answering **401** means NIP-98 is
+enforced; the same body answering identically with and without the header
+means it is ignored.
 
 **Contracts (verified against `zapcooking/frontend`):**
 
@@ -348,7 +365,10 @@ for `membership/check-status` only. When the server migrates, swap to NIP-98.
    preview until sign-in**, then save.
 
 2. **Cheffy** — `POST /api/zappy` (brand is "Cheffy"; endpoint stays `/zappy`
-   for back-compat — confirmed) + `/api/zappy/scan`.
+   for back-compat — confirmed) + `/api/zappy/scan`. **Both NIP-98** since
+   frontend `04cf67cd`; the Authorization header is optional on `/zappy` only
+   for the anonymous `experience:true` preview (3 turns/device via cookie),
+   which Android does not use.
    Body `{ prompt, mode?:'prompt'|'chat'|'hungry'|'format', pubkey?, messages?:
    {role,content}[] }` → `{ ok, output }`. Scan: `{ image:(base64), pubkey? }`.
    **Member-gated** (Pro Kitchen) when `MEMBERSHIP_ENABLED`; fail-open on the
@@ -474,10 +494,11 @@ membership link-out, `MembershipRepository` (Phase 3).
   `StateFlow<List<Message>>`, **stateless full-history** per send (maps
   non-pending/non-error msgs → `{role,content}`, mirrors the web `buildHistory`
   exactly, server-cap 12 turns + 2000-char prompt enforced client-side), "Start
-  over" clears it, no DB/Nostr. `ZapCookingApi.sendCheffy(CheffyRequest)` on
-  `getComputeClient()` (75s — whole-response, **no streaming**), mirroring
-  `computeNourish` one-to-one: `CheffyResult { Reply | MembersOnly | Error }`,
-  **403 → MembersOnly**, `ok:false`/non-2xx → Error. Wait-not-stream: a pending
+  over" clears it, no DB/Nostr. `ZapCookingApi.sendCheffy(CheffyRequest, signer)`
+  on `getComputeClient()` (75s — whole-response, **no streaming**): **NIP-98
+  via `authedRaw`** (since #247 — the server ignores a body pubkey, so
+  `CheffyRequest` carries none), `CheffyResult { Reply | MembersOnly | Error }`,
+  **403 → MembersOnly**, 401 / declined signer / `ok:false` / non-2xx → Error. Wait-not-stream: a pending
   bubble shows a `THINKING_LINES` status line (`COOKING_LINES` when a recipe is
   expected, via `looksLikeRecipeRequest`; one line picked per request, not timed
   rotation); replies render markdown;
@@ -492,7 +513,8 @@ membership link-out, `MembershipRepository` (Phase 3).
   (`PROMPT_PLACEHOLDERS`/`THINKING`/`COOKING`/`ERROR` pools + `pickLine` +
   `looksLikeStructuredRecipe`, verbatim from the web, unit-tested). Drawer entry
   "Cheffy" with the icon. Endpoint stays `/api/zappy`. Suite 98/0/0/0.
-  - **2.3b** = scan (fridge vision, `/api/zappy/scan`, base64 image).
+  - **2.3b** = scan (fridge vision, `/api/zappy/scan`, body `{ image }`,
+    **NIP-98 required** — 401 without a header; use `authedRaw`).
 - **2.3c** ✅ Cheffy Save (the hungry-mode fast-follow — one PR, SAVE only).
   A structured Cheffy reply (`looksLikeStructuredRecipe`) gains a **"Save to my
   recipes"** button that routes through the existing write spine — no new
@@ -567,7 +589,8 @@ membership link-out, `MembershipRepository` (Phase 3).
   signing account auth-and-read pantry (share-once-read-many implies yes), or
   does pantry restrict reads to active members (→ Nourish read becomes
   member-gated)? **2.4b COMPUTE** ✅ — `ZapCookingApi.computeNourish` →
-  `POST /api/nourish` (pubkey-in-body, NOT NIP-98) on a long-timeout compute
+  `POST /api/nourish` (pubkey-in-body, NOT NIP-98 — still true on 2026-09-01,
+  the last endpoint on that shape; re-probe before trusting) on a long-timeout compute
   client (`getComputeClient`, 75s — LLM + awaited pantry publish exceed the
   general 15s). **Response-direct** (no pantry re-read; the server publishes to
   pantry for future viewers). Request carries `recipePubkey`/`recipeDTag`/
@@ -604,11 +627,13 @@ Branding note: the bespoke icons (`CheffyIcon`, Sous Chef / Nourish marks) are
 SVG components — port them per-feature during each build, against the live site.
 
 **Phase 2 tracked follow-ups (don't lose these):**
-- **NIP-98 auth-migration parity.** The AI endpoints trust a client-supplied
-  `pubkey` (no signature). The web has a planned `FOLLOWUPS-auth-migration`
-  to NIP-98. When the server moves, Android swaps `postJson(pubkey-in-body)`
-  → `authedPost` (the NIP-98 spine already exists for `check-status`). Keep
-  the request models auth-agnostic so this is a one-call swap per endpoint.
+- **NIP-98 auth-migration parity.** Mostly landed server-side (frontend
+  `04cf67cd`); Android caught up for Cheffy in #247. **Only `/api/nourish`
+  still trusts a body `pubkey`.** When it moves, `computeNourish` swaps to
+  `authedRaw` exactly as `sendCheffy` did (drop `pubkey` from the request
+  model; sign the one serialized body string). Because the server gives no
+  signal other than a 403 to an anonymous caller, watch the frontend
+  `src/routes/api/nourish/+server.ts` for a `verifyNip98` import.
 - **NIP-101n — consider later** (per Seth; tracked, not scoped). Evaluate
   its relevance when the auth-migration item above is picked up; out of scope
   for the current Phase 2 build order. Specifics TBD.
