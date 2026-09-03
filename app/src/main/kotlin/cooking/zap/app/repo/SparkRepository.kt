@@ -15,6 +15,7 @@ import breez_sdk_spark.ListUnclaimedDepositsRequest
 import breez_sdk_spark.Network
 import breez_sdk_spark.OnchainConfirmationSpeed
 import breez_sdk_spark.PaymentDetails
+import breez_sdk_spark.PaymentMethod
 import breez_sdk_spark.PaymentRequest
 import breez_sdk_spark.PaymentStatus
 import breez_sdk_spark.PaymentType
@@ -567,6 +568,36 @@ class SparkRepository(
 
                     val isPending = payment.status == PaymentStatus.PENDING
 
+                    // Non-bitcoin assets. Payment.amount is documented as
+                    // "satoshis OR token base units", so a token payment's
+                    // amount must never reach the sats fields below. Property
+                    // access rather than destructuring keeps this working
+                    // across SDK versions that changed the case's arity.
+                    val tokenDetails = payment.details as? PaymentDetails.Token
+                    var assetTicker: String? = tokenDetails?.metadata?.ticker
+                    var assetAmount: String? = tokenDetails?.let {
+                        TokenAmounts.scale(payment.amount.toString(), it.metadata.decimals.toInt())
+                    }
+                    var assetFee: String? = tokenDetails?.let {
+                        val raw = payment.fees.toString()
+                        if (raw == "0") null else TokenAmounts.scale(raw, it.metadata.decimals.toInt())
+                    }
+                    // `method` is the fallback discriminator - the SDK notes
+                    // the details can be empty. Without metadata there are no
+                    // decimals to scale by, so show base units under a neutral
+                    // label rather than passing them off as sats.
+                    if (assetTicker == null && payment.method == PaymentMethod.TOKEN) {
+                        assetTicker = "tokens"
+                        assetAmount = payment.amount.toString()
+                        assetFee = payment.fees.toString().takeIf { it != "0" }
+                    }
+                    val isToken = assetTicker != null
+                    // Zero for token rows: there is no honest sats value for a
+                    // token transfer. `.toLong()` on a u128 BigInteger also
+                    // wraps silently past Long.MAX_VALUE.
+                    val satsAmount = if (isToken) 0L else payment.amount.toLong()
+                    val satsFees = if (isToken) 0L else payment.fees.toLong()
+
                     WalletTransaction(
                         type = when (payment.paymentType) {
                             PaymentType.SEND -> "outgoing"
@@ -574,13 +605,16 @@ class SparkRepository(
                         },
                         description = description,
                         paymentHash = paymentHash,
-                        amountMsats = payment.amount.toLong() * 1000,
-                        feeMsats = payment.fees.toLong() * 1000,
+                        amountMsats = satsAmount * 1000,
+                        feeMsats = satsFees * 1000,
                         createdAt = payment.timestamp.toLong(),
                         // Unconfirmed/unsettled payments have no settle time yet.
                         settledAt = if (payment.status == PaymentStatus.COMPLETED) payment.timestamp.toLong() else null,
                         pending = isPending,
-                        isOnchain = onchainTxid != null
+                        isOnchain = onchainTxid != null,
+                        assetTicker = assetTicker,
+                        assetAmount = assetAmount,
+                        assetFee = assetFee
                     )
                 }
                 Result.success(transactions)
