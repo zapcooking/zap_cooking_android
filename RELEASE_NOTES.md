@@ -1,5 +1,56 @@
 # Changelog
 
+# Changelog
+
+## [1.5.1]
+
+🔧 Cheffy reliability — Improved authentication when communicating with Cheffy so requests are handled more consistently.
+
+⚡ Better wallet reliability — Updated the Breez SDK and improved handling of pending Spark payments.
+
+🛡️ Payment protection — Updated Branta protections and hardened payment retrieval.
+
+✨ Cleaner posts — Reduced unnecessary blank space when displaying longer posts and rich content.
+
+👤 Better sign-in experience — Improved the visibility and placement of the cancel option during sign-in.
+
+
+## [1.5.0]
+
+🍳 Plan with Cheffy — Let Cheffy build your weekly meal plan using real recipes from your Zap Cooking kitchen.
+
+📅 Smarter meal planning — Choose the days and meal slots you want to plan, with support for breakfast, lunch, dinner, and other meal types.
+
+🥦 Plan around your preferences — Cheffy can account for things like maximum cooking time, vegetarian meals, and ingredients you want to exclude.
+
+👀 Preview before applying — Review Cheffy’s proposed week before it changes your planner. Existing meals can be preserved when filling open slots.
+
+🛒 Planner + grocery flow — Recipes added by Cheffy continue through the existing meal planner and grocery-list workflow.
+
+✨ Plus reliability improvements and additional testing around meal planning and recipe matching.
+
+
+## [1.4.0]
+
+🔐 Encrypted key import & export — Added NIP-49 support for password-encrypted ncryptsec keys. Import encrypted keys or create encrypted backups with improved validation and recovery tools.
+
+🛡️ Safer payments with Branta — Lightning and on-chain payment destinations can now display Branta Guardrail verification before you send.
+
+🔔 Better notifications — Notifications now open with their content expanded by default, making replies, zaps, polls, and referenced posts easier to read. A compact mode is still available in settings.
+
+⚡ Broadcast anywhere — Broadcast public notes to your relays from feeds, threads, profiles, search, notifications, and more, with confirmation showing how many relays received the note.
+
+❤️ Cleaner reactions and reposts — See who reacted or reposted with a cleaner, compact engagement view.
+
+🍳 Better recipe discovery — Recipes embedded throughout the app are now clearly identified as recipes instead of generic articles, with improved recipe and article context in comments.
+
+💬 More reliable replies — Fixed thread reply behavior so the reply composer stays connected to the note you actually opened.
+
+🔑 Improved Google sign-in — Fixed account selection, retry behavior, and several Google authentication error states.
+
+📱 Android 16 ready — Updated Zap Cooking for Android 16 / API 36 with additional compatibility and release-build improvements.
+
+
 ## [1.3.6]
 
 🍳 Edit and delete published recipes — Update your own recipes directly from Android while keeping the same recipe link, photos, and original publish date. You can also remove recipes from the recipe detail screen, and deleted recipes now stay deleted after restarting the app.
