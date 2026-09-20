@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.windowInsetsBottomHeight
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -34,7 +35,6 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.zIndex
 import cooking.zap.app.R
 import cooking.zap.app.Routes
 
@@ -43,16 +43,7 @@ private val NavBarDark = Color(0xFF1F2937)
 // reads as a distinct "alert" dot rather than blending into the iconography.
 private val UnreadDotColor = Color(0xFFFBBF24)
 private val NAV_HEIGHT = 50.dp
-private val BG_CIRCLE_SIZE = 74.dp  // background circle (perfect circle via requiredSize)
-private val ICON_SIZE = 53.dp       // zc logo inside the bg circle
-private val SIDE_ICON_SIZE = 21.dp  // the four flanking nav icons
-// How far the circle's TOP edge rises above the nav bar top edge. The circle
-// center then sits at (PROTRUSION below its top) - i.e. lower PROTRUSION = circle
-// sits lower / more in line with the side icons.
-// Must be >= BG_CIRCLE_SIZE - NAV_HEIGHT so the circle's bottom stays at/above the
-// bar's bottom edge. Going lower pushes the circle into the system navigation inset,
-// where the OS draws its nav bar over our app and crops the circle.
-private val PROTRUSION = 24.dp
+private val SIDE_ICON_SIZE = 21.dp  // every nav icon — the bar is flat now
 
 enum class BottomTab(
     val route: String,
@@ -64,9 +55,35 @@ enum class BottomTab(
 ) {
     FEED(Routes.FEED, R.string.nav_feed, null, null, R.drawable.ic_flame, R.drawable.ic_flame_outline),
     RECIPES(Routes.RECIPES, R.string.nav_recipes, null, null, R.drawable.ic_nav_recipes, R.drawable.ic_nav_recipes),
-    WALLET(Routes.WALLET, R.string.nav_wallet, null, null, R.drawable.ic_zc_wallet, R.drawable.ic_zc_wallet),
+
+    /**
+     * One glyph for both states, matching iOS — its search tab is
+     * `magnifyingglass` selected and unselected alike, with no filled/outline
+     * pair to mirror. [RECIPES] already reuses a single drawable the same way.
+     */
+    SEARCH(Routes.SEARCH, R.string.nav_search, Icons.Default.Search, Icons.Default.Search),
     MESSAGES(Routes.DM_LIST, R.string.nav_messages, null, null, R.drawable.ic_nav_chat, R.drawable.ic_nav_chat_outline),
-    NOTIFICATIONS(Routes.NOTIFICATIONS, R.string.nav_notifications, null, null, R.drawable.ic_nav_alert, R.drawable.ic_nav_alert_outline)
+    NOTIFICATIONS(Routes.NOTIFICATIONS, R.string.nav_notifications, null, null, R.drawable.ic_nav_alert, R.drawable.ic_nav_alert_outline),
+
+    /**
+     * Drawer-only, never rendered in the bar — as on iOS, where the wallet
+     * stays out of the tab bar for App Store review. Kept in the enum because
+     * navigation still routes through it.
+     */
+    WALLET(Routes.WALLET, R.string.nav_wallet, null, null, R.drawable.ic_zc_wallet, R.drawable.ic_zc_wallet);
+
+    companion object {
+        /** The five tabs rendered in the bar, in display order. */
+        val bottomBarTabs = listOf(FEED, RECIPES, SEARCH, MESSAGES, NOTIFICATIONS)
+
+        /**
+         * Read-only accounts hold no signing key and so cannot send DMs —
+         * drop Messages, keep the rest. Mirrors iOS's
+         * `bottomBarCases(watchOnly:)`.
+         */
+        fun bottomBarTabs(readOnly: Boolean) =
+            if (readOnly) bottomBarTabs - MESSAGES else bottomBarTabs
+    }
 }
 
 @Composable
@@ -98,118 +115,50 @@ fun WispBottomBar(
         return
     }
 
-    val leftTabs = listOf(BottomTab.FEED, BottomTab.RECIPES)
-    val rightTabs = listOf(BottomTab.MESSAGES, BottomTab.NOTIFICATIONS)
+    // Flat five-item row — Feed · Recipes · Search · Messages · Notifications,
+    // matching iOS. The elevated wallet circle that used to occupy the middle
+    // slot is gone: the wallet lives in the drawer on both platforms now, and
+    // Search takes the slot it vacated.
+    val visibleTabs = BottomTab.bottomBarTabs
 
-    // Overlay container: the bar + nav-inset spacer in a Column, with the elevated
-    // circle drawn on TOP of all of it (so neither its top protrusion nor its
-    // bottom overflow gets clipped by the bar rect or the gesture-inset region).
-    Box(modifier = Modifier.fillMaxWidth()) {
-        Column {
-            // Nav bar rect — fixed height, side icons centered.
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(NAV_HEIGHT)
-                    .background(navBarColor)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxSize(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    leftTabs.forEach { tab ->
-                        SideNavItem(
-                            tab = tab,
-                            selected = currentRoute == tab.route,
-                            hasUnread = when (tab) {
-                                BottomTab.FEED -> hasUnreadHome
-                                else -> false
-                            },
-                            isZapAnimating = isZapAnimating,
-                            isReplyAnimating = isReplyAnimating,
-                            notifSoundEnabled = notifSoundEnabled,
-                            modifier = Modifier.weight(1f),
-                            onTabSelected = onTabSelected
-                        )
-                    }
-                    // Center placeholder — same weight as one tab
-                    Spacer(Modifier.weight(1f))
-                    rightTabs.forEach { tab ->
-                        SideNavItem(
-                            tab = tab,
-                            selected = currentRoute == tab.route,
-                            hasUnread = when (tab) {
-                                BottomTab.MESSAGES -> hasUnreadMessages
-                                BottomTab.NOTIFICATIONS -> hasUnreadNotifications
-                                else -> false
-                            },
-                            isZapAnimating = isZapAnimating,
-                            isReplyAnimating = isReplyAnimating,
-                            notifSoundEnabled = notifSoundEnabled,
-                            modifier = Modifier.weight(1f),
-                            onTabSelected = onTabSelected
-                        )
-                    }
-                }
-            }
-            // Colored spacer reserving the system nav-bar inset. The elevated circle
-            // overflows downward onto this matching background instead of being
-            // clipped by the gesture-inset region.
-            Spacer(
-                Modifier
-                    .fillMaxWidth()
-                    .windowInsetsBottomHeight(WindowInsets.navigationBars)
-                    .background(navBarColor)
-            )
-        }
-
-        // requiredSize forces a true circle (ignoring the bar's NAV_HEIGHT constraint
-        // that would otherwise squash it to an oval). Aligned to the bar's top edge
-        // and lifted by PROTRUSION; drawn last so it sits above the bar + spacer.
+    Column {
         Box(
             modifier = Modifier
-                .requiredSize(BG_CIRCLE_SIZE)
-                .align(Alignment.TopCenter)
-                .offset(y = -PROTRUSION)
-                .zIndex(1f)
-                .clip(CircleShape)
+                .fillMaxWidth()
+                .height(NAV_HEIGHT)
                 .background(navBarColor)
-                .clickable { onTabSelected(BottomTab.WALLET) },
-            contentAlignment = Alignment.Center
         ) {
-            // Three layers so each part can be tinted independently by state:
-            //  Active   → gradient disc, white bolt, ring tinted white (dark) / onSurfaceVariant (light)
-            //  Inactive → flat grey disc + grey ring (a flat tint overrides the
-            //             gradient), with the bolt as the bar background (cutout) —
-            //             a monochrome grey mark matching the other inactive icons.
-            val walletSelected = currentRoute == BottomTab.WALLET.route
-            val inactiveGrey = MaterialTheme.colorScheme.onSurfaceVariant
-            Box(
-                modifier = Modifier.size(ICON_SIZE),
-                contentAlignment = Alignment.Center
+            Row(
+                modifier = Modifier.fillMaxSize(),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_zc_wallet_circle),
-                    contentDescription = stringResource(R.string.nav_wallet),
-                    tint = if (walletSelected) Color.Unspecified else inactiveGrey,
-                    modifier = Modifier.fillMaxSize()
-                )
-                Icon(
-                    painter = painterResource(R.drawable.ic_zc_wallet_bolt),
-                    contentDescription = null,
-                    tint = if (walletSelected) Color.White else navBarColor,
-                    modifier = Modifier.fillMaxSize()
-                )
-                Icon(
-                    painter = painterResource(R.drawable.ic_zc_wallet_ring),
-                    contentDescription = null,
-                    tint = if (walletSelected) {
-                        if (isDarkTheme) Color.White else inactiveGrey
-                    } else inactiveGrey,
-                    modifier = Modifier.fillMaxSize()
-                )
+                visibleTabs.forEach { tab ->
+                    SideNavItem(
+                        tab = tab,
+                        selected = currentRoute == tab.route,
+                        hasUnread = when (tab) {
+                            BottomTab.FEED -> hasUnreadHome
+                            BottomTab.MESSAGES -> hasUnreadMessages
+                            BottomTab.NOTIFICATIONS -> hasUnreadNotifications
+                            else -> false
+                        },
+                        isZapAnimating = isZapAnimating,
+                        isReplyAnimating = isReplyAnimating,
+                        notifSoundEnabled = notifSoundEnabled,
+                        modifier = Modifier.weight(1f),
+                        onTabSelected = onTabSelected
+                    )
+                }
             }
         }
+        // Colored spacer reserving the system nav-bar inset so the bar reads
+        // as one surface down to the gesture area.
+        Spacer(
+            Modifier
+                .fillMaxWidth()
+                .windowInsetsBottomHeight(WindowInsets.navigationBars)
+                .background(navBarColor)
+        )
     }
 }
 
@@ -261,7 +210,17 @@ private fun SideNavItem(
                 Icon(
                     imageVector = if (selected) tab.selectedIcon!! else tab.unselectedIcon!!,
                     contentDescription = stringResource(tab.labelResId),
-                    tint = zapTint
+                    tint = zapTint,
+                    // The custom ic_nav_* drawables use tight viewports, so
+                    // their glyphs fill SIDE_ICON_SIZE edge to edge. A Material
+                    // icon sits on a 24dp artboard with a ~20dp live area, so
+                    // at the same box it draws visibly smaller than its
+                    // neighbours. Size picked by measuring the rendered glyphs
+                    // on device: the fork, chat and bell each come out 46px
+                    // tall, and this box lands the magnifying glass on the
+                    // same 46px. requiredSize for the same reason the flame
+                    // uses it above — plain size() gets clamped by the parent.
+                    modifier = Modifier.requiredSize(29.dp)
                 )
             }
 
@@ -301,7 +260,9 @@ private fun SideNavItem(
     }
 }
 
-// Read-only layout: 3 items (FEED, RECIPES, NOTIFICATIONS), no WALLET or MESSAGES
+// Read-only layout: FEED, RECIPES, SEARCH, NOTIFICATIONS — no MESSAGES,
+// since a read-only account has no key to sign DMs with. Wallet is
+// drawer-only for every account.
 @Composable
 private fun ReadOnlyBottomBar(
     currentRoute: String?,
@@ -314,7 +275,7 @@ private fun ReadOnlyBottomBar(
     onTabSelected: (BottomTab) -> Unit
 ) {
     val navBarColor = if (isDarkTheme) NavBarDark else MaterialTheme.colorScheme.surface
-    val visibleTabs = listOf(BottomTab.FEED, BottomTab.RECIPES, BottomTab.NOTIFICATIONS)
+    val visibleTabs = BottomTab.bottomBarTabs(readOnly = true)
 
     Column {
         NavigationBar(
