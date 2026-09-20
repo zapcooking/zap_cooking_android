@@ -439,9 +439,10 @@
     <string name="settings_large_text">大きなテキスト</string>
     <string name="settings_increase_text_size">アプリ全体のテキストサイズを拡大</string>
     <string name="settings_language">言語</string>
-    <string name="settings_popular_themes">テーマ</string>
-    <string name="settings_choose_color_scheme">カラースキームを選択</string>
-    <string name="settings_accent_color">アクセントカラー</string>
+    <string name="settings_appearance">外観</string>
+    <string name="settings_appearance_system">システム</string>
+    <string name="settings_appearance_light">ライト</string>
+    <string name="settings_appearance_dark">ダーク</string>
     <string name="settings_preview">プレビュー</string>
     <string name="settings_new_notes_button">新規ノートボタン</string>
     <string name="settings_hide_new_notes_button">新規ノートボタンを非表示</string>

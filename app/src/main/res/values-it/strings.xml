@@ -439,9 +439,10 @@
     <string name="settings_large_text">Testo grande</string>
     <string name="settings_increase_text_size">Aumenta la dimensione del testo in tutta l\'app</string>
     <string name="settings_language">Lingua</string>
-    <string name="settings_popular_themes">Temi</string>
-    <string name="settings_choose_color_scheme">Scegli schema colori</string>
-    <string name="settings_accent_color">Colore Accento</string>
+    <string name="settings_appearance">Aspetto</string>
+    <string name="settings_appearance_system">Sistema</string>
+    <string name="settings_appearance_light">Chiaro</string>
+    <string name="settings_appearance_dark">Scuro</string>
     <string name="settings_preview">Anteprima</string>
     <string name="settings_new_notes_button">Pulsante Nuove Note</string>
     <string name="settings_hide_new_notes_button">Nascondi pulsante nuove note</string>
