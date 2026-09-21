@@ -465,11 +465,13 @@ fun UserProfileScreen(
     var blockedContentRevealed by remember { mutableStateOf(false) }
     var fullScreenMediaImageUrl by remember { mutableStateOf<String?>(null) }
     var fullScreenMediaVideoUrl by remember { mutableStateOf<String?>(null) }
+    var fullScreenMediaImageAlt by remember { mutableStateOf<String?>(null) }
 
     if (fullScreenMediaImageUrl != null) {
         FullScreenImageViewer(
             imageUrl = fullScreenMediaImageUrl!!,
-            onDismiss = { fullScreenMediaImageUrl = null }
+            onDismiss = { fullScreenMediaImageUrl = null },
+            alt = fullScreenMediaImageAlt
         )
     }
 
@@ -570,9 +572,9 @@ fun UserProfileScreen(
                     val imeta = parseImetaTags(event.tags)
                     parseContent(event.content, imetaMap = imeta).mapNotNull { segment ->
                         when (segment) {
-                            is ContentSegment.ImageSegment -> MediaItem(segment.meta.url, MediaType.IMAGE)
-                            is ContentSegment.VideoSegment -> MediaItem(segment.meta.url, MediaType.VIDEO)
-                            is ContentSegment.UnknownMediaSegment -> MediaItem(segment.meta.url, MediaType.IMAGE)
+                            is ContentSegment.ImageSegment -> MediaItem(segment.meta.url, MediaType.IMAGE, segment.meta.alt)
+                            is ContentSegment.VideoSegment -> MediaItem(segment.meta.url, MediaType.VIDEO, segment.meta.alt)
+                            is ContentSegment.UnknownMediaSegment -> MediaItem(segment.meta.url, MediaType.IMAGE, segment.meta.alt)
                             else -> null
                         }
                     }
@@ -1296,7 +1298,10 @@ fun UserProfileScreen(
                         items(items = mediaItems.chunked(3), key = { row -> row.first().url }) { row ->
                             MediaGridRow(
                                 items = row,
-                                onImageClick = { url -> fullScreenMediaImageUrl = url },
+                                onImageClick = { url ->
+                                    fullScreenMediaImageAlt = row.firstOrNull { it.url == url }?.alt
+                                    fullScreenMediaImageUrl = url
+                                },
                                 onVideoClick = { url -> fullScreenMediaVideoUrl = url }
                             )
                         }
@@ -2207,7 +2212,7 @@ private fun EmptyTabContent(message: String) {
 
 private enum class MediaType { IMAGE, VIDEO }
 
-private data class MediaItem(val url: String, val type: MediaType)
+private data class MediaItem(val url: String, val type: MediaType, val alt: String? = null)
 
 @Composable
 private fun MediaGridRow(
@@ -2235,7 +2240,7 @@ private fun MediaGridRow(
             ) {
                 AsyncImage(
                     model = item.url,
-                    contentDescription = null,
+                    contentDescription = item.alt,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize()
                 )

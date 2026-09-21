@@ -96,13 +96,14 @@ class RecipePublisher(
         imageUrls: List<String>,
         signer: NostrSigner?,
         includeClientTag: Boolean,
+        altByImageUrl: Map<String, String> = emptyMap(),
     ): Result = withContext(Dispatchers.IO) {
         if (signer == null) return@withContext Result.Error("Sign in to publish recipes.")
         val title = recipe.title?.takeIf { it.isNotBlank() }
             ?: return@withContext Result.Error("This recipe needs a title to publish.")
         val images = imageUrls.filter { it.isNotBlank() }
         if (images.isEmpty()) return@withContext Result.Error("Add an image to publish this recipe.")
-        publishCore(recipe, categories, images, signer, includeClientTag, title)
+        publishCore(recipe, categories, images, signer, includeClientTag, title, altByImageUrl)
     }
 
     /**
@@ -148,6 +149,7 @@ class RecipePublisher(
         imageUrls: List<String>,
         signer: NostrSigner?,
         includeClientTag: Boolean,
+        altByImageUrl: Map<String, String> = emptyMap(),
     ): Result = withContext(Dispatchers.IO) {
         if (signer == null) return@withContext Result.Error("Sign in to edit recipes.")
         if (original.pubkey != signer.pubkeyHex) {
@@ -160,7 +162,7 @@ class RecipePublisher(
         val format = RecipeFormats.forEvent(original)
             ?: return@withContext Result.Error("This recipe can't be edited from this device.")
 
-        publishCore(recipe, categories, images, signer, includeClientTag, title) {
+        publishCore(recipe, categories, images, signer, includeClientTag, title, altByImageUrl) {
             format.serializeEdit(recipe, title, images, categories, original) to
                 RecipeParser.dTag(original)
         }
@@ -186,6 +188,7 @@ class RecipePublisher(
         signer: NostrSigner,
         includeClientTag: Boolean,
         title: String,
+        altByImageUrl: Map<String, String> = emptyMap(),
         encode: () -> Pair<UnsignedRecipeEvent, String> = {
             // Serialize via the primary (write) format — NIP-23 today. The
             // unsigned event is byte-identical to the previous direct
@@ -199,6 +202,13 @@ class RecipePublisher(
         return try {
             val (unsigned, dTag) = encode()
             val tags = unsigned.tags.toMutableList()
+            // Alt text rides in NIP-92 imeta tags whose `url` slot equals the
+            // `image` tag URL exactly (alt-text handoff §1/§5). One tag per
+            // described image; undescribed images emit nothing.
+            for (url in imageUrls) {
+                val alt = altByImageUrl[url]?.trim()?.takeIf { it.isNotEmpty() } ?: continue
+                tags.add(listOf("imeta", "url $url", "alt $alt"))
+            }
             if (includeClientTag) tags.add(Nip89.clientTag())
 
             val event = signer.signEvent(unsigned.kind, unsigned.content, tags)
