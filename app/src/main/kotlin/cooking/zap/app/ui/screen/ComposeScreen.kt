@@ -14,6 +14,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.content.MediaType
@@ -743,40 +744,6 @@ fun ComposeScreen(
                         )
                     }
 
-                    // Attached-images strip (inline note/reply mode) — per-image
-                    // alt chip, the non-gallery counterpart of the gallery's
-                    // "+ ALT" overlay (alt-text handoff §3).
-                    if (!galleryMode) {
-                        val imageUrls = uploadedUrls.filter { viewModel.isImageUpload(it) }
-                        if (imageUrls.isNotEmpty()) {
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 4.dp)
-                            ) {
-                                imageUrls.forEach { url ->
-                                    Box {
-                                        AsyncImage(
-                                            model = url,
-                                            contentDescription = null,
-                                            contentScale = ContentScale.Crop,
-                                            modifier = Modifier
-                                                .size(56.dp)
-                                                .clip(RoundedCornerShape(8.dp))
-                                                .background(MaterialTheme.colorScheme.surfaceVariant)
-                                        )
-                                        AltChip(
-                                            saved = url in altTexts,
-                                            onClick = { altEditorUrl = url },
-                                            modifier = Modifier.align(Alignment.TopStart)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-
                     // Text field with GIF keyboard support via BasicTextField(TextFieldState)
                     val textFieldState = remember { TextFieldState(content.text) }
                     val enabled = !publishing && countdownSeconds == null
@@ -1080,6 +1047,65 @@ fun ComposeScreen(
                                         maxLines = 1,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
+                                }
+                            }
+                        }
+                    }
+
+                    // Attached-images strip (inline note/reply mode) — per-image
+                    // alt chip, the non-gallery counterpart of the gallery's
+                    // "+ALT" overlay (alt-text handoff §3). Sits directly under
+                    // the attach row so it can't get lost below the live preview.
+                    if (!galleryMode) {
+                        val imageUrls = uploadedUrls.filter { viewModel.isImageUpload(it) }
+                        if (imageUrls.isNotEmpty()) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState())
+                                    .padding(vertical = 6.dp)
+                            ) {
+                                imageUrls.forEach { url ->
+                                    Box(modifier = Modifier.size(88.dp)) {
+                                        AsyncImage(
+                                            model = url,
+                                            contentDescription = null,
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                        )
+                                        AltChip(
+                                            saved = url in altTexts,
+                                            onClick = { altEditorUrl = url },
+                                            modifier = Modifier.align(Alignment.TopStart)
+                                        )
+                                        // Remove the attachment — drops the URL from
+                                        // the note text and forgets any description
+                                        // with it. A plain Box, not an IconButton:
+                                        // IconButton applies its own 40dp state-layer
+                                        // size after the caller's modifier, which
+                                        // overrides any size set here.
+                                        Box(
+                                            modifier = Modifier
+                                                .align(Alignment.TopEnd)
+                                                .padding(3.dp)
+                                                .size(20.dp)
+                                                .clip(CircleShape)
+                                                .background(Color.White)
+                                                .clickable { viewModel.removeMediaUrl(url) },
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                Icons.Filled.Close,
+                                                contentDescription = stringResource(R.string.cd_remove_image),
+                                                tint = Color.Black,
+                                                modifier = Modifier.size(12.dp)
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
