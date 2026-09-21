@@ -1455,4 +1455,5 @@
     <string name="about_child_safety">Child Safety Standards</string>
     <string name="about_delete_account">Account and Data Deletion</string>
 
+    <string name="wallet_nwc_not_responding_title">Wallet not responding</string>
 </resources>

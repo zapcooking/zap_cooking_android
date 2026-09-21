@@ -210,6 +210,23 @@ fun WalletScreen(
     val walletState by viewModel.walletState.collectAsState()
     val currentPage by viewModel.currentPage.collectAsState()
 
+    // NWC liveness failure (revoked / unresponsive) — raised as an alert so a
+    // dead wallet surfaces within seconds instead of hanging in silence
+    // (zapcooking_ios#140 parity).
+    val nwcConnectionProblem by viewModel.nwcConnectionProblem.collectAsState()
+    if (nwcConnectionProblem != null) {
+        AlertDialog(
+            onDismissRequest = { viewModel.clearNwcConnectionProblem() },
+            title = { Text(stringResource(R.string.wallet_nwc_not_responding_title)) },
+            text = { Text(nwcConnectionProblem!!) },
+            confirmButton = {
+                TextButton(onClick = { viewModel.clearNwcConnectionProblem() }) {
+                    Text(stringResource(R.string.btn_ok))
+                }
+            }
+        )
+    }
+
     // Always refresh wallet state when this screen appears
     LaunchedEffect(Unit) {
         viewModel.refreshState()
