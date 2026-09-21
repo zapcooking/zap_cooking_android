@@ -50,8 +50,12 @@ fun parseImetaTags(tags: List<List<String>>): Map<String, MediaMeta> {
             }
         }
         if (url != null) {
-            // Alt is trimmed on read and a whitespace-only value counts as
-            // absent — mirrors the web's `imetaAltByUrl`.
+            // The `alt` value is everything after the first space, so
+            // interior line breaks belong to it and survive the parse — the
+            // wire carries real newline characters inside the tag string.
+            // Break runs are capped ([Nip68.normalizeAltBreaks]) so
+            // third-party alt can't balloon the layout, and a blank slot
+            // reads as "no description".
             map[url] = MediaMeta(
                 url = url,
                 mime = mime,
@@ -59,7 +63,8 @@ fun parseImetaTags(tags: List<List<String>>): Map<String, MediaMeta> {
                 thumbhash = thumb,
                 blurhash = blur,
                 image = image,
-                alt = alt?.trim()?.takeIf { it.isNotEmpty() }
+                alt = alt?.let { cooking.zap.app.nostr.Nip68.normalizeAltBreaks(it) }
+                    ?.takeIf { it.isNotEmpty() }
             )
         }
     }
@@ -70,9 +75,13 @@ fun parseImetaTags(tags: List<List<String>>): Map<String, MediaMeta> {
 const val ALT_TEXT_MAX_CHARS = 2000
 
 /**
- * Sanitize alt text for emission/storage: trim, cap at [ALT_TEXT_MAX_CHARS],
- * and collapse to null when empty — an undescribed image carries no `alt`
- * slot at all (and no imeta tag, per the handoff spec §1).
+ * Sanitize alt text for emission/storage: normalize line breaks
+ * ([Nip68.normalizeAltBreaks] — CRLF → LF, lines trimmed, break runs
+ * capped), cap at [ALT_TEXT_MAX_CHARS], and collapse to null when empty —
+ * an undescribed image carries no `alt` slot at all (and no imeta tag, per
+ * the handoff spec §1).
  */
 fun sanitizeAltText(raw: String): String? =
-    raw.trim().take(ALT_TEXT_MAX_CHARS).takeIf { it.isNotEmpty() }
+    cooking.zap.app.nostr.Nip68.normalizeAltBreaks(raw)
+        .take(ALT_TEXT_MAX_CHARS)
+        .takeIf { it.isNotEmpty() }

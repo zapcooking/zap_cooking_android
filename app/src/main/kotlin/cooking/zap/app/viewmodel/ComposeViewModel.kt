@@ -1571,10 +1571,8 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
                 // (alt-text handoff §3) so a restored draft can re-apply the
                 // descriptions. Only described images get a tag.
                 for ((draftAltUrl, draftAlt) in _altTexts.value) {
-                    val trimmedAlt = draftAlt.trim()
-                    if (trimmedAlt.isNotEmpty()) {
-                        innerTags.add(listOf("imeta", "url $draftAltUrl", "alt $trimmedAlt"))
-                    }
+                    val wireAlt = cooking.zap.app.ui.component.sanitizeAltText(draftAlt) ?: continue
+                    innerTags.add(listOf("imeta", "url $draftAltUrl", "alt $wireAlt"))
                 }
                 val innerJson = Nip37.serializeDraftContent(
                     pubkeyHex = signer.pubkeyHex,

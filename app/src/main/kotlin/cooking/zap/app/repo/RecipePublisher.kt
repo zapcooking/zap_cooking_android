@@ -206,7 +206,8 @@ class RecipePublisher(
             // `image` tag URL exactly (alt-text handoff §1/§5). One tag per
             // described image; undescribed images emit nothing.
             for (url in imageUrls) {
-                val alt = altByImageUrl[url]?.trim()?.takeIf { it.isNotEmpty() } ?: continue
+                val alt = cooking.zap.app.nostr.Nip68.normalizeAltBreaks(altByImageUrl[url].orEmpty())
+                    .takeIf { it.isNotEmpty() } ?: continue
                 tags.add(listOf("imeta", "url $url", "alt $alt"))
             }
             if (includeClientTag) tags.add(Nip89.clientTag())

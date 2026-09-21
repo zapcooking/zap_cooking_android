@@ -108,4 +108,36 @@ class ImetaTest {
         assertEquals("first", map["https://h/1.jpg"]?.alt)
         assertEquals("second", map["https://h/2.jpg"]?.alt)
     }
+    // --- Line-break normalization (wisp-ios #472 parity) ---
+
+    @Test
+    fun `normalizeAltBreaks collapses crlf cr line trims and runaway runs`() {
+        val raw = "  line one  \r\n\r\n\r\n\r\nline two \r three \n\n\n\n\n four "
+        val normalized = cooking.zap.app.nostr.Nip68.normalizeAltBreaks(raw)
+        assertEquals("line one\n\nline two\nthree\n\nfour", normalized)
+    }
+
+    @Test
+    fun `single breaks and one paragraph gap survive`() {
+        assertEquals("a\nb", cooking.zap.app.nostr.Nip68.normalizeAltBreaks("a\nb"))
+        assertEquals("a\n\nb", cooking.zap.app.nostr.Nip68.normalizeAltBreaks(" a\n\nb "))
+    }
+
+    @Test
+    fun `multi-paragraph alt survives the parse`() {
+        val map = parseImetaTags(listOf(listOf("imeta", "url https://h/a.jpg", "alt first\n\nsecond")))
+        assertEquals("first\n\nsecond", map["https://h/a.jpg"]?.alt)
+    }
+
+    @Test
+    fun `parse caps third-party runaway break runs`() {
+        val map = parseImetaTags(listOf(listOf("imeta", "url https://h/a.jpg", "alt a\n\n\n\n\nb")))
+        assertEquals("a\n\nb", map["https://h/a.jpg"]?.alt)
+    }
+
+    @Test
+    fun `sanitizeAltText normalizes breaks before capping`() {
+        assertEquals("a\n\nb", sanitizeAltText(" a\r\n\r\n\r\nb "))
+        assertNull(sanitizeAltText(" \n \n "))
+    }
 }

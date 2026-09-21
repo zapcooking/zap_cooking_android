@@ -36,7 +36,7 @@ object Nip68 {
                     thumbhash = fields["thumbhash"],
                     blurhash = fields["blurhash"],
                     dim = fields["dim"],
-                    alt = fields["alt"]?.trim()?.takeIf { it.isNotEmpty() },
+                    alt = fields["alt"]?.let { normalizeAltBreaks(it) }?.takeIf { it.isNotEmpty() },
                     hash = fields["x"],
                     fallback = fallbacks
                 )
@@ -60,7 +60,7 @@ object Nip68 {
             entry.thumbhash?.let { imetaParts.add("thumbhash $it") }
             entry.blurhash?.let { imetaParts.add("blurhash $it") }
             entry.dim?.let { imetaParts.add("dim $it") }
-            entry.alt?.trim()?.takeIf { it.isNotEmpty() }?.let { imetaParts.add("alt $it") }
+            entry.alt?.let { normalizeAltBreaks(it) }?.takeIf { it.isNotEmpty() }?.let { imetaParts.add("alt $it") }
             entry.hash?.let { imetaParts.add("x $it") }
             for (fb in entry.fallback) imetaParts.add("fallback $fb")
             tags.add(imetaParts)
@@ -70,6 +70,23 @@ object Nip68 {
         }
         contentWarning?.let { tags.add(listOf("content-warning", it)) }
         return tags
+    }
+
+    /**
+     * Normalizes an `alt` value's line breaks per the imeta linebreak
+     * contract (wisp-ios #472): CRLF/CR → LF, each line's surrounding
+     * whitespace trimmed, runs of 3+ newlines capped at one blank line,
+     * ends trimmed. Single breaks and a single paragraph gap survive —
+     * multi-paragraph descriptions are the point. Applied when publishing
+     * an `alt` slot and when parsing one, so third-party alt can't balloon
+     * the layout either. Slot parsing still splits on the first space only,
+     * so interior breaks belong to the value and reach every render surface.
+     */
+    fun normalizeAltBreaks(text: String): String {
+        val lf = text.replace("\r\n", "\n").replace("\r", "\n")
+        val trimmedLines = lf.split('\n').joinToString("\n") { it.trim() }
+        val capped = trimmedLines.replace(Regex("\n{3,}"), "\n\n")
+        return capped.trim()
     }
 
     fun getTitle(event: NostrEvent): String? {
