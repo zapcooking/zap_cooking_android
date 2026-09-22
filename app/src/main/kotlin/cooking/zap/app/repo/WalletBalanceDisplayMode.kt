@@ -1,6 +1,8 @@
 package cooking.zap.app.repo
 
 import android.content.SharedPreferences
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * Tri-state balance display for the wallet dashboard. Tapping the
@@ -32,9 +34,28 @@ enum class WalletBalanceDisplayMode {
 
     companion object {
         private const val KEY_PREFIX = "walletBalanceDisplay_"
+        private const val RESTORE_KEY_PREFIX = "walletBalanceDisplayRestore_"
         private const val LEGACY_HIDDEN_KEY = "balance_hidden"
 
         fun storageKey(pubkey: String): String = "$KEY_PREFIX$pubkey"
+
+        /**
+         * Key holding the mode to restore when the drawer mini-wallet's
+         * hide toggle un-hides the balance. Same prefix as wisp-ios #474
+         * so cross-platform agents stay in lockstep: without it, unhiding
+         * from the drawer would reset a FIAT dashboard back to SATS.
+         */
+        fun restoreStorageKey(pubkey: String): String = "$RESTORE_KEY_PREFIX$pubkey"
+
+        /**
+         * Bumped on every persisted change. SharedPreferences isn't
+         * observable, and this fork's drawer outlives navigation (it's
+         * hoisted above the NavHost, not inside a screen), so the wallet
+         * dashboard and the drawer's mini-wallet collect this to know when
+         * to re-read — hiding in one place hides in the other.
+         */
+        private val _changes = MutableStateFlow(0)
+        val changes: StateFlow<Int> = _changes
 
         /**
          * Read the persisted mode for [pubkey]. Falls back to legacy
@@ -66,6 +87,7 @@ enum class WalletBalanceDisplayMode {
         fun write(prefs: SharedPreferences, pubkey: String?, mode: WalletBalanceDisplayMode) {
             if (pubkey.isNullOrBlank()) return
             prefs.edit().putString(storageKey(pubkey), mode.name.lowercase()).apply()
+            _changes.value += 1
         }
     }
 }

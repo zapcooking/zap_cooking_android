@@ -819,6 +819,20 @@ fun WispNavHost(
     val drawerScope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val onOpenDrawer: () -> Unit = { drawerScope.launch { drawerState.open() } }
+    // Bring the configured wallet up (and refresh its balance) when the
+    // drawer opens, so the mini-wallet's figure is live rather than only as
+    // fresh as the last wallet-tab visit. Keyed off targetValue, which flips
+    // as soon as the drawer starts opening. refreshState() is idempotent —
+    // an already-connected wallet just gets a balance refresh, and a wallet
+    // the user never opens never spins up its connection at app launch
+    // (wisp-ios #474's startIfConfigured analog). Skipped for watch-only
+    // accounts, which can't run a wallet.
+    val drawerOpening by remember {
+        derivedStateOf { drawerState.targetValue == DrawerValue.Open }
+    }
+    LaunchedEffect(drawerOpening) {
+        if (drawerOpening && activeSigner != null) walletViewModel.refreshState()
+    }
     // Edge-swipe-to-open is allowed only on the root tabs — never on sub-screens
     // (recipe detail, threads, DM/group rooms, settings, etc.).
     val rootTabRoutes = remember {
@@ -832,6 +846,12 @@ fun WispNavHost(
     val drawerStatusVersion by feedViewModel.eventRepo.statusVersion.collectAsState()
     val drawerHasEmbeddedWallet =
         walletViewModel.walletMode.collectAsState().value == cooking.zap.app.repo.WalletMode.SPARK
+    // Mini-wallet widget state (wisp-ios #474). The balance is null whenever
+    // it's unknown so the stripe shows "…" rather than a bogus "0".
+    val drawerWalletConfigured =
+        walletViewModel.walletMode.collectAsState().value != cooking.zap.app.repo.WalletMode.NONE
+    val drawerWalletBalanceMsats =
+        (walletViewModel.walletState.collectAsState().value as? cooking.zap.app.viewmodel.WalletState.Connected)?.balanceMsats
     val closeDrawerAndNavigate: (String) -> Unit = { route ->
         drawerScope.launch { drawerState.close() }
         navController.navigate(route)
@@ -995,7 +1015,9 @@ fun WispNavHost(
                 onScanResult = { route ->
                     drawerScope.launch { drawerState.close() }
                     navController.navigate(route)
-                }
+                },
+                walletConfigured = drawerWalletConfigured,
+                walletBalanceMsats = drawerWalletBalanceMsats
             )
         }
     ) {
