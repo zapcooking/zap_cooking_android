@@ -174,34 +174,45 @@ private fun GenerationRow(
     val running = generation?.url == url && generation.running
     val result = generation?.takeIf { it.url == url && !it.running }?.result
 
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        TextButton(onClick = onGenerate, enabled = !running) {
-            Text(stringResource(R.string.alt_generate_with_ai))
-        }
-        // Cook+ badge — the action is membership-gated server-side (fails closed).
-        Surface(
-            shape = RoundedCornerShape(4.dp),
-            color = MaterialTheme.colorScheme.primaryContainer
+    Column {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth()
         ) {
-            Text(
-                text = stringResource(R.string.alt_cookplus_badge),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
-            )
+            TextButton(onClick = onGenerate, enabled = !running) {
+                Text(stringResource(R.string.alt_generate_with_ai))
+            }
+            // Cook+ badge — the action is membership-gated server-side (fails closed).
+            Surface(
+                shape = RoundedCornerShape(4.dp),
+                color = MaterialTheme.colorScheme.primaryContainer
+            ) {
+                Text(
+                    text = stringResource(R.string.alt_cookplus_badge),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                )
+            }
         }
+        // Generation progress on its own line — inline with the button it
+        // gets crunched inside the dialog's width.
         if (running) {
-            Spacer(Modifier.width(2.dp))
-            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-            Text(
-                text = stringResource(R.string.alt_generating),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 4.dp, top = 2.dp)
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                Text(
+                    text = stringResource(R.string.alt_generating),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 

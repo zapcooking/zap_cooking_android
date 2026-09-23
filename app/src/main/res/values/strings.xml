@@ -1480,5 +1480,15 @@
     <string name="alt_error_sign">Signing was declined.</string>
 
     <string name="wallet_nwc_not_responding_title">Wallet not responding</string>
+    <!-- Composer attachment model (attachments are slots on the draft, not text in the editor) -->
+    <plurals name="compose_attachments_summary">
+        <item quantity="one">%1$d attachment, added to the end of your post</item>
+        <item quantity="other">%1$d attachments, added to the end of your post</item>
+    </plurals>
+    <string name="cd_move_attachment_earlier">Move attachment earlier</string>
+    <string name="cd_move_attachment_later">Move attachment later</string>
+    <string name="cd_remove_attachment">Remove attachment</string>
+    <string name="attachment_thumbnail_failed">Thumbnail failed to load</string>
+    <string name="compose_attach_pasted_link">Attach this media</string>
 
 </resources>

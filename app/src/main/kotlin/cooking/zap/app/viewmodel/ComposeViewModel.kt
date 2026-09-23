@@ -54,8 +54,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
@@ -80,15 +84,18 @@ data class Mention(val start: Int, val end: Int, val pubkey: String)
  *  - [currentDraftId] null → nothing was restored this session, so there's nothing to discard.
  *  - [currentDraftId] != [cachedId] → the editor isn't showing the cached draft; leave the cache.
  *  - [textIsBlank] false → the user still has content; the non-blank auto-save path owns that.
+ *  - [mediaIsEmpty] false → attachments remain; the draft isn't empty just because the prose is.
  */
 internal fun shouldDiscardOnDispose(
     isTopLevel: Boolean,
     currentDraftId: String?,
     cachedId: String?,
-    textIsBlank: Boolean
+    textIsBlank: Boolean,
+    mediaIsEmpty: Boolean
 ): Boolean =
     isTopLevel &&
         textIsBlank &&
+        mediaIsEmpty &&
         currentDraftId != null &&
         currentDraftId == cachedId
 
@@ -288,11 +295,14 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
     /** Tracks whether the current gallery upload contains a video (to prevent mixing). */
     private val _galleryHasVideo = MutableStateFlow(false)
 
-    /** Tracks uploaded media metadata for imeta tags and gallery orientation detection. */
+    /** Tracks uploaded media metadata for imeta tags and gallery orientation detection.
+     *  Keyed by URL so a slot's metadata follows it through a reorder for free.
+     *  Null mime only occurs for restored attachments whose draft/cache copy
+     *  predates the metadata (treated as unknown, never as non-image). */
     private val _uploadedMediaMeta = mutableMapOf<String, UploadedMediaMeta>()
 
     private data class UploadedMediaMeta(
-        val mimeType: String,
+        val mimeType: String?,
         val dimensions: Pair<Int, Int>? = null,
         val thumbhash: String? = null
     )
@@ -316,6 +326,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
     fun setAltText(url: String, rawAlt: String) {
         val sanitized = cooking.zap.app.ui.component.sanitizeAltText(rawAlt)
         _altTexts.value = if (sanitized == null) _altTexts.value - url else _altTexts.value + (url to sanitized)
+        persistUploadsToState()
     }
 
     /**
@@ -344,9 +355,194 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         _altGeneration.value = null
     }
 
+    private val _mediaMetaVersion = MutableStateFlow(0)
+
+    /**
+     * The draft's attachment slots, in publish order. The editor text never
+     * contains an attachment URL; this ordered list is the only ordering that
+     * exists, and [composeNoteContent] bridges the two at publish/preview time.
+     * The version counter covers late metadata fills (a pasted-link fetch that
+     * finishes after the URL was already slotted).
+     */
+    val composerMedia: StateFlow<List<cooking.zap.app.ui.component.ComposerMedia>> =
+        combine(_uploadedUrls, _altTexts, _mediaMetaVersion) { _, _, _ -> mediaSnapshot() }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /**
+     * Bare URLs alone on their line in the editor — offered, never
+     * auto-converted, as attachment slots. Duplicates surface too (each
+     * attach consumes one pasted occurrence); a URL inside a sentence is
+     * authored prose and gets no offer. Attached URLs vanish from here
+     * because their pasted line is removed from the text, not by filtering.
+     */
+    val attachableUrlCandidates: StateFlow<List<String>> =
+        _content.map { content ->
+            cooking.zap.app.ui.component.bareUrlLines(content.text)
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /**
+     * Synchronous slot list for publish/save: those paths must read the exact
+     * state produced by the upload/reorder that preceded them, not a
+     * dispatcher-lagged copy of the flow above.
+     */
+    private fun mediaSnapshot(): List<cooking.zap.app.ui.component.ComposerMedia> =
+        _uploadedUrls.value.map { url ->
+            val meta = _uploadedMediaMeta[url]
+            cooking.zap.app.ui.component.ComposerMedia(
+                url = url,
+                alt = _altTexts.value[url],
+                isVideo = meta?.mimeType?.startsWith("video/") == true,
+                mimeType = meta?.mimeType,
+                dimensions = meta?.dimensions?.let { "${it.first}x${it.second}" },
+                thumbhash = meta?.thumbhash
+            )
+        }
+
+    /**
+     * Reorder an attachment slot (thumbnail steppers): remove/insert splice
+     * against the one authoritative array. Alt and metadata are keyed by URL,
+     * not index, so they follow the moved image for free — and an alt editor
+     * open during the splice is unaffected (the dialog writes by URL too).
+     */
+    fun moveMedia(from: Int, to: Int) {
+        _uploadedUrls.value =
+            cooking.zap.app.ui.component.moveItem(_uploadedUrls.value, from, to)
+        persistUploadsToState()
+    }
+
+    /**
+     * True when [url] is a KNOWN video upload (GIFs transcoded to MP4
+     * included). Null mime — a pasted link whose metadata fetch hasn't
+     * finished (or failed) — is unknown, not video.
+     */
+    fun isVideoUpload(url: String): Boolean =
+        _uploadedMediaMeta[url]?.mimeType?.startsWith("video/") == true
+
+    /**
+     * Convert a pasted bare URL into an attachment slot: the pasted
+     * occurrence leaves the editor text, and the URL joins the ordered
+     * slots. The same URL may occupy more than one slot — pasting a link
+     * twice puts it in the note twice, exactly as the text era did; imeta
+     * is deduped per URL at publish. Metadata is fetched in the background
+     * (shared across duplicate slots); the slot publishes fine without it.
+     */
+    fun attachUrl(url: String) {
+        // Only ever converts a pasted occurrence that is still in the text.
+        // The offers flow updates a frame behind a fast double-tap; without
+        // this guard the second tap would add a slot with nothing to consume.
+        if (cooking.zap.app.ui.component.bareUrlOccurrenceRange(_content.value.text, url) == null) return
+        // Record the slot before touching the text so composerMedia observers
+        // never see a slot without its (placeholder) metadata entry.
+        _uploadedMediaMeta[url] = _uploadedMediaMeta[url] ?: UploadedMediaMeta(mimeType = null)
+        _uploadedUrls.value = _uploadedUrls.value + url
+        persistUploadsToState()
+
+        // Remove the pasted occurrence, shifting/dropping tracked mention
+        // ranges exactly like a user edit of the same region would.
+        val value = _content.value
+        val oldText = value.text
+        val newText = cooking.zap.app.ui.component.removeBareUrlOccurrence(oldText, url)
+        if (newText != oldText) {
+            var removalStart = 0
+            while (removalStart < newText.length && newText[removalStart] == oldText[removalStart]) removalStart++
+            val removedLen = oldText.length - newText.length
+            _mentions.value = _mentions.value.mapNotNull { m ->
+                when {
+                    m.start >= removalStart + removedLen ->
+                        m.copy(start = m.start - removedLen, end = m.end - removedLen)
+                    m.end <= removalStart -> m
+                    else -> null // range intersects the removed text — drop
+                }
+            }
+            saveMentionsToState()
+            val newSel = TextRange(
+                minOf(value.selection.start, newText.length),
+                minOf(value.selection.end, newText.length)
+            )
+            _content.value = TextFieldValue(newText, newSel)
+            savedStateHandle["draft_content"] = newText
+        }
+
+        viewModelScope.launch { fetchRemoteMediaMeta(url) }
+    }
+
+    /**
+     * Best-effort metadata for a pasted-link slot: fetch the bytes (capped —
+     * a chunked or lying Content-Length must never stream unbounded), derive
+     * mime/dimensions/thumbhash with the same helpers the upload pipeline
+     * uses. A failure leaves the slot with unknown metadata — the URL still
+     * publishes; only imeta richness and the alt chip are lost.
+     */
+    private suspend fun fetchRemoteMediaMeta(url: String) {
+        val meta = try {
+            withContext(Dispatchers.IO) {
+                val client = cooking.zap.app.relay.HttpClientFactory.createHttpClient(readTimeoutSeconds = 20)
+                val request = okhttp3.Request.Builder().url(url).build()
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) return@use null
+                    val body = response.body ?: return@use null
+                    val headerMime = body.contentType()?.let { "${it.type}/${it.subtype}" }
+                    // Read at most MAX+1 bytes ourselves: contentLength() is
+                    // absent for chunked responses and untrustworthy anyway.
+                    var overflow = false
+                    val bytes = body.byteStream().use { input ->
+                        val buffer = java.io.ByteArrayOutputStream()
+                        val chunk = ByteArray(64 * 1024)
+                        while (!overflow) {
+                            val read = input.read(chunk)
+                            if (read < 0) break
+                            buffer.write(chunk, 0, read)
+                            if (buffer.size() > MAX_REMOTE_META_BYTES) overflow = true
+                        }
+                        buffer.toByteArray()
+                    }
+                    if (overflow) {
+                        return@use headerMime?.let { UploadedMediaMeta(mimeType = it) }
+                    }
+                    val mime = headerMime ?: mimeFromMediaUrl(url)
+                    val dims = extractDimensionsFromBytes(bytes, mime)
+                    val thumb = if (mime.startsWith("image/")) createThumbhash(bytes) else null
+                    UploadedMediaMeta(mimeType = mime, dimensions = dims, thumbhash = thumb)
+                }
+            }
+        } catch (_: Exception) {
+            null
+        }
+        if (meta != null && url in _uploadedUrls.value) {
+            _uploadedMediaMeta[url] = meta
+            _mediaMetaVersion.value += 1
+        }
+    }
+
+    /**
+     * Mirror the attachment slots into SavedStateHandle so process death
+     * doesn't drop them — with URLs out of the editor text, `draft_content`
+     * alone no longer carries them.
+     */
+    private fun persistUploadsToState() {
+        savedStateHandle["draft_media_urls"] = _uploadedUrls.value.toTypedArray()
+        savedStateHandle["draft_media_alts"] =
+            _altTexts.value.flatMap { (url, alt) -> listOf(url, alt) }.toTypedArray()
+    }
+
+    init {
+        savedStateHandle.get<Array<String>>("draft_media_urls")?.let { urls ->
+            _uploadedUrls.value = urls.toList()
+        }
+        savedStateHandle.get<Array<String>>("draft_media_alts")?.let { flat ->
+            _altTexts.value = flat.toList().chunked(2).mapNotNull { pair ->
+                pair.getOrNull(1)?.let { alt -> pair[0] to alt }
+            }.toMap()
+        }
+    }
+
     companion object {
         val SCHEDULER_RELAYS = listOf("wss://scheduler.nostrarchives.com")
         const val MAX_GALLERY_IMAGES = 21
+
+        /** Upper bound for pasted-link metadata downloads (larger files keep
+         *  just their Content-Type; the URL publishes either way). */
+        const val MAX_REMOTE_META_BYTES = 32L * 1024 * 1024
     }
 
     fun toggleGalleryMode() {
@@ -548,7 +744,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
     }
 
     /** Shared tail of the upload pipeline: transcode/compress, upload to Blossom,
-     * record media metadata, and (outside gallery mode) insert the URL into content. */
+     * and append the URL as an attachment slot (never into the editor text). */
     private suspend fun processAndUploadBytes(
         rawBytes: ByteArray,
         rawMime: String,
@@ -572,22 +768,21 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         }
         val (bytes, mime, ext) = media
         val url = blossomRepo.uploadMedia(bytes, mime, ext, signer)
-        _uploadedUrls.value = _uploadedUrls.value + url
+        // Record meta BEFORE emitting the URL so composerMedia observers never
+        // see a slot without its metadata.
         _uploadedMediaMeta[url] = UploadedMediaMeta(
             mimeType = mime,
             dimensions = dims,
             thumbhash = thumbhash
         )
+        _uploadedUrls.value = _uploadedUrls.value + url
+        persistUploadsToState()
         if (_galleryMode.value && mime.startsWith("video/")) {
             _galleryHasVideo.value = true
         }
-        // In gallery mode, don't insert URLs into the text — they're shown in the pager
-        if (!_galleryMode.value) {
-            val current = _content.value.text
-            val newText = if (current.isBlank()) url else "$current\n$url"
-            _content.value = TextFieldValue(newText, TextRange(newText.length))
-            savedStateHandle["draft_content"] = newText
-        }
+        // The URL lives in the media slots, never in the editor text — an
+        // upload finishing mid-sentence can't land inside the thought being
+        // typed. composeNoteContent() appends it at publish.
     }
 
     /**
@@ -599,17 +794,17 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         _uploadedMediaMeta[url]?.mimeType?.startsWith("image/") == true
 
     fun removeMediaUrl(url: String) {
-        _uploadedUrls.value = _uploadedUrls.value - url
-        _uploadedMediaMeta.remove(url)
-        _altTexts.value = _altTexts.value - url
-        // Reset video flag if all media removed
-        if (_uploadedUrls.value.isEmpty()) _galleryHasVideo.value = false
-        if (!_galleryMode.value) {
-            val current = _content.value.text
-            val newText = current.replace(url, "").replace("\n\n", "\n").trim()
-            _content.value = TextFieldValue(newText, TextRange(newText.length))
-            savedStateHandle["draft_content"] = newText
+        // One slot at a time — duplicate slots of the same URL each need
+        // their own remove. Meta and alt are shared per URL and live as long
+        // as any occurrence remains.
+        _uploadedUrls.value = _uploadedUrls.value.toMutableList().apply { remove(url) }
+        if (url !in _uploadedUrls.value) {
+            _uploadedMediaMeta.remove(url)
+            _altTexts.value = _altTexts.value - url
+            // Reset video flag if all media removed
+            if (_uploadedUrls.value.isEmpty()) _galleryHasVideo.value = false
         }
+        persistUploadsToState()
     }
 
     fun updateContent(value: TextFieldValue) {
@@ -774,10 +969,18 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
     ) {
         val rawText = _content.value.text
         val (materialized, _) = materializeMentions(rawText, _mentions.value)
-        val text = materialized.trim()
+        val prose = materialized.trim()
+        val media = mediaSnapshot()
+        // Non-gallery wire content is prose + the attachment slots' URLs, joined
+        // by composeNoteContent — the same function Preview renders, so the
+        // review window previews the note that will go out. Gallery keeps its
+        // caption-only content (media rides in the kind's tags).
+        val text = if (_galleryMode.value) prose else
+            cooking.zap.app.ui.component.composeNoteContent(prose, media)
 
-        // Gallery posts can have an empty caption — the media is the content
-        if (text.isBlank() && !_galleryMode.value) {
+        // Media-only notes publish as bare URLs; an empty editor with no
+        // attachments is still an error.
+        if (prose.isBlank() && media.isEmpty() && !_galleryMode.value) {
             _error.value = getApplication<Application>().getString(R.string.error_post_empty)
             return
         }
@@ -978,6 +1181,8 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
                 eventKind = if (isVertical) Nip71.KIND_VIDEO_VERTICAL else Nip71.KIND_VIDEO_HORIZONTAL
             } else {
                 val altTexts = _altTexts.value
+                // One imeta per URL — duplicate slots (same link attached
+                // twice) publish the URL twice in content but a single tag.
                 val imetaEntries = urls.map { url ->
                     val meta = _uploadedMediaMeta[url]
                     val dimStr = meta?.dimensions?.let { "${it.first}x${it.second}" }
@@ -988,7 +1193,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
                         dim = dimStr,
                         alt = altTexts[url]
                     )
-                }
+                }.distinctBy { it.url }
                 tags.addAll(Nip68.buildPictureTags(title = null, media = imetaEntries, hashtags = _hashtags.value))
                 eventKind = Nip68.KIND_PICTURE
             }
@@ -1026,17 +1231,20 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
 
         if (!_galleryMode.value) {
             val altTexts = _altTexts.value
+            // Unknown mime (an attachment restored from a draft/cache copy that
+            // predates its metadata) is included with null slots rather than
+            // dropped — the alt would otherwise silently vanish at publish.
             val imageEntries = _uploadedUrls.value.mapNotNull { url ->
-                val meta = _uploadedMediaMeta[url] ?: return@mapNotNull null
-                if (!meta.mimeType.startsWith("image/")) return@mapNotNull null
+                val meta = _uploadedMediaMeta[url]
+                if (meta?.mimeType?.startsWith("image/") == false) return@mapNotNull null
                 Nip68.ImetaEntry(
                     url = url,
-                    mimeType = meta.mimeType,
-                    thumbhash = meta.thumbhash,
-                    dim = meta.dimensions?.let { "${it.first}x${it.second}" },
+                    mimeType = meta?.mimeType,
+                    thumbhash = meta?.thumbhash,
+                    dim = meta?.dimensions?.let { "${it.first}x${it.second}" },
                     alt = altTexts[url]
                 )
-            }
+            }.distinctBy { it.url }
             if (imageEntries.isNotEmpty()) {
                 tags.addAll(Nip68.buildPictureTags(title = null, media = imageEntries))
             }
@@ -1079,6 +1287,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
             _uploadedUrls.value = emptyList()
             _uploadedMediaMeta.clear()
             _altTexts.value = emptyMap()
+            persistUploadsToState()
             _error.value = null
             _publishing.value = false
             _scheduleEnabled.value = false
@@ -1119,6 +1328,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
             _uploadedUrls.value = emptyList()
             _uploadedMediaMeta.clear()
             _altTexts.value = emptyMap()
+            persistUploadsToState()
             _error.value = null
             _publishing.value = false
             return -1
@@ -1167,6 +1377,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         _uploadedUrls.value = emptyList()
         _uploadedMediaMeta.clear()
         _altTexts.value = emptyMap()
+        persistUploadsToState()
         _error.value = null
         _publishing.value = false
         return sentCount
@@ -1221,6 +1432,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         _uploadedUrls.value = emptyList()
         _uploadedMediaMeta.clear()
         _altTexts.value = emptyMap()
+        persistUploadsToState()
         _error.value = null
         _publishing.value = false
         _privateReply.value = false
@@ -1363,16 +1575,43 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
 
     fun loadDraft(draft: Nip37.Draft) {
         currentDraftId = draft.dTag
-        val text = draft.content
+        // The draft's imeta records ARE the attachment slots (one per
+        // attachment, in order — undescribed included, since a draft is
+        // private bookkeeping).
+        val media = cooking.zap.app.ui.component.parseAttachmentTags(draft.tags)
+        // Migration: drafts saved when URLs lived in the text carry them as
+        // boundary lines — strip exactly those (a URL inside a sentence is
+        // authored prose and survives) or publishing would append them twice.
+        val text = cooking.zap.app.ui.component.stripAttachmentUrlLines(
+            draft.content,
+            media.map { it.url }.toSet()
+        )
         _content.value = TextFieldValue(text, TextRange(text.length))
         savedStateHandle["draft_content"] = text
-        // Re-apply descriptions saved with the draft (imeta inner tags keyed
-        // by URL — alt-text handoff §3). Entries for URLs the user re-attaches
-        // resurface on the chips; undescribed uploads are unaffected.
-        val restoredAlts = cooking.zap.app.ui.component.parseImetaTags(draft.tags)
-            .mapNotNull { (url, meta) -> meta.alt?.let { url to it } }
-            .toMap()
-        _altTexts.value = restoredAlts
+        applyRestoredMedia(media)
+    }
+
+    /** Rebuilds the attachment slots (order, metadata, descriptions) after a
+     *  draft or cache restore. Metadata written before the URL list so
+     *  composerMedia observers never see a slot without its metadata. */
+    private fun applyRestoredMedia(media: List<cooking.zap.app.ui.component.ComposerMedia>) {
+        _uploadedMediaMeta.clear()
+        for (m in media) {
+            _uploadedMediaMeta[m.url] = UploadedMediaMeta(
+                mimeType = m.mimeType,
+                dimensions = m.dimensions?.let { dim ->
+                    val parts = dim.split('x')
+                    val w = parts.getOrNull(0)?.toIntOrNull()
+                    val h = parts.getOrNull(1)?.toIntOrNull()
+                    if (w != null && h != null) w to h else null
+                },
+                thumbhash = m.thumbhash
+            )
+        }
+        _uploadedUrls.value = media.map { it.url }
+        _altTexts.value = media.mapNotNull { m -> m.alt?.let { m.url to it } }.toMap()
+        _galleryHasVideo.value = media.any { it.isVideo }
+        persistUploadsToState()
     }
 
     // Guards against firing more than one restore fetch per fresh composer open.
@@ -1410,6 +1649,14 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
                 currentDraftId = cachedId
                 _content.value = TextFieldValue(cached, TextRange(cached.length))
                 savedStateHandle["draft_content"] = cached
+                // The cache's media copy rehydrates the attachment slots — old
+                // caches (URL-in-text era) have none, and their text keeps the
+                // URLs, so they still publish unchanged.
+                applyRestoredMedia(
+                    cooking.zap.app.ui.component.decodeMediaFromCache(
+                        lastDraftCache.getMedia(signer.pubkeyHex)
+                    )
+                )
                 restoringDraft = false
                 return
             }
@@ -1547,7 +1794,10 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         // Materialize @mentions into nostr:nprofile URIs so the draft is restorable as a standalone text.
         val (materialized, _) = materializeMentions(_content.value.text, _mentions.value)
         val text = materialized.trim()
-        if (text.isBlank() || signer == null) return
+        val media = mediaSnapshot()
+        // A media-only draft (empty caption) is worth saving too — the slots
+        // carry the note now that URLs no longer live in the text.
+        if ((text.isBlank() && media.isEmpty()) || signer == null) return
 
         val draftId = currentDraftId ?: Nip37.newDraftId()
         currentDraftId = draftId
@@ -1557,7 +1807,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         // can't rehydrate, so caching one would let it be restored (and posted) as a root note.
         val isTopLevel = replyTo == null && quoteTo == null
         if (isTopLevel) {
-            lastDraftCache.save(signer.pubkeyHex, text, draftId)
+            lastDraftCache.save(signer.pubkeyHex, text, draftId, cooking.zap.app.ui.component.encodeMediaForCache(media))
         }
         _draftSaved.tryEmit(Unit)
 
@@ -1567,12 +1817,17 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
                 if (replyTo != null) {
                     innerTags.addAll(Nip10.buildReplyTags(replyTo))
                 }
-                // Alt text rides in the draft as imeta inner tags keyed by URL
-                // (alt-text handoff §3) so a restored draft can re-apply the
-                // descriptions. Only described images get a tag.
-                for ((draftAltUrl, draftAlt) in _altTexts.value) {
-                    val wireAlt = cooking.zap.app.ui.component.sanitizeAltText(draftAlt) ?: continue
-                    innerTags.add(listOf("imeta", "url $draftAltUrl", "alt $wireAlt"))
+                // Every attachment as a private imeta record, in slot order —
+                // undescribed ones carry just url/m/dim/thumbhash (no `alt`
+                // slot), keeping the draft restorable. The published note
+                // still emits imeta per its own rules at publish time.
+                for (m in media) {
+                    val parts = mutableListOf("imeta", "url ${m.url}")
+                    m.mimeType?.let { parts.add("m $it") }
+                    m.dimensions?.let { parts.add("dim $it") }
+                    m.thumbhash?.let { parts.add("thumbhash $it") }
+                    m.alt?.trim()?.takeIf { it.isNotEmpty() }?.let { parts.add("alt $it") }
+                    innerTags.add(parts)
                 }
                 val innerJson = Nip37.serializeDraftContent(
                     pubkeyHex = signer.pubkeyHex,
@@ -1621,7 +1876,14 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         if (signer == null) return
         val isTopLevel = replyTo == null && quoteTo == null
         val cachedId = lastDraftCache.getId(signer.pubkeyHex)
-        if (!shouldDiscardOnDispose(isTopLevel, currentDraftId, cachedId, _content.value.text.isBlank())) return
+        if (!shouldDiscardOnDispose(
+                isTopLevel = isTopLevel,
+                currentDraftId = currentDraftId,
+                cachedId = cachedId,
+                textIsBlank = _content.value.text.isBlank(),
+                mediaIsEmpty = _uploadedUrls.value.isEmpty()
+            )
+        ) return
         deleteDraftOnPublish(relayPool, signer)
     }
 

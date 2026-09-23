@@ -80,8 +80,13 @@ const val ALT_TEXT_MAX_CHARS = 2000
  * capped), cap at [ALT_TEXT_MAX_CHARS], and collapse to null when empty —
  * an undescribed image carries no `alt` slot at all (and no imeta tag, per
  * the handoff spec §1).
+ *
+ * The cap counts CODE POINTS, not UTF-16 code units: a code-unit slice of a
+ * string ending in an emoji ships half a surrogate pair.
  */
-fun sanitizeAltText(raw: String): String? =
-    cooking.zap.app.nostr.Nip68.normalizeAltBreaks(raw)
-        .take(ALT_TEXT_MAX_CHARS)
-        .takeIf { it.isNotEmpty() }
+fun sanitizeAltText(raw: String): String? {
+    val normalized = cooking.zap.app.nostr.Nip68.normalizeAltBreaks(raw)
+    if (normalized.isEmpty()) return null
+    if (normalized.codePointCount(0, normalized.length) <= ALT_TEXT_MAX_CHARS) return normalized
+    return normalized.substring(0, normalized.offsetByCodePoints(0, ALT_TEXT_MAX_CHARS))
+}

@@ -21,18 +21,32 @@ class LastDraftCache internal constructor(private val store: Store) {
         SharedPrefsStore(context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE))
     )
 
-    fun save(pubkeyHex: String, content: String, draftId: String) {
-        store.putAll(mapOf(contentKey(pubkeyHex) to content, idKey(pubkeyHex) to draftId))
+    fun save(pubkeyHex: String, content: String, draftId: String, mediaEncoded: String = "") {
+        store.putAll(
+            mapOf(
+                contentKey(pubkeyHex) to content,
+                idKey(pubkeyHex) to draftId,
+                mediaKey(pubkeyHex) to mediaEncoded
+            )
+        )
     }
 
     fun getContent(pubkeyHex: String): String? = store.get(contentKey(pubkeyHex))
 
     fun getId(pubkeyHex: String): String? = store.get(idKey(pubkeyHex))
 
+    /**
+     * The draft's attachment slots (a ComposerMedia list encoded by
+     * encodeMediaForCache), carried separately from the content now that
+     * attachment URLs no longer live in the editor text. Absent for caches
+     * written before the attachment model; empty means "no attachments".
+     */
+    fun getMedia(pubkeyHex: String): String? = store.get(mediaKey(pubkeyHex))
+
     /** Clear the cache for a single account only (discard / account switch). Other accounts'
      *  pubkey-keyed entries are untouched. */
     fun clear(pubkeyHex: String) {
-        store.remove(listOf(contentKey(pubkeyHex), idKey(pubkeyHex)))
+        store.remove(listOf(contentKey(pubkeyHex), idKey(pubkeyHex), mediaKey(pubkeyHex)))
     }
 
     /** Wipe every account's cache (full logout — no accounts remain on the device). */
@@ -52,6 +66,7 @@ class LastDraftCache internal constructor(private val store: Store) {
 
     private fun contentKey(pubkeyHex: String) = "content_$pubkeyHex"
     private fun idKey(pubkeyHex: String) = "id_$pubkeyHex"
+    private fun mediaKey(pubkeyHex: String) = "media_$pubkeyHex"
 
     /** Minimal key-value seam over the backing store; batched writes mirror a SharedPreferences edit. */
     internal interface Store {
