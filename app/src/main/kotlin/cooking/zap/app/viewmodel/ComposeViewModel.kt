@@ -430,22 +430,21 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         _uploadedUrls.value = _uploadedUrls.value + url
         persistUploadsToState()
 
-        // Remove the boundary line, shifting/dropping tracked mention ranges
-        // exactly like a user edit of the same region would.
+        // Remove the pasted occurrence, shifting/dropping tracked mention
+        // ranges exactly like a user edit of the same region would.
         val value = _content.value
-        val lines = value.text.split('\n')
-        val idx = lines.indexOfFirst { it.trim() == url }
-        if (idx >= 0) {
-            val lineStart = (0 until idx).sumOf { lines[it].length + 1 }
-            val hasNewlineAfter = lineStart + lines[idx].length < value.text.length
-            val removedLen = lines[idx].length + if (hasNewlineAfter) 1 else 0
-            val newText = cooking.zap.app.ui.component.removeBareUrlLine(value.text, url)
+        val oldText = value.text
+        val newText = cooking.zap.app.ui.component.removeBareUrlOccurrence(oldText, url)
+        if (newText != oldText) {
+            var removalStart = 0
+            while (removalStart < newText.length && newText[removalStart] == oldText[removalStart]) removalStart++
+            val removedLen = oldText.length - newText.length
             _mentions.value = _mentions.value.mapNotNull { m ->
                 when {
-                    m.start >= lineStart + removedLen ->
+                    m.start >= removalStart + removedLen ->
                         m.copy(start = m.start - removedLen, end = m.end - removedLen)
-                    m.end <= lineStart -> m
-                    else -> null // range intersects the removed line — drop
+                    m.end <= removalStart -> m
+                    else -> null // range intersects the removed text — drop
                 }
             }
             saveMentionsToState()

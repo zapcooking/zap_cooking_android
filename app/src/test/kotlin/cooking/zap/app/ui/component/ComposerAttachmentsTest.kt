@@ -113,7 +113,7 @@ class ComposerAttachmentsTest {
         assertEquals(text, stripAttachmentUrlLines(text, emptySet()))
     }
 
-    // ---- bareUrlLines / removeBareUrlLine (pasted-link attach) ----
+    // ---- bareUrlLines / removeBareUrlOccurrence (pasted-link attach) ----
 
     @Test
     fun `bare url alone on its line is a candidate`() {
@@ -132,13 +132,20 @@ class ComposerAttachmentsTest {
     }
 
     @Test
-    fun `url inside a sentence is not a candidate`() {
-        assertEquals(emptyList<String>(), bareUrlLines("mirror at https://x/a.png if the first dies"))
+    fun `several urls on one line all surface — a paste run attaches piece by piece`() {
+        assertEquals(
+            listOf("https://x/a.png", "https://x/b.png"),
+            bareUrlLines("https://x/a.png https://x/b.png")
+        )
+        assertEquals(
+            listOf("https://x/a.png", "https://x/b.png", "https://x/c.png"),
+            bareUrlLines("https://x/a.png\nwords between\nhttps://x/b.png https://x/c.png")
+        )
     }
 
     @Test
-    fun `two urls on one line match neither`() {
-        assertEquals(emptyList<String>(), bareUrlLines("https://x/a.png https://x/b.png"))
+    fun `url inside a sentence is not a candidate`() {
+        assertEquals(emptyList<String>(), bareUrlLines("mirror at https://x/a.png if the first dies"))
     }
 
     @Test
@@ -154,19 +161,41 @@ class ComposerAttachmentsTest {
     }
 
     @Test
-    fun `removeBareUrlLine drops exactly the matching line`() {
-        assertEquals("prose\ntrailing", removeBareUrlLine("prose\nhttps://x/a.png\ntrailing", "https://x/a.png"))
-        assertEquals("prose", removeBareUrlLine("prose\n  https://x/a.png  ", "https://x/a.png"))
-        assertEquals("", removeBareUrlLine("https://x/a.png", "https://x/a.png"))
+    fun `removeBareUrlOccurrence drops a url-only line entirely with one newline`() {
+        assertEquals("prose\ntrailing", removeBareUrlOccurrence("prose\nhttps://x/a.png\ntrailing", "https://x/a.png"))
+        assertEquals("prose", removeBareUrlOccurrence("prose\n  https://x/a.png  ", "https://x/a.png"))
+        assertEquals("", removeBareUrlOccurrence("https://x/a.png", "https://x/a.png"))
+        assertEquals("prose", removeBareUrlOccurrence("prose\nhttps://x/a.png", "https://x/a.png"))
     }
 
     @Test
-    fun `removeBareUrlLine removes only the first occurrence and leaves non-boundary text alone`() {
+    fun `removeBareUrlOccurrence on a multi-url line keeps the survivors as a clean line`() {
+        assertEquals(
+            "https://x/b.png",
+            removeBareUrlOccurrence("https://x/a.png https://x/b.png", "https://x/a.png")
+        )
+        assertEquals(
+            "https://x/a.png https://x/c.png",
+            removeBareUrlOccurrence("https://x/a.png https://x/b.png https://x/c.png", "https://x/b.png")
+        )
+    }
+
+    @Test
+    fun `removeBareUrlOccurrence removes only the first occurrence and leaves prose alone`() {
         assertEquals(
             "https://x/a.png",
-            removeBareUrlLine("https://x/a.png\nhttps://x/a.png", "https://x/a.png")
+            removeBareUrlOccurrence("https://x/a.png\nhttps://x/a.png", "https://x/a.png")
         )
-        assertEquals("see https://x/a.png now", removeBareUrlLine("see https://x/a.png now", "https://x/a.png"))
+        assertEquals("see https://x/a.png now", removeBareUrlOccurrence("see https://x/a.png now", "https://x/a.png"))
+        assertEquals("unchanged", removeBareUrlOccurrence("unchanged", "https://x/a.png"))
+    }
+
+    @Test
+    fun `bareUrlOccurrenceRange finds the standalone token not substrings`() {
+        val text = "https://x/ab.png https://x/a.png"
+        val range = bareUrlOccurrenceRange(text, "https://x/a.png")!!
+        assertEquals("https://x/a.png", text.substring(range.first, range.last + 1))
+        assertEquals(null, bareUrlOccurrenceRange("see https://x/a.png/x", "https://x/a.png"))
     }
 
     // ---- parseAttachmentTags (draft persistence, ordered) ----

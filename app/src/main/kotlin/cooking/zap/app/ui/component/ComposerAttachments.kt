@@ -72,24 +72,69 @@ fun stripAttachmentUrlLines(text: String, urls: Set<String>): String {
 private val BARE_URL_LINE_REGEX = Regex("^https?://\\S+$")
 
 /**
- * Bare http(s) URLs that are alone on their line (boundary occurrences) —
- * candidates to OFFER as attachment slots. A URL inside a sentence is
- * authored prose and is never offered. Whitespace around the URL still
- * counts as alone; two URLs on one line match neither (ambiguous).
+ * Bare http(s) URLs offered as attachment slots: every URL on a line that
+ * contains ONLY URLs (whitespace-separated) — so a run of pasted links all
+ * surface, and attaching one leaves the rest as candidates on their own.
+ * A line with any non-URL word is authored prose and offers nothing.
+ *
+ * Deliberately more liberal than [stripAttachmentUrlLines]: the migration
+ * strips only exact single-URL lines because it guesses; this feeds an
+ * explicit user-tapped offer, so no guess is involved.
  */
 fun bareUrlLines(text: String): List<String> =
-    text.split('\n').map { it.trim() }.filter { BARE_URL_LINE_REGEX.matches(it) }.distinct()
+    text.split('\n').flatMap { line ->
+        val tokens = line.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        if (tokens.isNotEmpty() && tokens.all { BARE_URL_LINE_REGEX.matches(it) }) tokens
+        else emptyList()
+    }.distinct()
 
 /**
- * Removes the first line that is exactly [url] (modulo surrounding
- * whitespace) — the text-side half of attaching a pasted link. Returns the
- * input unchanged when no such line exists.
+ * Character range of the first occurrence of [url] as a whitespace-delimited
+ * token ON A URL-ONLY LINE (same rule as [bareUrlLines] — a line with any
+ * non-URL word is prose and is never touched), or null when absent.
  */
-fun removeBareUrlLine(text: String, url: String): String {
-    val lines = text.split('\n')
-    val idx = lines.indexOfFirst { it.trim() == url }
-    if (idx < 0) return text
-    return lines.filterIndexed { i, _ -> i != idx }.joinToString("\n")
+fun bareUrlOccurrenceRange(text: String, url: String): IntRange? {
+    var lineStart = 0
+    for (line in text.split('\n')) {
+        val tokens = line.split(Regex("\\s+")).filter { it.isNotEmpty() }
+        val urlOnlyLine = tokens.isNotEmpty() &&
+            tokens.all { BARE_URL_LINE_REGEX.matches(it) }
+        if (urlOnlyLine && url in tokens) {
+            var searchFrom = 0
+            for (token in tokens) {
+                val tokenStart = line.indexOf(token, searchFrom)
+                if (token == url) return IntRange(lineStart + tokenStart, lineStart + tokenStart + token.length - 1)
+                searchFrom = tokenStart + token.length
+            }
+        }
+        lineStart += line.length + 1
+    }
+    return null
+}
+
+/**
+ * Removes the first standalone occurrence of [url]. A line that was only
+ * that URL disappears entirely (with one adjacent newline); on a line of
+ * several URLs just the token and one separator go, so the survivors become
+ * plain single-URL lines — candidates again on their own.
+ */
+fun removeBareUrlOccurrence(text: String, url: String): String {
+    val range = bareUrlOccurrenceRange(text, url) ?: return text
+    val lineStart = text.lastIndexOf('\n', range.first).let { if (it < 0) 0 else it + 1 }
+    val lineEnd = text.indexOf('\n', range.first).let { if (it < 0) text.length else it }
+    val lineIsOnlyThisUrl = text.substring(lineStart, lineEnd).trim() == url
+    return if (lineIsOnlyThisUrl) {
+        var from = lineStart
+        var to = if (lineEnd < text.length) lineEnd + 1 else lineEnd
+        if (lineEnd == text.length && lineStart > 0) from -= 1 // also eat the preceding newline
+        text.removeRange(from, to)
+    } else {
+        var from = range.first
+        var to = range.last + 1
+        if (to < lineEnd && text[to].isWhitespace()) to += 1        // prefer trailing separator
+        else if (from > lineStart && text[from - 1].isWhitespace()) from -= 1
+        text.removeRange(from, to)
+    }
 }
 
 /**
