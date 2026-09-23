@@ -1484,6 +1484,6 @@
     <string name="cd_move_attachment_later">Move attachment later</string>
     <string name="cd_remove_attachment">Remove attachment</string>
     <string name="attachment_thumbnail_failed">Thumbnail failed to load</string>
-    <string name="compose_attach_pasted_link">Attach as media</string>
+    <string name="compose_attach_pasted_link">Attach this media</string>
 
 </resources>

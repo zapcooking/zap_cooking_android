@@ -834,36 +834,12 @@ fun ComposeScreen(
                         }
                     )
 
-                    // Attachment strip (inline note/reply mode), under the text
-                    // entry field: the thumbnails are where order is changed —
-                    // arrow steppers on every cell (touch and keyboard both
-                    // reach them), plus the per-image alt chip and remove. Alt
-                    // text writes by URL, not index, so it follows its image
-                    // through a reorder for free.
-                    if (!galleryMode && uploadedUrls.isNotEmpty()) {
-                        AttachmentThumbStrip(
-                            urls = uploadedUrls,
-                            isImageUpload = { viewModel.isImageUpload(it) },
-                            isVideoUpload = { viewModel.isVideoUpload(it) },
-                            savedAltUrls = altTexts.keys,
-                            onEditAlt = { altEditorUrl = it },
-                            onRemove = { viewModel.removeMediaUrl(it) },
-                            onMove = { from, to -> viewModel.moveMedia(from, to) }
-                        )
-
-                        // Read-only accounting for attachments that are no
-                        // longer visible in the editor text: one collapsed
-                        // line, expanding to one row per URL. Reordering
-                        // belongs to the thumbnails — two places to change
-                        // one array is two places to keep in step.
-                        AttachmentSummaryDrawer(urls = uploadedUrls)
-                    }
-
-                    // Pasted-link offers: every URL on a URL-only line becomes
-                    // an attachment slot on tap (paste several and each gets
-                    // its own offer). Offered, never auto-converted — a URL a
-                    // person wrote can be deliberate prose; the sentence form
-                    // ("mirror at … if the first dies") gets no offer.
+                    // Pasted-link offers, above the attachments section: every
+                    // URL on a URL-only line becomes an attachment slot on tap
+                    // (paste several and each gets its own offer). Offered,
+                    // never auto-converted — a URL a person wrote can be
+                    // deliberate prose; the sentence form ("mirror at … if the
+                    // first dies") gets no offer.
                     if (!galleryMode && urlCandidates.isNotEmpty()) {
                         urlCandidates.forEach { candidate ->
                             Surface(
@@ -898,6 +874,31 @@ fun ComposeScreen(
                                 }
                             }
                         }
+                    }
+
+                    // Attachment strip (inline note/reply mode), under the text
+                    // entry field: the thumbnails are where order is changed —
+                    // arrow steppers on every cell (touch and keyboard both
+                    // reach them), plus the per-image alt chip and remove. Alt
+                    // text writes by URL, not index, so it follows its image
+                    // through a reorder for free.
+                    if (!galleryMode && uploadedUrls.isNotEmpty()) {
+                        AttachmentThumbStrip(
+                            urls = uploadedUrls,
+                            isImageUpload = { viewModel.isImageUpload(it) },
+                            isVideoUpload = { viewModel.isVideoUpload(it) },
+                            savedAltUrls = altTexts.keys,
+                            onEditAlt = { altEditorUrl = it },
+                            onRemove = { viewModel.removeMediaUrl(it) },
+                            onMove = { from, to -> viewModel.moveMedia(from, to) }
+                        )
+
+                        // Read-only accounting for attachments that are no
+                        // longer visible in the editor text: one collapsed
+                        // line, expanding to one row per URL. Reordering
+                        // belongs to the thumbnails — two places to change
+                        // one array is two places to keep in step.
+                        AttachmentSummaryDrawer(urls = uploadedUrls)
                     }
 
                     // Quoted post preview — shown below the comment so the user's
