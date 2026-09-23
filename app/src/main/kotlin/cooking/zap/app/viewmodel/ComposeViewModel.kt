@@ -427,6 +427,10 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
      * (shared across duplicate slots); the slot publishes fine without it.
      */
     fun attachUrl(url: String) {
+        // Only ever converts a pasted occurrence that is still in the text.
+        // The offers flow updates a frame behind a fast double-tap; without
+        // this guard the second tap would add a slot with nothing to consume.
+        if (cooking.zap.app.ui.component.bareUrlOccurrenceRange(_content.value.text, url) == null) return
         // Record the slot before touching the text so composerMedia observers
         // never see a slot without its (placeholder) metadata entry.
         _uploadedMediaMeta[url] = _uploadedMediaMeta[url] ?: UploadedMediaMeta(mimeType = null)
@@ -463,10 +467,11 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
     }
 
     /**
-     * Best-effort metadata for a pasted-link slot: fetch the bytes (bounded),
-     * derive mime/dimensions/thumbhash with the same helpers the upload
-     * pipeline uses. A failure leaves the slot with unknown metadata — the
-     * URL still publishes; only imeta richness and the alt chip are lost.
+     * Best-effort metadata for a pasted-link slot: fetch the bytes (capped —
+     * a chunked or lying Content-Length must never stream unbounded), derive
+     * mime/dimensions/thumbhash with the same helpers the upload pipeline
+     * uses. A failure leaves the slot with unknown metadata — the URL still
+     * publishes; only imeta richness and the alt chip are lost.
      */
     private suspend fun fetchRemoteMediaMeta(url: String) {
         val meta = try {
@@ -477,12 +482,23 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
                     if (!response.isSuccessful) return@use null
                     val body = response.body ?: return@use null
                     val headerMime = body.contentType()?.let { "${it.type}/${it.subtype}" }
-                    val length = body.contentLength()
-                    // Bound the download: metadata isn't worth hauling huge files.
-                    if (length > MAX_REMOTE_META_BYTES) {
+                    // Read at most MAX+1 bytes ourselves: contentLength() is
+                    // absent for chunked responses and untrustworthy anyway.
+                    var overflow = false
+                    val bytes = body.byteStream().use { input ->
+                        val buffer = java.io.ByteArrayOutputStream()
+                        val chunk = ByteArray(64 * 1024)
+                        while (!overflow) {
+                            val read = input.read(chunk)
+                            if (read < 0) break
+                            buffer.write(chunk, 0, read)
+                            if (buffer.size() > MAX_REMOTE_META_BYTES) overflow = true
+                        }
+                        buffer.toByteArray()
+                    }
+                    if (overflow) {
                         return@use headerMime?.let { UploadedMediaMeta(mimeType = it) }
                     }
-                    val bytes = body.bytes()
                     val mime = headerMime ?: mimeFromMediaUrl(url)
                     val dims = extractDimensionsFromBytes(bytes, mime)
                     val thumb = if (mime.startsWith("image/")) createThumbhash(bytes) else null
