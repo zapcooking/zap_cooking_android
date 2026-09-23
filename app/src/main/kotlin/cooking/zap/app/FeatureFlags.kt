@@ -24,4 +24,13 @@ object FeatureFlags {
      * device checklist passed — see #236 for the full results.
      */
     const val CHEFFY_MEAL_PLAN_ENABLED = true
+
+    /**
+     * "Generate with AI (Cook+)" in the composer's alt editor — ask-photo
+     * with `purpose: "alt"` (docs/accessibility/alt-text-imeta-handoff.md
+     * §4). Membership and rate limits are enforced server-side and fail
+     * closed; this flag only hides the entry point. Kill-switch precedent:
+     * NOTE_REVIEW_ENABLED — do not delete it or inline its call sites.
+     */
+    const val ALT_TEXT_AI_ENABLED = true
 }

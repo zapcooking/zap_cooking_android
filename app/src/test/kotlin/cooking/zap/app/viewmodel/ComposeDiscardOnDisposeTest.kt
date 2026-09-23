@@ -21,7 +21,23 @@ class ComposeDiscardOnDisposeTest {
                 isTopLevel = true,
                 currentDraftId = "draft-abc",
                 cachedId = "draft-abc",
-                textIsBlank = true
+                textIsBlank = true,
+                mediaIsEmpty = true
+            )
+        )
+    }
+
+    @Test
+    fun `blank editor with attachments still up does not discard`() {
+        // Attachment slots are content too — emptying the prose but keeping the
+        // images leaves a live draft the auto-save path owns.
+        assertFalse(
+            shouldDiscardOnDispose(
+                isTopLevel = true,
+                currentDraftId = "draft-abc",
+                cachedId = "draft-abc",
+                textIsBlank = true,
+                mediaIsEmpty = false
             )
         )
     }
@@ -35,7 +51,8 @@ class ComposeDiscardOnDisposeTest {
                 isTopLevel = false,
                 currentDraftId = "draft-abc",
                 cachedId = "draft-abc",
-                textIsBlank = true
+                textIsBlank = true,
+                mediaIsEmpty = true
             )
         )
     }
@@ -49,7 +66,8 @@ class ComposeDiscardOnDisposeTest {
                 isTopLevel = true,
                 currentDraftId = null,
                 cachedId = "draft-abc",
-                textIsBlank = true
+                textIsBlank = true,
+                mediaIsEmpty = true
             )
         )
     }
@@ -62,20 +80,22 @@ class ComposeDiscardOnDisposeTest {
                 isTopLevel = true,
                 currentDraftId = "draft-abc",
                 cachedId = "draft-XYZ",
-                textIsBlank = true
+                textIsBlank = true,
+                mediaIsEmpty = true
             )
         )
     }
 
     @Test
     fun `non-blank text does not discard`() {
-        // The user still has content; the non-blank auto-save path owns this, not discard.
+        // The user still has content; the non-blank auto-save path owns that, not discard.
         assertFalse(
             shouldDiscardOnDispose(
                 isTopLevel = true,
                 currentDraftId = "draft-abc",
                 cachedId = "draft-abc",
-                textIsBlank = false
+                textIsBlank = false,
+                mediaIsEmpty = true
             )
         )
     }

@@ -58,16 +58,20 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Article
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.VisibilityOff
+import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Tag
+import androidx.compose.material.icons.outlined.Videocam
 import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -99,6 +103,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -114,9 +119,14 @@ import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
@@ -131,11 +141,14 @@ import cooking.zap.app.repo.MentionCandidate
 import cooking.zap.app.repo.ProfileRepository
 import cooking.zap.app.repo.PowPreferences
 import cooking.zap.app.R
+import cooking.zap.app.ui.component.AltTextEditorDialog
 import cooking.zap.app.ui.component.EmojiShortcodePopup
 import cooking.zap.app.ui.component.EmojiVisualTransformation
 import cooking.zap.app.ui.component.MentionOutputTransformation
 import cooking.zap.app.ui.component.ProfilePicture
+import cooking.zap.app.ui.component.RetryingAsyncImage
 import cooking.zap.app.ui.component.RichContent
+import cooking.zap.app.ui.component.composeNoteContent
 import cooking.zap.app.ui.component.parseImetaTags
 import cooking.zap.app.ui.component.detectEmojiAutocomplete
 import cooking.zap.app.ui.component.insertEmojiShortcode
@@ -210,6 +223,9 @@ fun ComposeScreen(
     val publishing by viewModel.publishing.collectAsState()
     val error by viewModel.error.collectAsState()
     val uploadedUrls by viewModel.uploadedUrls.collectAsState()
+    // Attachment slots (ordered, authoritative — the editor text never carries
+    // an attachment URL). Preview renders composeNoteContent(text, media).
+    val composerMedia by viewModel.composerMedia.collectAsState()
     val uploadProgress by viewModel.uploadProgress.collectAsState()
     val countdownSeconds by viewModel.countdownSeconds.collectAsState()
     val countdownTotalSeconds by viewModel.countdownTotalSeconds.collectAsState()
@@ -231,6 +247,29 @@ fun ComposeScreen(
     val scheduleTimestamp by viewModel.scheduleTimestamp.collectAsState()
     val privateReply by viewModel.privateReply.collectAsState()
     val privateReplyLocked by viewModel.privateReplyLocked.collectAsState()
+    // Alt text (NIP-92 imeta) — per-image editor state (alt-text handoff §3)
+    val altTexts by viewModel.altTexts.collectAsState()
+    val altGeneration by viewModel.altGeneration.collectAsState()
+    var altEditorUrl by remember { mutableStateOf<String?>(null) }
+
+    altEditorUrl?.let { url ->
+        AltTextEditorDialog(
+            url = url,
+            initialAlt = altTexts[url] ?: "",
+            generation = altGeneration,
+            onGenerate = { viewModel.generateAltText(url, signer) },
+            onConsumeGeneration = { viewModel.consumeAltGeneration() },
+            onSave = { value ->
+                viewModel.setAltText(url, value)
+                altEditorUrl = null
+                viewModel.consumeAltGeneration()
+            },
+            onDismiss = {
+                altEditorUrl = null
+                viewModel.consumeAltGeneration()
+            }
+        )
+    }
 
     LaunchedEffect(replyTo) {
         viewModel.configureForReply(replyTo)
@@ -266,7 +305,8 @@ fun ComposeScreen(
     var previewTopOffsetPx by remember { mutableIntStateOf(0) }
     LaunchedEffect(imeVisible, countdownSeconds) {
         if (!imeVisible && countdownSeconds != null) {
-            val showPreview = content.text.isNotBlank() || (pollEnabled && pollOptions.any { it.isNotBlank() })
+            val showPreview = content.text.isNotBlank() || uploadedUrls.isNotEmpty() ||
+                (pollEnabled && pollOptions.any { it.isNotBlank() })
             if (showPreview) scrollState.animateScrollTo(previewTopOffsetPx)
         }
     }
@@ -378,12 +418,16 @@ fun ComposeScreen(
                         uploadedUrls = uploadedUrls,
                         uploadProgress = uploadProgress,
                         countdownSeconds = countdownSeconds,
+                        savedAltUrls = altTexts.keys,
+                        isImageUpload = { viewModel.isImageUpload(it) },
+                        onEditAlt = { altEditorUrl = it },
                         onPickMedia = {
                             photoPickerLauncher.launch(
                                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
                             )
                         },
-                        onRemoveUrl = { viewModel.removeMediaUrl(it) }
+                        onRemoveUrl = { viewModel.removeMediaUrl(it) },
+                        onMoveMedia = { from, to -> viewModel.moveMedia(from, to) }
                     )
 
                     Spacer(Modifier.height(12.dp))
@@ -714,11 +758,34 @@ fun ComposeScreen(
                         )
                     }
 
+                    // Attachment strip (inline note/reply mode): the thumbnails
+                    // are where order is changed — arrow steppers on every cell
+                    // (touch and keyboard both reach them), plus the per-image
+                    // alt chip and remove. Alt text writes by URL, not index,
+                    // so it follows its image through a reorder for free.
+                    if (!galleryMode && uploadedUrls.isNotEmpty()) {
+                        AttachmentThumbStrip(
+                            urls = uploadedUrls,
+                            isImageUpload = { viewModel.isImageUpload(it) },
+                            savedAltUrls = altTexts.keys,
+                            onEditAlt = { altEditorUrl = it },
+                            onRemove = { viewModel.removeMediaUrl(it) },
+                            onMove = { from, to -> viewModel.moveMedia(from, to) }
+                        )
+
+                        // Read-only accounting for attachments that are no
+                        // longer visible in the editor text: one collapsed
+                        // line, expanding to one row per URL. Reordering
+                        // belongs to the thumbnails above — two places to
+                        // change one array is two places to keep in step.
+                        AttachmentSummaryDrawer(urls = uploadedUrls)
+                    }
+
                     // Text field with GIF keyboard support via BasicTextField(TextFieldState)
                     val textFieldState = remember { TextFieldState(content.text) }
                     val enabled = !publishing && countdownSeconds == null
 
-                    // Sync ViewModel -> TextFieldState (for programmatic updates: upload URL, mention select, etc.)
+                    // Sync ViewModel -> TextFieldState (for programmatic updates: mention select, draft restore)
                     LaunchedEffect(content) {
                         if (textFieldState.text.toString() != content.text) {
                             textFieldState.edit {
@@ -1270,7 +1337,8 @@ fun ComposeScreen(
                     // Live preview — always rendered (not gated on keyboard state) so the
                     // user can just scroll the composer down to see it while typing, iOS-style.
                     AnimatedVisibility(
-                        visible = (content.text.isNotBlank() || (pollEnabled && pollOptions.any { it.isNotBlank() })) && eventRepo != null
+                        visible = (content.text.isNotBlank() || uploadedUrls.isNotEmpty() ||
+                            (pollEnabled && pollOptions.any { it.isNotBlank() })) && eventRepo != null
                     ) {
                         Surface(
                             shape = RoundedCornerShape(8.dp),
@@ -1315,8 +1383,11 @@ fun ComposeScreen(
                                         )
                                     }
                                 }
+                                // Preview renders composeNoteContent — the same
+                                // function publish uses — never the bare editor
+                                // text, so it previews the note that will go out.
                                 RichContent(
-                                    content = content.text,
+                                    content = composeNoteContent(content.text, composerMedia),
                                     emojiMap = resolvedEmojis,
                                     eventRepo = eventRepo
                                 )
@@ -1442,9 +1513,11 @@ fun ComposeScreen(
                         },
                         // Publish gating (iOS parity, wisp #567): mirrors publish()'s
                         // validation — gallery posts need an upload (caption optional),
-                        // everything else needs text (uploads insert their URL into it).
+                        // everything else needs text or an attachment slot (the URLs
+                        // are appended at publish, so media alone is a publishable note).
                         enabled = !publishing && !isMiningBusy &&
-                            (if (galleryMode) uploadedUrls.isNotEmpty() else content.text.isNotBlank()),
+                            (if (galleryMode) uploadedUrls.isNotEmpty()
+                             else content.text.isNotBlank() || uploadedUrls.isNotEmpty()),
                         modifier = Modifier.fillMaxWidth().height(44.dp),
                         contentPadding = PaddingValues(0.dp)
                     ) {
@@ -1598,11 +1671,16 @@ private fun MentionCandidateRow(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun GalleryComposeSection(
+
     uploadedUrls: List<String>,
     uploadProgress: String?,
     countdownSeconds: Int?,
+    savedAltUrls: Set<String>,
+    isImageUpload: (String) -> Boolean,
+    onEditAlt: (String) -> Unit,
     onPickMedia: () -> Unit,
-    onRemoveUrl: (String) -> Unit
+    onRemoveUrl: (String) -> Unit,
+    onMoveMedia: (Int, Int) -> Unit
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         if (uploadedUrls.isEmpty()) {
@@ -1661,16 +1739,26 @@ private fun GalleryComposeSection(
                     state = pagerState,
                     modifier = Modifier.fillMaxSize()
                 ) { page ->
+                    val pageUrl = uploadedUrls[page]
                     Box(modifier = Modifier.fillMaxSize()) {
-                        AsyncImage(
-                            model = uploadedUrls[page],
+                        RetryingAsyncImage(
+                            url = pageUrl,
                             contentDescription = "Uploaded media ${page + 1}",
-                            contentScale = ContentScale.Crop,
                             modifier = Modifier.fillMaxSize()
                         )
+                        // Alt chip (top-start) — "+ ALT" undescribed, "✓ ALT" saved
+                        if (isImageUpload(pageUrl)) {
+                            AltChip(
+                                saved = pageUrl in savedAltUrls,
+                                onClick = { onEditAlt(pageUrl) },
+                                modifier = Modifier
+                                    .align(Alignment.TopStart)
+                                    .padding(8.dp)
+                            )
+                        }
                         // Remove button
                         IconButton(
-                            onClick = { onRemoveUrl(uploadedUrls[page]) },
+                            onClick = { onRemoveUrl(pageUrl) },
                             modifier = Modifier
                                 .align(Alignment.TopEnd)
                                 .padding(8.dp)
@@ -1684,6 +1772,31 @@ private fun GalleryComposeSection(
                                 tint = Color.White,
                                 modifier = Modifier.size(18.dp)
                             )
+                        }
+                        // Steppers (bottom-start) — the touch/keyboard reorder
+                        // mechanism, same splice as the inline strip. First and
+                        // last pages omit the arrow that would do nothing.
+                        if (uploadedUrls.size > 1) {
+                            Row(
+                                modifier = Modifier
+                                    .align(Alignment.BottomStart)
+                                    .padding(8.dp)
+                            ) {
+                                if (page > 0) {
+                                    GalleryStepButton(
+                                        icon = Icons.AutoMirrored.Outlined.KeyboardArrowLeft,
+                                        contentDescription = stringResource(R.string.cd_move_attachment_earlier),
+                                        onClick = { onMoveMedia(page, page - 1) }
+                                    )
+                                }
+                                if (page < uploadedUrls.size - 1) {
+                                    GalleryStepButton(
+                                        icon = Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                                        contentDescription = stringResource(R.string.cd_move_attachment_later),
+                                        onClick = { onMoveMedia(page, page + 1) }
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -1727,23 +1840,260 @@ private fun GalleryComposeSection(
                     Spacer(Modifier.width(4.dp))
                     Text("Add more", style = MaterialTheme.typography.labelMedium)
                 }
-                if (uploadProgress != null) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.primary
+                // The count label never swaps out for the progress label — a
+                // label swap resizes the row and everything sized to it.
+                Text(
+                    "${uploadedUrls.size} ${if (uploadedUrls.size == 1) "item" else "items"}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                AnimatedVisibility(visible = uploadProgress != null) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            uploadProgress.orEmpty(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The composer's per-image alt chip (alt-text handoff §3): "+ ALT" on an
+ * undescribed image, "✓ ALT" (accent) once a description is saved. Tapping
+ * opens the editor; saving nothing (clear) removes the imeta on publish.
+ */
+@Composable
+private fun AltChip(
+    saved: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val cdText = stringResource(R.string.cd_add_alt_text)
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(if (saved) MaterialTheme.colorScheme.primary else Color.Black.copy(alpha = 0.6f))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 6.dp, vertical = 3.dp)
+            .semantics { contentDescription = cdText }
+    ) {
+        Text(
+            text = if (saved) stringResource(R.string.alt_chip_saved) else stringResource(R.string.alt_chip_add),
+            style = MaterialTheme.typography.labelSmall,
+            color = if (saved) MaterialTheme.colorScheme.onPrimary else Color.White
+        )
+    }
+}
+
+/**
+ * Reorderable attachment thumbnails for the inline (non-gallery) composer.
+ * Steppers are the reorder mechanism — touch and keyboard both reach buttons.
+ * The first and last cells omit the arrow that would do nothing rather than
+ * showing a disabled one.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AttachmentThumbStrip(
+    urls: List<String>,
+    isImageUpload: (String) -> Boolean,
+    savedAltUrls: Set<String>,
+    onEditAlt: (String) -> Unit,
+    onRemove: (String) -> Unit,
+    onMove: (Int, Int) -> Unit
+) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+    ) {
+        urls.forEachIndexed { index, url ->
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Box {
+                    RetryingAsyncImage(
+                        url = url,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .size(64.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
                     )
-                    Text(
-                        uploadProgress,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                } else {
-                    Text(
-                        "${uploadedUrls.size} ${if (uploadedUrls.size == 1) "item" else "items"}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    if (!isImageUpload(url)) {
+                        // Non-image slot (e.g. a GIF transcoded to video)
+                        Icon(
+                            imageVector = Icons.Outlined.Videocam,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                                .padding(4.dp)
+                                .size(18.dp)
+                        )
+                    } else {
+                        AltChip(
+                            saved = url in savedAltUrls,
+                            onClick = { onEditAlt(url) },
+                            modifier = Modifier.align(Alignment.TopStart)
+                        )
+                    }
+                    // Remove = splice(i, 1), no text to clean up
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .size(22.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.6f))
+                            .clickable { onRemove(url) }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = stringResource(R.string.cd_remove_attachment),
+                            tint = Color.White,
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
+                }
+                if (urls.size > 1) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (index > 0) {
+                            StepButton(
+                                icon = Icons.AutoMirrored.Outlined.KeyboardArrowLeft,
+                                contentDescription = stringResource(R.string.cd_move_attachment_earlier),
+                                onClick = { onMove(index, index - 1) }
+                            )
+                        }
+                        if (index < urls.size - 1) {
+                            StepButton(
+                                icon = Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                                contentDescription = stringResource(R.string.cd_move_attachment_later),
+                                onClick = { onMove(index, index + 1) }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** One arrow stepper — a button, so touch and keyboard both reach it. */
+@Composable
+private fun StepButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit
+) {
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .size(32.dp)
+            .clip(CircleShape)
+            .clickable(onClick = onClick)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(22.dp)
+        )
+    }
+}
+
+/** Stepper variant for the gallery pager's dark overlay. */
+@Composable
+private fun GalleryStepButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit
+) {
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .padding(end = 6.dp)
+            .size(32.dp)
+            .clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.5f))
+            .clickable(onClick = onClick)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = Color.White,
+            modifier = Modifier.size(22.dp)
+        )
+    }
+}
+
+/**
+ * One collapsed line accounting for attachments that are no longer visible in
+ * the editor text — "N attachments, added to the end of your post" — expanding
+ * to one read-only row per URL. Read-only on purpose: the order it shows is
+ * the thumbnails' order, and reordering belongs to the thumbnails.
+ */
+@Composable
+private fun AttachmentSummaryDrawer(urls: List<String>) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+    ) {
+        Column {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded }
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.AttachFile,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = pluralStringResource(R.plurals.compose_attachments_summary, urls.size, urls.size),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            AnimatedVisibility(visible = expanded) {
+                Column(
+                    modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp)
+                ) {
+                    urls.forEachIndexed { index, url ->
+                        Text(
+                            text = "${index + 1}.  $url",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(vertical = 2.dp)
+                        )
+                    }
                 }
             }
         }
