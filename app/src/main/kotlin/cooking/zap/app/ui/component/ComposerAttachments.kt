@@ -69,6 +69,29 @@ fun stripAttachmentUrlLines(text: String, urls: Set<String>): String {
     return text.split('\n').filterNot { it in urls }.joinToString("\n")
 }
 
+private val BARE_URL_LINE_REGEX = Regex("^https?://\\S+$")
+
+/**
+ * Bare http(s) URLs that are alone on their line (boundary occurrences) —
+ * candidates to OFFER as attachment slots. A URL inside a sentence is
+ * authored prose and is never offered. Whitespace around the URL still
+ * counts as alone; two URLs on one line match neither (ambiguous).
+ */
+fun bareUrlLines(text: String): List<String> =
+    text.split('\n').map { it.trim() }.filter { BARE_URL_LINE_REGEX.matches(it) }.distinct()
+
+/**
+ * Removes the first line that is exactly [url] (modulo surrounding
+ * whitespace) — the text-side half of attaching a pasted link. Returns the
+ * input unchanged when no such line exists.
+ */
+fun removeBareUrlLine(text: String, url: String): String {
+    val lines = text.split('\n')
+    val idx = lines.indexOfFirst { it.trim() == url }
+    if (idx < 0) return text
+    return lines.filterIndexed { i, _ -> i != idx }.joinToString("\n")
+}
+
 /**
  * Ordered parse of a draft's private imeta records. Unlike [parseImetaTags]
  * (a url→meta map for rendering), tag order is preserved here because it IS

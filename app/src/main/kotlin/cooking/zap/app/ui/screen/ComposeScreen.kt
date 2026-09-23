@@ -226,6 +226,8 @@ fun ComposeScreen(
     // Attachment slots (ordered, authoritative — the editor text never carries
     // an attachment URL). Preview renders composeNoteContent(text, media).
     val composerMedia by viewModel.composerMedia.collectAsState()
+    // Bare pasted URLs offered — never auto-converted — as attachment slots.
+    val urlCandidates by viewModel.attachableUrlCandidates.collectAsState()
     val uploadProgress by viewModel.uploadProgress.collectAsState()
     val countdownSeconds by viewModel.countdownSeconds.collectAsState()
     val countdownTotalSeconds by viewModel.countdownTotalSeconds.collectAsState()
@@ -767,6 +769,7 @@ fun ComposeScreen(
                         AttachmentThumbStrip(
                             urls = uploadedUrls,
                             isImageUpload = { viewModel.isImageUpload(it) },
+                            isVideoUpload = { viewModel.isVideoUpload(it) },
                             savedAltUrls = altTexts.keys,
                             onEditAlt = { altEditorUrl = it },
                             onRemove = { viewModel.removeMediaUrl(it) },
@@ -779,6 +782,43 @@ fun ComposeScreen(
                         // belongs to the thumbnails above — two places to
                         // change one array is two places to keep in step.
                         AttachmentSummaryDrawer(urls = uploadedUrls)
+                    }
+
+                    // Pasted-link offers: a bare URL alone on its line becomes
+                    // an attachment slot on tap. Offered, never auto-converted —
+                    // a URL a person wrote can be deliberate prose; the sentence
+                    // form ("mirror at … if the first dies") gets no offer.
+                    if (!galleryMode && urlCandidates.isNotEmpty()) {
+                        urlCandidates.forEach { candidate ->
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 2.dp)
+                                    .clickable { viewModel.attachUrl(candidate) }
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.AttachFile,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        text = stringResource(R.string.compose_attach_pasted_link, candidate),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
                     }
 
                     // Text field with GIF keyboard support via BasicTextField(TextFieldState)
@@ -1906,6 +1946,7 @@ private fun AltChip(
 private fun AttachmentThumbStrip(
     urls: List<String>,
     isImageUpload: (String) -> Boolean,
+    isVideoUpload: (String) -> Boolean,
     savedAltUrls: Set<String>,
     onEditAlt: (String) -> Unit,
     onRemove: (String) -> Unit,
@@ -1929,8 +1970,8 @@ private fun AttachmentThumbStrip(
                             .clip(RoundedCornerShape(8.dp))
                             .background(MaterialTheme.colorScheme.surfaceVariant)
                     )
-                    if (!isImageUpload(url)) {
-                        // Non-image slot (e.g. a GIF transcoded to video)
+                    if (isVideoUpload(url)) {
+                        // Known video (e.g. a GIF transcoded to MP4)
                         Icon(
                             imageVector = Icons.Outlined.Videocam,
                             contentDescription = null,
@@ -1941,13 +1982,15 @@ private fun AttachmentThumbStrip(
                                 .padding(4.dp)
                                 .size(18.dp)
                         )
-                    } else {
+                    } else if (isImageUpload(url)) {
                         AltChip(
                             saved = url in savedAltUrls,
                             onClick = { onEditAlt(url) },
                             modifier = Modifier.align(Alignment.TopStart)
                         )
                     }
+                    // Unknown mime (a pasted link while its metadata fetch is
+                    // in flight or failed) shows neither — just the thumbnail.
                     // Remove = splice(i, 1), no text to clean up
                     Box(
                         contentAlignment = Alignment.Center,
