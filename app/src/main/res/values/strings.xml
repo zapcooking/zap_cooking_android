@@ -1456,4 +1456,24 @@
     <string name="about_child_safety">Child Safety Standards</string>
     <string name="about_delete_account">Account and Data Deletion</string>
 
+    <string name="alt_badge">ALT</string>
+    <string name="alt_description_title">Description</string>
+    <string name="cd_view_image_description">View image description</string>
+    <string name="alt_chip_add">+ALT</string>
+    <string name="alt_chip_saved">✓ALT</string>
+    <string name="cd_add_alt_text">Add alt text</string>
+    <string name="cd_remove_image">Remove image</string>
+    <string name="alt_editor_explainer">A short description makes your photo accessible to screen reader users — and gives everyone context if the image doesn\'t load.</string>
+    <string name="alt_editor_hint">Describe this image…</string>
+    <string name="alt_editor_chars_remaining">%1$d remaining</string>
+    <string name="alt_editor_clear">Clear description</string>
+    <string name="alt_generate_with_ai">Generate with AI</string>
+    <string name="alt_cookplus_badge">Cook+</string>
+    <string name="alt_generating">Describing the photo…</string>
+    <string name="alt_error_upsell">Alt text generation is a Cook+ feature.</string>
+    <string name="alt_error_rate_limited">You\'ve hit the generation limit — try again later.</string>
+    <string name="alt_error_unreadable">Cheffy couldn\'t read that image. Write the description manually.</string>
+    <string name="alt_error_network">Couldn\'t reach Cheffy — check your connection and try again.</string>
+    <string name="alt_error_sign">Signing was declined.</string>
+
 </resources>

@@ -3726,6 +3726,7 @@ fun WispNavHost(
             RecipeComposeScreen(
                 viewModel = recipeComposeViewModel,
                 canSign = feedViewModel.signer != null,
+                signer = feedViewModel.signer,
                 onPickImages = { uris ->
                     recipeComposeViewModel.addImages(
                         uris = uris,
