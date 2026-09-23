@@ -149,13 +149,14 @@ class ComposerAttachmentsTest {
     }
 
     @Test
-    fun `non-http schemes and duplicates are not candidates`() {
+    fun `non-http schemes are not candidates and duplicates each surface`() {
         assertEquals(
             emptyList<String>(),
             bareUrlLines("wss://relay.example\nnostr:npub1abc\nftp://x/y")
         )
+        // Same link pasted twice = two offers, two attachable slots.
         assertEquals(
-            listOf("https://x/a.png"),
+            listOf("https://x/a.png", "https://x/a.png"),
             bareUrlLines("https://x/a.png\n\nhttps://x/a.png")
         )
     }

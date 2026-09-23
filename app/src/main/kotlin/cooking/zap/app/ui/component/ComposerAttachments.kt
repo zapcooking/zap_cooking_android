@@ -72,9 +72,10 @@ fun stripAttachmentUrlLines(text: String, urls: Set<String>): String {
 private val BARE_URL_LINE_REGEX = Regex("^https?://\\S+$")
 
 /**
- * Bare http(s) URLs offered as attachment slots: every URL on a line that
- * contains ONLY URLs (whitespace-separated) — so a run of pasted links all
- * surface, and attaching one leaves the rest as candidates on their own.
+ * Bare http(s) URLs offered as attachment slots: every URL occurrence on a
+ * line that contains ONLY URLs (whitespace-separated) — so a run of pasted
+ * links all surface, duplicates included (each attach consumes one
+ * occurrence), and attaching one leaves the rest as candidates on their own.
  * A line with any non-URL word is authored prose and offers nothing.
  *
  * Deliberately more liberal than [stripAttachmentUrlLines]: the migration
@@ -86,7 +87,7 @@ fun bareUrlLines(text: String): List<String> =
         val tokens = line.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
         if (tokens.isNotEmpty() && tokens.all { BARE_URL_LINE_REGEX.matches(it) }) tokens
         else emptyList()
-    }.distinct()
+    }
 
 /**
  * Character range of the first occurrence of [url] as a whitespace-delimited

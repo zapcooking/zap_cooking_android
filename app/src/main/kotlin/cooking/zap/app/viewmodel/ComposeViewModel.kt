@@ -58,6 +58,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.NonCancellable
@@ -369,12 +370,14 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
 
     /**
      * Bare URLs alone on their line in the editor — offered, never
-     * auto-converted, as attachment slots. A URL inside a sentence is
-     * authored prose and gets no offer.
+     * auto-converted, as attachment slots. Duplicates surface too (each
+     * attach consumes one pasted occurrence); a URL inside a sentence is
+     * authored prose and gets no offer. Attached URLs vanish from here
+     * because their pasted line is removed from the text, not by filtering.
      */
     val attachableUrlCandidates: StateFlow<List<String>> =
-        combine(_content, _uploadedUrls) { content, urls ->
-            cooking.zap.app.ui.component.bareUrlLines(content.text).filter { it !in urls }
+        _content.map { content ->
+            cooking.zap.app.ui.component.bareUrlLines(content.text)
         }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     /**
@@ -416,17 +419,17 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         _uploadedMediaMeta[url]?.mimeType?.startsWith("video/") == true
 
     /**
-     * Convert a pasted bare URL into an attachment slot: the boundary line
-     * leaves the editor text, and the URL joins the ordered slots. Publish
-     * works without metadata (imeta tolerates nulls); a background fetch
-     * fills mime/dimensions/thumbhash for the imeta tags and alt chip when
-     * the host cooperates.
+     * Convert a pasted bare URL into an attachment slot: the pasted
+     * occurrence leaves the editor text, and the URL joins the ordered
+     * slots. The same URL may occupy more than one slot — pasting a link
+     * twice puts it in the note twice, exactly as the text era did; imeta
+     * is deduped per URL at publish. Metadata is fetched in the background
+     * (shared across duplicate slots); the slot publishes fine without it.
      */
     fun attachUrl(url: String) {
-        if (url in _uploadedUrls.value) return
         // Record the slot before touching the text so composerMedia observers
         // never see a slot without its (placeholder) metadata entry.
-        _uploadedMediaMeta[url] = UploadedMediaMeta(mimeType = null)
+        _uploadedMediaMeta[url] = _uploadedMediaMeta[url] ?: UploadedMediaMeta(mimeType = null)
         _uploadedUrls.value = _uploadedUrls.value + url
         persistUploadsToState()
 
@@ -775,11 +778,16 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         _uploadedMediaMeta[url]?.mimeType?.startsWith("image/") == true
 
     fun removeMediaUrl(url: String) {
-        _uploadedUrls.value = _uploadedUrls.value - url
-        _uploadedMediaMeta.remove(url)
-        _altTexts.value = _altTexts.value - url
-        // Reset video flag if all media removed
-        if (_uploadedUrls.value.isEmpty()) _galleryHasVideo.value = false
+        // One slot at a time — duplicate slots of the same URL each need
+        // their own remove. Meta and alt are shared per URL and live as long
+        // as any occurrence remains.
+        _uploadedUrls.value = _uploadedUrls.value.toMutableList().apply { remove(url) }
+        if (url !in _uploadedUrls.value) {
+            _uploadedMediaMeta.remove(url)
+            _altTexts.value = _altTexts.value - url
+            // Reset video flag if all media removed
+            if (_uploadedUrls.value.isEmpty()) _galleryHasVideo.value = false
+        }
         persistUploadsToState()
     }
 
@@ -1157,6 +1165,8 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
                 eventKind = if (isVertical) Nip71.KIND_VIDEO_VERTICAL else Nip71.KIND_VIDEO_HORIZONTAL
             } else {
                 val altTexts = _altTexts.value
+                // One imeta per URL — duplicate slots (same link attached
+                // twice) publish the URL twice in content but a single tag.
                 val imetaEntries = urls.map { url ->
                     val meta = _uploadedMediaMeta[url]
                     val dimStr = meta?.dimensions?.let { "${it.first}x${it.second}" }
@@ -1167,7 +1177,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
                         dim = dimStr,
                         alt = altTexts[url]
                     )
-                }
+                }.distinctBy { it.url }
                 tags.addAll(Nip68.buildPictureTags(title = null, media = imetaEntries, hashtags = _hashtags.value))
                 eventKind = Nip68.KIND_PICTURE
             }
@@ -1218,7 +1228,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
                     dim = meta?.dimensions?.let { "${it.first}x${it.second}" },
                     alt = altTexts[url]
                 )
-            }
+            }.distinctBy { it.url }
             if (imageEntries.isNotEmpty()) {
                 tags.addAll(Nip68.buildPictureTags(title = null, media = imageEntries))
             }
