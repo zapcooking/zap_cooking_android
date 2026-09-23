@@ -1148,8 +1148,11 @@ private fun WalletHomeContent(
     val prefs = remember { context.getSharedPreferences("wisp_settings", android.content.Context.MODE_PRIVATE) }
     // Tri-state balance display (sats / dollars / hidden) — tap the dashboard
     // balance to cycle. Per-pubkey storage; migrates the legacy global
-    // `balance_hidden` Bool on first read for a given pubkey.
-    var balanceDisplay by remember(pubkey) {
+    // `balance_hidden` Bool on first read for a given pubkey. The changes
+    // flow re-reads on writes from the drawer's mini-wallet toggle — the
+    // drawer can be open over this screen, so the mask must apply live.
+    val displayModeVersion by WalletBalanceDisplayMode.changes.collectAsState()
+    var balanceDisplay by remember(pubkey, displayModeVersion) {
         mutableStateOf(WalletBalanceDisplayMode.read(prefs, pubkey))
     }
     val balanceHidden = balanceDisplay == WalletBalanceDisplayMode.HIDDEN
