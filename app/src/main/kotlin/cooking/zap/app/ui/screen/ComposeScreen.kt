@@ -886,7 +886,10 @@ fun ComposeScreen(
                                     )
                                     Spacer(Modifier.width(8.dp))
                                     Text(
-                                        text = stringResource(R.string.compose_attach_pasted_link, candidate),
+                                        // Sidecar parity: no filename/URL in
+                                        // the prompt — the offer itself is the
+                                        // affordance, the thumbnail follows.
+                                        text = stringResource(R.string.compose_attach_pasted_link),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onPrimaryContainer,
                                         maxLines = 1,
