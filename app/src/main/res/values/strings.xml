@@ -1476,4 +1476,6 @@
     <string name="alt_error_network">Couldn\'t reach Cheffy — check your connection and try again.</string>
     <string name="alt_error_sign">Signing was declined.</string>
 
+    <string name="wallet_nwc_not_responding_title">Wallet not responding</string>
+
 </resources>
