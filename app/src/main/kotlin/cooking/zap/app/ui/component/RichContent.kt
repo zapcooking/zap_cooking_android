@@ -2203,7 +2203,7 @@ private fun LiveStreamCardContent(
                     val blurPainter = rememberMediaPlaceholderPainter(meta.thumbhash, meta.blurhash, meta.dimension)
                     LoadingAsyncImage(
                         model = image,
-                        contentDescription = title,
+                        contentDescription = meta.alt ?: title,
                         contentScale = ContentScale.Crop,
                         blurPainter = blurPainter,
                         modifier = Modifier
@@ -2822,7 +2822,7 @@ internal fun InlineVideoPlayerWithFullscreen(meta: MediaMeta, onFullScreen: (pos
             ) {
                 Icon(
                     imageVector = Icons.Filled.PlayArrow,
-                    contentDescription = "Load video",
+                    contentDescription = meta.alt ?: "Load video",
                     modifier = Modifier.size(48.dp),
                     tint = if (blurPainter != null) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
                 )
