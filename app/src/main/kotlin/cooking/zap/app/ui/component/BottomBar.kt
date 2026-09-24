@@ -323,7 +323,12 @@ private fun ReadOnlyBottomBar(
                                 Icon(
                                     imageVector = if (selected) tab.selectedIcon!! else tab.unselectedIcon!!,
                                     contentDescription = stringResource(tab.labelResId),
-                                    tint = zapTint
+                                    tint = zapTint,
+                                    // Same Material-vs-drawable sizing as the
+                                    // full bar: a 24dp artboard draws visibly
+                                    // smaller than the tight-viewport custom
+                                    // drawables its neighbours use.
+                                    modifier = Modifier.requiredSize(29.dp)
                                 )
                             }
                             if (hasUnread) {
