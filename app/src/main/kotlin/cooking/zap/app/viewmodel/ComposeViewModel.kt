@@ -511,6 +511,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         if (meta != null && url in _uploadedUrls.value) {
             _uploadedMediaMeta[url] = meta
             _mediaMetaVersion.value += 1
+            persistUploadsToState()
         }
     }
 
@@ -520,19 +521,20 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
      * alone no longer carries them.
      */
     private fun persistUploadsToState() {
-        savedStateHandle["draft_media_urls"] = _uploadedUrls.value.toTypedArray()
-        savedStateHandle["draft_media_alts"] =
-            _altTexts.value.flatMap { (url, alt) -> listOf(url, alt) }.toTypedArray()
+        // The FULL slots — mime, dimensions, thumbhash included, via the
+        // same codec the last-draft cache uses. URLs+alt alone lost the
+        // metadata on process death: restored gallery videos mis-flagged,
+        // the alt chip hid behind unknown mime, and published imeta lost
+        // its dim/m slots.
+        savedStateHandle["draft_media"] =
+            cooking.zap.app.ui.component.encodeMediaForCache(mediaSnapshot())
     }
 
     init {
-        savedStateHandle.get<Array<String>>("draft_media_urls")?.let { urls ->
-            _uploadedUrls.value = urls.toList()
-        }
-        savedStateHandle.get<Array<String>>("draft_media_alts")?.let { flat ->
-            _altTexts.value = flat.toList().chunked(2).mapNotNull { pair ->
-                pair.getOrNull(1)?.let { alt -> pair[0] to alt }
-            }.toMap()
+        cooking.zap.app.ui.component.decodeMediaFromCache(
+            savedStateHandle.get<String>("draft_media")
+        ).takeIf { it.isNotEmpty() }?.let { media ->
+            applyRestoredMedia(media)
         }
     }
 
@@ -1609,7 +1611,12 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
             )
         }
         _uploadedUrls.value = media.map { it.url }
-        _altTexts.value = media.mapNotNull { m -> m.alt?.let { m.url to it } }.toMap()
+        // Sanitize on restore too — draft/cache copies are persisted input.
+        _altTexts.value = media.mapNotNull { m ->
+            m.alt?.let { alt ->
+                cooking.zap.app.ui.component.sanitizeAltText(alt)?.let { m.url to it }
+            }
+        }.toMap()
         _galleryHasVideo.value = media.any { it.isVideo }
         persistUploadsToState()
     }

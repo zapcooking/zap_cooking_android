@@ -78,20 +78,23 @@ fun AltTextEditorDialog(
             seenGeneration = true
         } else if (seenGeneration && gen.result != null) {
             if (gen.result is AltTextResult.Success) {
-                field = TextFieldValue(gen.result.description, TextRange(gen.result.description.length))
+                // Same sanitize as typed input — the server's text is input
+                // too, and an over-limit draft would show a negative
+                // remaining count and republish over-cap.
+                val capped = sanitizeAltText(gen.result.description).orEmpty()
+                field = TextFieldValue(capped, TextRange(capped.length))
             }
             onConsumeGeneration()
         }
     }
 
     fun applyInput(value: TextFieldValue): TextFieldValue {
-        // Hard cap mirrors the web editor: 2000 chars, count shown below.
-        val overflow = value.text.length - ALT_TEXT_MAX_CHARS
-        return if (overflow > 0) {
-            value.copy(text = value.text.dropLast(overflow)).let {
-                TextFieldValue(it.text, TextRange(it.text.length))
-            }
-        } else value
+        // Hard cap mirrors the web editor: 2000 CODE POINTS (a UTF-16-unit
+        // slice of a string ending in an emoji ships half a surrogate pair).
+        val points = value.text.codePointCount(0, value.text.length)
+        if (points <= ALT_TEXT_MAX_CHARS) return value
+        val cut = value.text.substring(0, value.text.offsetByCodePoints(0, ALT_TEXT_MAX_CHARS))
+        return TextFieldValue(cut, TextRange(cut.length))
     }
 
     AlertDialog(
@@ -130,7 +133,7 @@ fun AltTextEditorDialog(
                     Text(
                         text = stringResource(
                             R.string.alt_editor_chars_remaining,
-                            ALT_TEXT_MAX_CHARS - field.text.length
+                            ALT_TEXT_MAX_CHARS - field.text.codePointCount(0, field.text.length)
                         ),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant

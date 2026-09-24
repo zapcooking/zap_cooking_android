@@ -1923,7 +1923,9 @@ private fun AltChip(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val cdText = stringResource(R.string.cd_add_alt_text)
+    // The saved chip opens an existing description — announce the action the
+    // tap actually performs, not the one it performed the first time.
+    val cdText = stringResource(if (saved) R.string.cd_edit_alt_text else R.string.cd_add_alt_text)
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(6.dp))
