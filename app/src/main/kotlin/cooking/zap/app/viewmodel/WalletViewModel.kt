@@ -205,8 +205,9 @@ class WalletViewModel(
      * Non-null when the configured NWC wallet failed a liveness probe — the
      * string was revoked or the wallet went unresponsive (zapcooking_ios#140
      * parity). The wallet screen surfaces it as a "Wallet not responding"
-     * alert; a later successful connect (or [clearNwcConnectionProblem])
-     * clears it.
+     * alert (dismissing the alert does NOT clear this — only a passed
+     * re-probe does, so refreshState keeps probing cheaply instead of
+     * firing doomed balance RPCs).
      */
     private val _nwcConnectionProblem = MutableStateFlow<String?>(null)
     val nwcConnectionProblem: StateFlow<String?> = _nwcConnectionProblem
@@ -388,6 +389,15 @@ class WalletViewModel(
     private var connectJob: Job? = null
     private var statusCollectJob: Job? = null
     private var connectionMonitorJob: Job? = null
+
+    /** True while a liveness probe is in flight — refreshState must not fire a
+     *  full balance RPC into the same possibly-dead wallet concurrently. */
+    private val _nwcProbeInFlight = MutableStateFlow(false)
+
+    /** Handle to the running probe so a reconnect cancels it instead of
+     *  leaking it next to the new one (two probes + a stale monitor could
+     *  race each other's verdicts). */
+    private var livenessProbeJob: Job? = null
     private var syncPollJob: Job? = null
     private var searchRelayBackupJob: Job? = null
     private var relayBackupStatusJob: Job? = null
@@ -814,15 +824,25 @@ class WalletViewModel(
         // offline wallet would otherwise "connect" and the first RPC would
         // hang the full request timeout in silence. The URI stays saved in
         // both failure cases (an offline wallet may come back); the doomed
-        // balance/monitor refreshes are skipped entirely.
-        viewModelScope.launch {
-            val problem = nwcRepo.probeLiveness().let(::nwcLivenessProblem)
-            _nwcConnectionProblem.value = problem
-            if (problem == null) {
-                startConnectionMonitor(nwcRepo)
-            } else {
-                _statusLines.value = _statusLines.value + problem
-                _walletState.value = WalletState.Error(problem)
+        // balance/monitor refreshes are skipped entirely. A previous probe
+        // or monitor from an earlier connect is cancelled first — a stale
+        // monitor can observe the new false→true relay transition and fire
+        // a balance fetch that races this probe's verdict.
+        livenessProbeJob?.cancel()
+        connectionMonitorJob?.cancel()
+        livenessProbeJob = viewModelScope.launch {
+            _nwcProbeInFlight.value = true
+            try {
+                val problem = nwcRepo.probeLiveness().let(::nwcLivenessProblem)
+                _nwcConnectionProblem.value = problem
+                if (problem == null) {
+                    startConnectionMonitor(nwcRepo)
+                } else {
+                    _statusLines.value = _statusLines.value + problem
+                    _walletState.value = WalletState.Error(problem)
+                }
+            } finally {
+                _nwcProbeInFlight.value = false
             }
         }
     }
@@ -1100,12 +1120,21 @@ class WalletViewModel(
         }
 
         if (provider.isConnected.value) {
-            // A wallet that just failed its liveness probe would silently
-            // eat the request timeout — skip the doomed refresh (the alert
-            // already told the user why nothing is updating).
+            // A wallet that failed its liveness probe — or is being probed
+            // right now — would silently eat the full request timeout: skip
+            // the doomed refresh. A standing problem gets a CHEAP re-probe
+            // instead, so a wallet that recovered clears the flag and the
+            // balance follows; the probe in-flight flag covers the window
+            // before the first verdict lands.
             val nwcProblemStanding = mode == WalletMode.NWC && _nwcConnectionProblem.value != null
-            if (!nwcProblemStanding) {
-                refreshBalance()
+            when {
+                mode == WalletMode.NWC && _nwcProbeInFlight.value -> {}
+                nwcProblemStanding -> viewModelScope.launch {
+                    val problem = nwcRepo.probeLiveness().let(::nwcLivenessProblem)
+                    _nwcConnectionProblem.value = problem
+                    if (problem == null) refreshBalance()
+                }
+                else -> refreshBalance()
             }
             if (mode == WalletMode.SPARK) fetchLightningAddress()
         } else if (_walletState.value is WalletState.Connected) {

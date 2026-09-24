@@ -124,7 +124,17 @@ class NwcRepository(private val context: Context, private val relayPool: RelayPo
             r.messages.collect { message ->
                 when (message) {
                     is RelayMessage.EventMsg -> {
-                        if (message.event.kind == 23195) {
+                        // NIP-47 responses are authored by the wallet service
+                        // keypair, and relays verify event signatures — so
+                        // pubkey equality is an authenticity check. Without
+                        // it, anyone on the relay could publish a kind-23195
+                        // referencing a pending request id; a forged event
+                        // that failed decrypt completed the request as
+                        // DECODE_FAILED and the liveness probe classified an
+                        // offline wallet as Alive.
+                        if (message.event.kind == 23195 &&
+                            message.event.pubkey == conn.walletServicePubkey.toHex()
+                        ) {
                             handleResponse(message.event)
                         }
                     }
