@@ -102,6 +102,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -112,8 +113,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.input.pointer.pointerInput
@@ -2014,7 +2013,7 @@ private fun AttachmentThumbStrip(
     onMove: (Int, Int) -> Unit
 ) {
     var draggingIndex by remember { mutableStateOf<Int?>(null) }
-    var dragOffset by remember { mutableStateOf(Offset.Zero) }
+    var dragOffsetX by remember { mutableFloatStateOf(0f) }
     var containerOrigin by remember { mutableStateOf(Offset.Zero) }
     val itemOrigins = remember { mutableStateMapOf<Int, Offset>() }
     val currentOnMove by rememberUpdatedState(onMove)
@@ -2037,7 +2036,7 @@ private fun AttachmentThumbStrip(
                         if (isDragging) {
                             // Horizontal only: vertical drag stays with the
                             // composer's scroll; a row swap is the whole move.
-                            translationX = dragOffset.x
+                            translationX = dragOffsetX
                             scaleX = 1.06f
                             scaleY = 1.06f
                         }
@@ -2046,50 +2045,73 @@ private fun AttachmentThumbStrip(
                         itemOrigins[index] = coords.positionInRoot() - containerOrigin
                     }
                     .pointerInput(Unit) {
+                        // All swap math runs against a SNAPSHOT taken at drag
+                        // start. Reading live positions mid-drag raced the
+                        // recomposition (layout lags the splice by a frame),
+                        // and the one-frame-stale reads made every swap jump.
+                        // Slots are equal-size, so snapshot pitches are exact.
+                        var from = -1
+                        var offsetX = 0f
+                        var snapshot: Map<Int, Offset> = emptyMap()
+                        var rowSlots: List<Int> = emptyList()
                         detectDragGesturesAfterLongPress(
                             onDragStart = {
+                                val origin = itemOrigins[index] ?: return@detectDragGesturesAfterLongPress
+                                from = index
+                                offsetX = 0f
                                 draggingIndex = index
-                                dragOffset = Offset.Zero
+                                snapshot = itemOrigins.toMap()
+                                rowSlots = snapshot.entries
+                                    .filter { abs(it.value.y - origin.y) < thumbSide.toPx() / 2f }
+                                    .sortedBy { it.value.x }
+                                    .map { it.key }
                             },
                             onDrag = { change, amount ->
                                 change.consume()
-                                val from = draggingIndex
-                                    ?: return@detectDragGesturesAfterLongPress
+                                if (from < 0) return@detectDragGesturesAfterLongPress
                                 // Horizontal only — vertical movement is
                                 // ignored, both visually and for hit-testing.
-                                dragOffset = Offset(dragOffset.x + amount.x, 0f)
-                                val selfOrigin = itemOrigins[from]
-                                    ?: return@detectDragGesturesAfterLongPress
-                                val pointerX = selfOrigin.x + dragOffset.x + thumbSide.toPx() / 2f
-                                val rowY = selfOrigin.y
-                                val target = itemOrigins.entries
-                                    .firstOrNull { (i, origin) ->
-                                        i != from &&
-                                            abs(origin.y - rowY) < thumbSide.toPx() / 2f &&
-                                            pointerX >= origin.x &&
-                                            pointerX < origin.x + thumbSide.toPx()
+                                offsetX += amount.x
+                                dragOffsetX = offsetX
+                                val half = thumbSide.toPx() / 2f
+                                var guard = rowSlots.size
+                                while (guard-- > 0) {
+                                    val pos = rowSlots.indexOf(from)
+                                    val next = rowSlots.getOrNull(pos + 1)
+                                    val prev = rowSlots.getOrNull(pos - 1)
+                                    val fromX = snapshot[from]?.x ?: break
+                                    val centerX = fromX + offsetX + half
+                                    val swapped = when {
+                                        // Swap at the midpoint between cell centers.
+                                        next != null && centerX >
+                                            (fromX + snapshot.getValue(next).x) / 2f + half -> {
+                                            currentOnMove(from, next)
+                                            offsetX -= snapshot.getValue(next).x - fromX
+                                            from = next
+                                            true
+                                        }
+                                        prev != null && centerX <
+                                            (fromX + snapshot.getValue(prev).x) / 2f + half -> {
+                                            currentOnMove(from, prev)
+                                            offsetX -= snapshot.getValue(prev).x - fromX
+                                            from = prev
+                                            true
+                                        }
+                                        else -> false
                                     }
-                                    ?.key
-                                if (target != null) {
-                                    val oldHome = itemOrigins[from]
-                                        ?: return@detectDragGesturesAfterLongPress
-                                    val newHome = itemOrigins[target]
-                                        ?: return@detectDragGesturesAfterLongPress
-                                    currentOnMove(from, target)
-                                    // The spliced list re-homes the dragged
-                                    // item under the finger: keep the offset
-                                    // relative to its new slot.
-                                    draggingIndex = target
-                                    dragOffset += Offset(oldHome.x - newHome.x, 0f)
+                                    if (!swapped) break
+                                    draggingIndex = from
                                 }
                             },
                             onDragEnd = {
+                                from = -1
                                 draggingIndex = null
-                                dragOffset = Offset.Zero
+                                dragOffsetX = 0f
                             },
                             onDragCancel = {
+                                from = -1
                                 draggingIndex = null
-                                dragOffset = Offset.Zero
+                                dragOffsetX = 0f
                             }
                         )
                     }
