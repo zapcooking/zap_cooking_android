@@ -291,8 +291,12 @@ class RecipeComposeViewModel : ViewModel() {
         // edits, or clears each description instead of silently keeping the
         // old ones — the publisher prunes imeta as an owned tag and rewrites
         // it from this map.
+        // Re-sanitize seeded descriptions (2000-code-point cap + blank
+        // collapse): the original event's imeta is third-party input.
         _altTexts.value = cooking.zap.app.ui.component.parseImetaTags(event.tags)
-            .mapNotNull { (url, meta) -> meta.alt?.let { url to it } }
+            .mapNotNull { (url, meta) ->
+                meta.alt?.let { alt -> cooking.zap.app.ui.component.sanitizeAltText(alt)?.let { url to it } }
+            }
             .toMap()
 
         val c = recipe.content
