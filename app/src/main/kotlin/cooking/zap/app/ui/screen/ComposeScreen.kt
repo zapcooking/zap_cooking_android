@@ -48,6 +48,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.foundation.shape.CircleShape
@@ -2002,12 +2003,15 @@ private fun VideoBadge(modifier: Modifier = Modifier) {
 
 /**
  * Reorderable attachment thumbnails for the inline (non-gallery) composer.
- * Reordering is long-press drag only: pick a thumbnail up, it lifts and
- * follows the finger, and dropping it over another cell splices it there.
- * The same onMove splice the gallery pager uses; alt and upload metadata
- * key by URL, so they follow the moved image for free.
+ * ONE row, sliding horizontally when attachments overflow the viewport —
+ * a second row broke the row-matched drag math, and a strip reads better
+ * than a grid in a composer anyway. Reordering is long-press drag: pick a
+ * thumbnail up, it lifts and follows the finger, and crossing a neighbor's
+ * midline splices it there. Scroll (a plain swipe) brings off-screen
+ * attachments into view; a long-press claims the gesture, so the row
+ * doesn't scroll mid-drag. The same onMove splice the gallery pager uses;
+ * alt and upload metadata key by URL, so they follow the moved image.
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AttachmentThumbStrip(
     urls: List<String>,
@@ -2024,11 +2028,11 @@ private fun AttachmentThumbStrip(
     val currentOnMove by rememberUpdatedState(onMove)
     val thumbSide = 84.dp
 
-    FlowRow(
+    Row(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
         modifier = Modifier
             .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
             .padding(vertical = 4.dp)
             .onGloballyPositioned { containerOrigin = it.positionInRoot() }
     ) {
