@@ -1853,26 +1853,16 @@ private fun GalleryComposeSection(
                                 onClick = { onEditAlt(pageUrl) },
                                 modifier = Modifier
                                     .align(Alignment.TopStart)
-                                    .padding(8.dp)
+                                    .padding(4.dp)
                             )
                         }
                         // Remove button
-                        IconButton(
+                        RemoveAttachmentButton(
                             onClick = { onRemoveUrl(pageUrl) },
                             modifier = Modifier
                                 .align(Alignment.TopEnd)
-                                .padding(8.dp)
-                                .size(32.dp)
-                                .clip(CircleShape)
-                                .background(Color.Black.copy(alpha = 0.5f))
-                        ) {
-                            Icon(
-                                Icons.Filled.Close,
-                                contentDescription = "Remove",
-                                tint = Color.White,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
+                                .padding(4.dp)
+                        )
                     }
                 }
                 // Page indicator dots
@@ -1973,6 +1963,34 @@ private fun AltChip(
 }
 
 /**
+ * The remove X on an attachment cell: a plain scrimmed circle sized to its
+ * content. Material's IconButton enforces a 48dp minimum touch target that
+ * rendered as an outsized dark circle floating the glyph away from the
+ * corner — this stays a compact 22dp.
+ */
+@Composable
+private fun RemoveAttachmentButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .size(22.dp)
+            .clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.6f))
+            .clickable(onClick = onClick)
+    ) {
+        Icon(
+            Icons.Filled.Close,
+            contentDescription = stringResource(R.string.cd_remove_attachment),
+            tint = Color.White,
+            modifier = Modifier.size(12.dp)
+        )
+    }
+}
+
+/**
  * Corner badge marking a video slot (iOS parity: a small scrimmed glyph in
  * the corner rather than a glyph floating mid-image, where it drowns on a
  * busy frame). Bottom-start — the ALT chip owns top-start, remove owns
@@ -1982,7 +2000,7 @@ private fun AltChip(
 private fun VideoBadge(modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
-            .padding(8.dp)
+            .padding(4.dp)
             .clip(RoundedCornerShape(6.dp))
             .background(Color.Black.copy(alpha = 0.6f))
             .padding(horizontal = 5.dp, vertical = 3.dp)
@@ -2142,26 +2160,18 @@ private fun AttachmentThumbStrip(
                         onClick = { onEditAlt(url) },
                         modifier = Modifier
                             .align(Alignment.TopStart)
-                            .padding(8.dp)
+                            .padding(4.dp)
                     )
                 }
-                // Remove — the gallery pager's scrimmed circle, same corner.
-                IconButton(
+                // Remove — a plain scrimmed box: an IconButton here renders
+                // its 48dp minimum touch target as a dark circle twice the
+                // intended size, pushing the X well inside the corner.
+                RemoveAttachmentButton(
                     onClick = { onRemove(url) },
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .padding(8.dp)
-                        .size(28.dp)
-                        .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.5f))
-                ) {
-                    Icon(
-                        Icons.Filled.Close,
-                        contentDescription = stringResource(R.string.cd_remove_attachment),
-                        tint = Color.White,
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
+                        .padding(4.dp)
+                )
             }
         }
     }
