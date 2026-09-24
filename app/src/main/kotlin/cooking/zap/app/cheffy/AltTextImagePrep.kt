@@ -26,6 +26,14 @@ object AltTextImagePrep {
     /** Longest edge sent to the describer — generous for vision, light on wire. */
     const val MAX_EDGE_PX = 1280
 
+    /**
+     * Download cap. The URL can be a pasted attachment on an arbitrary
+     * host, so the read is capped at the byte level — contentLength() is
+     * absent for chunked responses and untrustworthy anyway, and buffering
+     * first and checking size after is an OOM, not a guard.
+     */
+    private const val MAX_DOWNLOAD_BYTES = 20L * 1024 * 1024
+
     private const val JPEG_QUALITY = 85
 
     /**
@@ -39,7 +47,20 @@ object AltTextImagePrep {
                 okhttp3.Request.Builder().url(url).build()
             ).execute().use { resp ->
                 if (!resp.isSuccessful) return@withContext null
-                resp.body?.bytes() ?: return@withContext null
+                val body = resp.body ?: return@withContext null
+                var overflow = false
+                val buffer = java.io.ByteArrayOutputStream()
+                body.byteStream().use { input ->
+                    val chunk = ByteArray(64 * 1024)
+                    while (!overflow) {
+                        val read = input.read(chunk)
+                        if (read < 0) break
+                        buffer.write(chunk, 0, read)
+                        if (buffer.size() > MAX_DOWNLOAD_BYTES) overflow = true
+                    }
+                }
+                if (overflow) return@withContext null
+                buffer.toByteArray()
             }
 
             // Bounds pass rejects non-images/corrupt payloads before allocation.
