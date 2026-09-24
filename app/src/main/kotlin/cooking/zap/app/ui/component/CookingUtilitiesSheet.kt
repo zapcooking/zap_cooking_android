@@ -5,8 +5,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -338,7 +336,10 @@ private fun TimerTabContent(viewModel: CookingTimerViewModel) {
                 // "4:37" wrapped to "4:3 / 7" and "Done!" to "Do / ne!". A
                 // full-width row per timer has room for the digits however
                 // many are running.
-                Column(
+                // Lazy: only the visible cards compose. A plain scrolling
+                // Column measures every running timer each second-tick even
+                // when it's scrolled out of the 300dp cap.
+                LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
                         // Cap the stack at roughly three cards and scroll past
@@ -346,11 +347,10 @@ private fun TimerTabContent(viewModel: CookingTimerViewModel) {
                         // full screen height, where it drew under the status
                         // bar clock — and a kitchen with eight timers running
                         // does not want eight screens of sheet either.
-                        .heightIn(max = 300.dp)
-                        .verticalScroll(rememberScrollState()),
+                        .heightIn(max = 300.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    timers.forEach { timer ->
+                    items(timers, key = { it.id }) { timer ->
                         ActiveTimerCard(
                             timer = timer,
                             onReset = { viewModel.resetTimer(timer.id) },
