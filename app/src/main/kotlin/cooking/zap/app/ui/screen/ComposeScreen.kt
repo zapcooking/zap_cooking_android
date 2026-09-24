@@ -120,6 +120,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.clipToBounds
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
@@ -431,6 +432,7 @@ fun ComposeScreen(
                         countdownSeconds = countdownSeconds,
                         savedAltUrls = altTexts.keys,
                         isImageUpload = { viewModel.isImageUpload(it) },
+                        isVideoUpload = { viewModel.isVideoUpload(it) },
                         onEditAlt = { altEditorUrl = it },
                         onPickMedia = {
                             photoPickerLauncher.launch(
@@ -1731,6 +1733,7 @@ private fun GalleryComposeSection(
     countdownSeconds: Int?,
     savedAltUrls: Set<String>,
     isImageUpload: (String) -> Boolean,
+    isVideoUpload: (String) -> Boolean,
     onEditAlt: (String) -> Unit,
     onPickMedia: () -> Unit,
     onRemoveUrl: (String) -> Unit,
@@ -1840,6 +1843,9 @@ private fun GalleryComposeSection(
                             contentDescription = "Uploaded media ${page + 1}",
                             modifier = Modifier.fillMaxSize()
                         )
+                        if (isVideoUpload(pageUrl)) {
+                            VideoBadge(modifier = Modifier.align(Alignment.BottomStart))
+                        }
                         // Alt chip (top-start) — "+ ALT" undescribed, "✓ ALT" saved
                         if (isImageUpload(pageUrl)) {
                             AltChip(
@@ -1967,6 +1973,30 @@ private fun AltChip(
 }
 
 /**
+ * Corner badge marking a video slot (iOS parity: a small scrimmed glyph in
+ * the corner rather than a glyph floating mid-image, where it drowns on a
+ * busy frame). Bottom-start — the ALT chip owns top-start, remove owns
+ * top-end.
+ */
+@Composable
+private fun VideoBadge(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .padding(8.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(Color.Black.copy(alpha = 0.6f))
+            .padding(horizontal = 5.dp, vertical = 3.dp)
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.Videocam,
+            contentDescription = null,
+            tint = Color.White,
+            modifier = Modifier.size(13.dp)
+        )
+    }
+}
+
+/**
  * Reorderable attachment thumbnails for the inline (non-gallery) composer.
  * Reordering is long-press drag only: pick a thumbnail up, it lifts and
  * follows the finger, and dropping it over another cell splices it there.
@@ -2005,8 +2035,9 @@ private fun AttachmentThumbStrip(
                     .zIndex(if (isDragging) 1f else 0f)
                     .graphicsLayer {
                         if (isDragging) {
+                            // Horizontal only: vertical drag stays with the
+                            // composer's scroll; a row swap is the whole move.
                             translationX = dragOffset.x
-                            translationY = dragOffset.y
                             scaleX = 1.06f
                             scaleY = 1.06f
                         }
@@ -2024,15 +2055,19 @@ private fun AttachmentThumbStrip(
                                 change.consume()
                                 val from = draggingIndex
                                     ?: return@detectDragGesturesAfterLongPress
-                                dragOffset += amount
+                                // Horizontal only — vertical movement is
+                                // ignored, both visually and for hit-testing.
+                                dragOffset = Offset(dragOffset.x + amount.x, 0f)
                                 val selfOrigin = itemOrigins[from]
                                     ?: return@detectDragGesturesAfterLongPress
-                                val pointer = selfOrigin + dragOffset +
-                                    Offset(thumbSide.toPx() / 2f, thumbSide.toPx() / 2f)
+                                val pointerX = selfOrigin.x + dragOffset.x + thumbSide.toPx() / 2f
+                                val rowY = selfOrigin.y
                                 val target = itemOrigins.entries
                                     .firstOrNull { (i, origin) ->
-                                        i != from && Rect(origin, Size(thumbSide.toPx(), thumbSide.toPx()))
-                                            .contains(pointer)
+                                        i != from &&
+                                            abs(origin.y - rowY) < thumbSide.toPx() / 2f &&
+                                            pointerX >= origin.x &&
+                                            pointerX < origin.x + thumbSide.toPx()
                                     }
                                     ?.key
                                 if (target != null) {
@@ -2045,7 +2080,7 @@ private fun AttachmentThumbStrip(
                                     // item under the finger: keep the offset
                                     // relative to its new slot.
                                     draggingIndex = target
-                                    dragOffset += oldHome - newHome
+                                    dragOffset += Offset(oldHome.x - newHome.x, 0f)
                                 }
                             },
                             onDragEnd = {
@@ -2068,17 +2103,7 @@ private fun AttachmentThumbStrip(
                         .background(MaterialTheme.colorScheme.surfaceVariant)
                 )
                 if (isVideoUpload(url)) {
-                    // Known video (e.g. a GIF transcoded to MP4)
-                    Icon(
-                        imageVector = Icons.Outlined.Videocam,
-                        contentDescription = null,
-                        tint = Color.White,
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .background(Color.Black.copy(alpha = 0.5f), CircleShape)
-                            .padding(4.dp)
-                            .size(18.dp)
-                    )
+                    VideoBadge(modifier = Modifier.align(Alignment.BottomStart))
                 } else {
                     // Every non-video slot gets the chip — images for sure,
                     // and unknown-mime slots too: a pasted link whose metadata
