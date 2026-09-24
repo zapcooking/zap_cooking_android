@@ -64,6 +64,36 @@ class AppearanceModeTest {
         )
     }
 
+    /**
+     * Copilot catch: an UPGRADED install whose user never toggled the old
+     * switch has no `dark_theme` key yet was rendering the old dark default.
+     * The update-history signal separates it from a fresh install — and the
+     * decision is persisted by the caller so a later update can't re-classify.
+     */
+    @Test
+    fun `an upgraded install with no legacy key keeps the old dark default`() {
+        assertEquals(
+            AppearanceMode.DARK,
+            resolveAppearanceMode(stored = null, hasLegacyDarkTheme = false, legacyDarkTheme = true, upgradedInstall = true)
+        )
+    }
+
+    @Test
+    fun `an updated install with an explicit legacy light choice still migrates to light`() {
+        assertEquals(
+            AppearanceMode.LIGHT,
+            resolveAppearanceMode(stored = null, hasLegacyDarkTheme = true, legacyDarkTheme = false, upgradedInstall = true)
+        )
+    }
+
+    @Test
+    fun `an explicit choice wins even on an upgraded install`() {
+        assertEquals(
+            AppearanceMode.SYSTEM,
+            resolveAppearanceMode(stored = "system", hasLegacyDarkTheme = false, legacyDarkTheme = true, upgradedInstall = true)
+        )
+    }
+
     @Test
     fun `every mode round-trips through its key`() {
         AppearanceMode.values().forEach { mode ->
