@@ -47,6 +47,7 @@ class InterfacePreferences(context: Context) {
         }
     }
 
+    private val appContext = context.applicationContext
     private val prefs = context.getSharedPreferences("wisp_settings", Context.MODE_PRIVATE)
 
     fun getAccentColor(): Int = prefs.getInt("accent_color", 0xFFFF5722.toInt())
@@ -64,14 +65,44 @@ class InterfacePreferences(context: Context) {
      * `dark_theme` was a two-state toggle that defaulted to dark, so it has no
      * way to express "follow the system" — an install that already carries one
      * keeps the mode it was actually looking at rather than being silently
-     * flipped to whatever the OS happens to be set to. Only a fresh install,
-     * with no stored boolean, starts on [AppearanceMode.SYSTEM].
+     * flipped to whatever the OS happens to be set to.
+     *
+     * The absence of that key is ambiguous: either a genuinely fresh install
+     * (starts on [AppearanceMode.SYSTEM]) or an upgraded install whose user
+     * never toggled — which was RENDERING the old dark default. The two are
+     * told apart by whether this app has ever been updated
+     * ([isUpdatedSinceInstall]), and the decision is PERSISTED immediately so
+     * a later app update can't re-classify a fresh install as upgraded.
      */
-    fun getAppearanceMode(): AppearanceMode = resolveAppearanceMode(
-        stored = prefs.getString(KEY_APPEARANCE, null),
-        hasLegacyDarkTheme = prefs.contains(KEY_LEGACY_DARK_THEME),
-        legacyDarkTheme = prefs.getBoolean(KEY_LEGACY_DARK_THEME, true)
-    )
+    fun getAppearanceMode(): AppearanceMode {
+        val stored = prefs.getString(KEY_APPEARANCE, null)
+        val hasLegacy = prefs.contains(KEY_LEGACY_DARK_THEME)
+        if (stored != null || hasLegacy) {
+            return resolveAppearanceMode(
+                stored = stored,
+                hasLegacyDarkTheme = hasLegacy,
+                legacyDarkTheme = prefs.getBoolean(KEY_LEGACY_DARK_THEME, true)
+            )
+        }
+        // Neither key — decide once, then write it down.
+        val mode = resolveAppearanceMode(
+            stored = null,
+            hasLegacyDarkTheme = false,
+            legacyDarkTheme = true,
+            upgradedInstall = isUpdatedSinceInstall()
+        )
+        setAppearanceMode(mode)
+        return mode
+    }
+
+    /** True when this package has received at least one update over its
+     *  original install — i.e. it predates the current build. */
+    private fun isUpdatedSinceInstall(): Boolean = try {
+        val info = appContext.packageManager.getPackageInfo(appContext.packageName, 0)
+        info.lastUpdateTime > info.firstInstallTime
+    } catch (_: Exception) {
+        false
+    }
 
     fun setAppearanceMode(mode: AppearanceMode) {
         prefs.edit()
@@ -202,10 +233,15 @@ class InterfacePreferences(context: Context) {
         fun resolveAppearanceMode(
             stored: String?,
             hasLegacyDarkTheme: Boolean,
-            legacyDarkTheme: Boolean
+            legacyDarkTheme: Boolean,
+            upgradedInstall: Boolean = false
         ): AppearanceMode = when {
             stored != null -> AppearanceMode.fromKey(stored)
             hasLegacyDarkTheme -> if (legacyDarkTheme) AppearanceMode.DARK else AppearanceMode.LIGHT
+            // No legacy key at all: an install that has seen an update
+            // rendered the old dark-by-default toggle; only a first install
+            // follows the system.
+            upgradedInstall -> AppearanceMode.DARK
             else -> AppearanceMode.SYSTEM
         }
     }
