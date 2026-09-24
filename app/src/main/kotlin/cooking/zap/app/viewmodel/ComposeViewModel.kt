@@ -1369,8 +1369,13 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         // Re-apply descriptions saved with the draft (imeta inner tags keyed
         // by URL — alt-text handoff §3). Entries for URLs the user re-attaches
         // resurface on the chips; undescribed uploads are unaffected.
+        // sanitizeAltText, not just the parse's trim: a draft restored from
+        // relays can carry third-party over-cap or blank-ish descriptions,
+        // which must not re-enter the emit path.
         val restoredAlts = cooking.zap.app.ui.component.parseImetaTags(draft.tags)
-            .mapNotNull { (url, meta) -> meta.alt?.let { url to it } }
+            .mapNotNull { (url, meta) ->
+                meta.alt?.let { alt -> cooking.zap.app.ui.component.sanitizeAltText(alt)?.let { url to it } }
+            }
             .toMap()
         _altTexts.value = restoredAlts
     }

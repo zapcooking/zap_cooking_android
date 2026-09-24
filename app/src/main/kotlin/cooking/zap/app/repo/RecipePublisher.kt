@@ -206,8 +206,10 @@ class RecipePublisher(
             // `image` tag URL exactly (alt-text handoff §1/§5). One tag per
             // described image; undescribed images emit nothing.
             for (url in imageUrls) {
-                val alt = cooking.zap.app.nostr.Nip68.normalizeAltBreaks(altByImageUrl[url].orEmpty())
-                    .takeIf { it.isNotEmpty() } ?: continue
+                // Full sanitize, not just break-normalization: altByImageUrl
+                // can be seeded from existing events, so enforce the
+                // 2000-code-point cap here too, not only in the editor.
+                val alt = cooking.zap.app.ui.component.sanitizeAltText(altByImageUrl[url].orEmpty()) ?: continue
                 tags.add(listOf("imeta", "url $url", "alt $alt"))
             }
             if (includeClientTag) tags.add(Nip89.clientTag())

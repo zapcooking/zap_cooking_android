@@ -54,6 +54,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -531,6 +533,10 @@ private fun PhotoThumb(
         }
         // Alt chip (top-start) — only meaningful once hosted (has a URL)
         if (item.status is ImageItem.Status.Done) {
+            // Shared string resources + a semantics label, same contract as
+            // the note composer's chip: localizable, and screen readers
+            // announce the action rather than reading "+ ALT".
+            val chipCd = stringResource(R.string.cd_add_alt_text)
             Box(
                 modifier = Modifier
                     .align(Alignment.TopStart)
@@ -541,9 +547,10 @@ private fun PhotoThumb(
                     )
                     .clickable(onClick = onEditAlt)
                     .padding(horizontal = 4.dp, vertical = 2.dp)
+                    .semantics { contentDescription = chipCd }
             ) {
                 Text(
-                    text = if (hasAlt) "✓ ALT" else "+ ALT",
+                    text = stringResource(if (hasAlt) R.string.alt_chip_saved else R.string.alt_chip_add),
                     color = if (hasAlt) MaterialTheme.colorScheme.onPrimary else Color.White,
                     fontSize = 9.sp,
                 )
