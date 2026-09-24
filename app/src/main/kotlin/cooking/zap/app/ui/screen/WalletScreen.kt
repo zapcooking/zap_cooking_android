@@ -2996,8 +2996,12 @@ private fun TransactionHistoryContent(
     // Mirror the dashboard's tri-state display mode on tx rows so a
     // HIDDEN state masks both the dashboard balance AND every per-row
     // amount + fee. iOS port keeps these in lockstep via the same
-    // per-pubkey storage key (`walletBalanceDisplay_<pubkey>`).
-    val displayMode = remember(pubkey) { WalletBalanceDisplayMode.read(prefs, pubkey) }
+    // per-pubkey storage key (`walletBalanceDisplay_<pubkey>`). The
+    // changes signal re-reads on writes from the drawer's mini-wallet
+    // toggle — the drawer can be open over the Transactions page, so
+    // the mask must apply live here too (same contract as the dashboard).
+    val displayModeVersion by WalletBalanceDisplayMode.changes.collectAsState()
+    val displayMode = remember(pubkey, displayModeVersion) { WalletBalanceDisplayMode.read(prefs, pubkey) }
     Column(
         modifier = modifier.fillMaxSize()
     ) {

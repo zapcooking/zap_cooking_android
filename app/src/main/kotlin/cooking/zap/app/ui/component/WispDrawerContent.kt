@@ -915,7 +915,8 @@ private fun DrawerMiniWalletRow(
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .size(32.dp)
+                    // 48dp minimum touch target (a11y); the icon stays 18dp.
+                    .size(48.dp)
                     .clip(CircleShape)
                     .clickable { toggleHidden() }
             ) {
