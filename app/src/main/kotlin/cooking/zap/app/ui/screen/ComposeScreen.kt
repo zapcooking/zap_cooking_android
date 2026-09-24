@@ -11,6 +11,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -48,6 +49,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -59,8 +61,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Article
-import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowLeft
-import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -99,6 +99,8 @@ import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -110,12 +112,20 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.clipToBounds
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -127,7 +137,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
@@ -1845,7 +1854,47 @@ private fun GalleryComposeSection(
                     modifier = Modifier.fillMaxSize()
                 ) { page ->
                     val pageUrl = uploadedUrls[page]
-                    Box(modifier = Modifier.fillMaxSize()) {
+                    // Long-press drag: pull the page past the step threshold
+                    // to swap it with its neighbor, which becomes the shown
+                    // page (the pager snaps so the dragged image stays under
+                    // the finger). Drag left = later, right = earlier.
+                    val dragScope = rememberCoroutineScope()
+                    var reorderStepDragging by remember { mutableStateOf(false) }
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer {
+                                if (reorderStepDragging) {
+                                    scaleX = 1.02f; scaleY = 1.02f
+                                }
+                            }
+                            .pointerInput(uploadedUrls.size) {
+                                var accumulated = 0f
+                                detectDragGesturesAfterLongPress(
+                                    onDragStart = {
+                                        accumulated = 0f
+                                        reorderStepDragging = true
+                                    },
+                                    onDrag = { change, amount ->
+                                        change.consume()
+                                        if (uploadedUrls.size < 2) return@detectDragGesturesAfterLongPress
+                                        accumulated += amount.x
+                                        val step = 120.dp.toPx()
+                                        var current = page
+                                        while (accumulated <= -step || accumulated >= step) {
+                                            val target = if (accumulated < 0) current + 1 else current - 1
+                                            if (target !in uploadedUrls.indices) { accumulated = 0f; break }
+                                            onMoveMedia(current, target)
+                                            dragScope.launch { pagerState.scrollToPage(target) }
+                                            accumulated += if (accumulated < 0) step else -step
+                                            current = target
+                                        }
+                                    },
+                                    onDragEnd = { reorderStepDragging = false },
+                                    onDragCancel = { reorderStepDragging = false }
+                                )
+                            }
+                    ) {
                         RetryingAsyncImage(
                             url = pageUrl,
                             contentDescription = "Uploaded media ${page + 1}",
@@ -1877,31 +1926,6 @@ private fun GalleryComposeSection(
                                 tint = Color.White,
                                 modifier = Modifier.size(18.dp)
                             )
-                        }
-                        // Steppers (bottom-start) — the touch/keyboard reorder
-                        // mechanism, same splice as the inline strip. First and
-                        // last pages omit the arrow that would do nothing.
-                        if (uploadedUrls.size > 1) {
-                            Row(
-                                modifier = Modifier
-                                    .align(Alignment.BottomStart)
-                                    .padding(8.dp)
-                            ) {
-                                if (page > 0) {
-                                    GalleryStepButton(
-                                        icon = Icons.AutoMirrored.Outlined.KeyboardArrowLeft,
-                                        contentDescription = stringResource(R.string.cd_move_attachment_earlier),
-                                        onClick = { onMoveMedia(page, page - 1) }
-                                    )
-                                }
-                                if (page < uploadedUrls.size - 1) {
-                                    GalleryStepButton(
-                                        icon = Icons.AutoMirrored.Outlined.KeyboardArrowRight,
-                                        contentDescription = stringResource(R.string.cd_move_attachment_later),
-                                        onClick = { onMoveMedia(page, page + 1) }
-                                    )
-                                }
-                            }
                         }
                     }
                 }
@@ -2004,9 +2028,10 @@ private fun AltChip(
 
 /**
  * Reorderable attachment thumbnails for the inline (non-gallery) composer.
- * Steppers are the reorder mechanism — touch and keyboard both reach buttons.
- * The first and last cells omit the arrow that would do nothing rather than
- * showing a disabled one.
+ * Reordering is long-press drag only: pick a thumbnail up, it lifts and
+ * follows the finger, and dropping it over another cell splices it there.
+ * The same onMove splice the gallery pager uses; alt and upload metadata
+ * key by URL, so they follow the moved image for free.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -2018,20 +2043,87 @@ private fun AttachmentThumbStrip(
     onRemove: (String) -> Unit,
     onMove: (Int, Int) -> Unit
 ) {
+    var draggingIndex by remember { mutableStateOf<Int?>(null) }
+    var dragOffset by remember { mutableStateOf(Offset.Zero) }
+    var containerOrigin by remember { mutableStateOf(Offset.Zero) }
+    val itemOrigins = remember { mutableStateMapOf<Int, Offset>() }
+    val currentOnMove by rememberUpdatedState(onMove)
+    val thumbSide = 84.dp
+
     FlowRow(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
+            .onGloballyPositioned { containerOrigin = it.positionInRoot() }
     ) {
         urls.forEachIndexed { index, url ->
-            Box {
+            val isDragging = draggingIndex == index
+            Box(
+                modifier = Modifier
+                    .zIndex(if (isDragging) 1f else 0f)
+                    .graphicsLayer {
+                        if (isDragging) {
+                            translationX = dragOffset.x
+                            translationY = dragOffset.y
+                            scaleX = 1.06f
+                            scaleY = 1.06f
+                        }
+                    }
+                    .onGloballyPositioned { coords ->
+                        itemOrigins[index] = coords.positionInRoot() - containerOrigin
+                    }
+                    .pointerInput(Unit) {
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = {
+                                draggingIndex = index
+                                dragOffset = Offset.Zero
+                            },
+                            onDrag = { change, amount ->
+                                change.consume()
+                                val from = draggingIndex
+                                    ?: return@detectDragGesturesAfterLongPress
+                                dragOffset += amount
+                                val selfOrigin = itemOrigins[from]
+                                    ?: return@detectDragGesturesAfterLongPress
+                                val pointer = selfOrigin + dragOffset +
+                                    Offset(thumbSide.toPx() / 2f, thumbSide.toPx() / 2f)
+                                val target = itemOrigins.entries
+                                    .firstOrNull { (i, origin) ->
+                                        i != from && Rect(origin, Size(thumbSide.toPx(), thumbSide.toPx()))
+                                            .contains(pointer)
+                                    }
+                                    ?.key
+                                if (target != null) {
+                                    val oldHome = itemOrigins[from]
+                                        ?: return@detectDragGesturesAfterLongPress
+                                    val newHome = itemOrigins[target]
+                                        ?: return@detectDragGesturesAfterLongPress
+                                    currentOnMove(from, target)
+                                    // The spliced list re-homes the dragged
+                                    // item under the finger: keep the offset
+                                    // relative to its new slot.
+                                    draggingIndex = target
+                                    dragOffset += oldHome - newHome
+                                }
+                            },
+                            onDragEnd = {
+                                draggingIndex = null
+                                dragOffset = Offset.Zero
+                            },
+                            onDragCancel = {
+                                draggingIndex = null
+                                dragOffset = Offset.Zero
+                            }
+                        )
+                    }
+            ) {
                 RetryingAsyncImage(
                     url = url,
                     contentDescription = null,
                     modifier = Modifier
-                        .size(84.dp)
+                        .size(thumbSide)
                         .clip(RoundedCornerShape(12.dp))
                         .background(MaterialTheme.colorScheme.surfaceVariant)
                 )
@@ -2079,58 +2171,8 @@ private fun AttachmentThumbStrip(
                         modifier = Modifier.size(16.dp)
                     )
                 }
-                // Steppers — overlaid on the image like the gallery pager's,
-                // not floating below it. First and last cells omit the arrow
-                // that would do nothing.
-                if (urls.size > 1) {
-                    Row(
-                        modifier = Modifier
-                            .align(Alignment.BottomStart)
-                            .padding(8.dp)
-                    ) {
-                        if (index > 0) {
-                            GalleryStepButton(
-                                icon = Icons.AutoMirrored.Outlined.KeyboardArrowLeft,
-                                contentDescription = stringResource(R.string.cd_move_attachment_earlier),
-                                onClick = { onMove(index, index - 1) }
-                            )
-                        }
-                        if (index < urls.size - 1) {
-                            GalleryStepButton(
-                                icon = Icons.AutoMirrored.Outlined.KeyboardArrowRight,
-                                contentDescription = stringResource(R.string.cd_move_attachment_later),
-                                onClick = { onMove(index, index + 1) }
-                            )
-                        }
-                    }
-                }
             }
         }
-    }
-}
-
-/** Stepper variant for the gallery pager's dark overlay. */
-@Composable
-private fun GalleryStepButton(
-    icon: ImageVector,
-    contentDescription: String,
-    onClick: () -> Unit
-) {
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = Modifier
-            .padding(end = 6.dp)
-            .size(32.dp)
-            .clip(CircleShape)
-            .background(Color.Black.copy(alpha = 0.5f))
-            .clickable(onClick = onClick)
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = contentDescription,
-            tint = Color.White,
-            modifier = Modifier.size(22.dp)
-        )
     }
 }
 
