@@ -885,7 +885,6 @@ fun ComposeScreen(
                     if (!galleryMode && uploadedUrls.isNotEmpty()) {
                         AttachmentThumbStrip(
                             urls = uploadedUrls,
-                            isImageUpload = { viewModel.isImageUpload(it) },
                             isVideoUpload = { viewModel.isVideoUpload(it) },
                             savedAltUrls = altTexts.keys,
                             onEditAlt = { altEditorUrl = it },
@@ -1951,7 +1950,6 @@ private fun AltChip(
 @Composable
 private fun AttachmentThumbStrip(
     urls: List<String>,
-    isImageUpload: (String) -> Boolean,
     isVideoUpload: (String) -> Boolean,
     savedAltUrls: Set<String>,
     onEditAlt: (String) -> Unit,
@@ -1987,9 +1985,13 @@ private fun AttachmentThumbStrip(
                             .padding(4.dp)
                             .size(18.dp)
                     )
-                } else if (isImageUpload(url)) {
-                    // Same overlay treatment as the gallery pager's cell:
-                    // "+ ALT" / "✓ ALT" chip, 8dp off the corner.
+                } else {
+                    // Every non-video slot gets the chip — images for sure,
+                    // and unknown-mime slots too: a pasted link whose metadata
+                    // fetch is in flight or failed is probably an image, and
+                    // alt doesn't depend on knowing the mime (publish emits
+                    // it either way). Same overlay treatment as the gallery
+                    // pager's cell: chip 8dp off the corner.
                     AltChip(
                         saved = url in savedAltUrls,
                         onClick = { onEditAlt(url) },
@@ -1998,8 +2000,6 @@ private fun AttachmentThumbStrip(
                             .padding(8.dp)
                     )
                 }
-                // Unknown mime (a pasted link while its metadata fetch is
-                // in flight or failed) shows neither — just the thumbnail.
                 // Remove — the gallery pager's scrimmed circle, same corner.
                 IconButton(
                     onClick = { onRemove(url) },
