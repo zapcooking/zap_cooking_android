@@ -1966,66 +1966,75 @@ private fun AttachmentThumbStrip(
             .padding(vertical = 4.dp)
     ) {
         urls.forEachIndexed { index, url ->
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Box {
-                    RetryingAsyncImage(
-                        url = url,
+            Box {
+                RetryingAsyncImage(
+                    url = url,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(84.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                )
+                if (isVideoUpload(url)) {
+                    // Known video (e.g. a GIF transcoded to MP4)
+                    Icon(
+                        imageVector = Icons.Outlined.Videocam,
                         contentDescription = null,
+                        tint = Color.White,
                         modifier = Modifier
-                            .size(64.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .align(Alignment.Center)
+                            .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                            .padding(4.dp)
+                            .size(18.dp)
                     )
-                    if (isVideoUpload(url)) {
-                        // Known video (e.g. a GIF transcoded to MP4)
-                        Icon(
-                            imageVector = Icons.Outlined.Videocam,
-                            contentDescription = null,
-                            tint = Color.White,
-                            modifier = Modifier
-                                .align(Alignment.Center)
-                                .background(Color.Black.copy(alpha = 0.5f), CircleShape)
-                                .padding(4.dp)
-                                .size(18.dp)
-                        )
-                    } else if (isImageUpload(url)) {
-                        AltChip(
-                            saved = url in savedAltUrls,
-                            onClick = { onEditAlt(url) },
-                            modifier = Modifier.align(Alignment.TopStart)
-                        )
-                    }
-                    // Unknown mime (a pasted link while its metadata fetch is
-                    // in flight or failed) shows neither — just the thumbnail.
-                    // Remove = splice(i, 1), no text to clean up
-                    Box(
-                        contentAlignment = Alignment.Center,
+                } else if (isImageUpload(url)) {
+                    // Same overlay treatment as the gallery pager's cell:
+                    // "+ ALT" / "✓ ALT" chip, 8dp off the corner.
+                    AltChip(
+                        saved = url in savedAltUrls,
+                        onClick = { onEditAlt(url) },
                         modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .size(22.dp)
-                            .clip(CircleShape)
-                            .background(Color.Black.copy(alpha = 0.6f))
-                            .clickable { onRemove(url) }
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Close,
-                            contentDescription = stringResource(R.string.cd_remove_attachment),
-                            tint = Color.White,
-                            modifier = Modifier.size(14.dp)
-                        )
-                    }
+                            .align(Alignment.TopStart)
+                            .padding(8.dp)
+                    )
                 }
+                // Unknown mime (a pasted link while its metadata fetch is
+                // in flight or failed) shows neither — just the thumbnail.
+                // Remove — the gallery pager's scrimmed circle, same corner.
+                IconButton(
+                    onClick = { onRemove(url) },
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp)
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.5f))
+                ) {
+                    Icon(
+                        Icons.Filled.Close,
+                        contentDescription = stringResource(R.string.cd_remove_attachment),
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+                // Steppers — overlaid on the image like the gallery pager's,
+                // not floating below it. First and last cells omit the arrow
+                // that would do nothing.
                 if (urls.size > 1) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .padding(8.dp)
+                    ) {
                         if (index > 0) {
-                            StepButton(
+                            GalleryStepButton(
                                 icon = Icons.AutoMirrored.Outlined.KeyboardArrowLeft,
                                 contentDescription = stringResource(R.string.cd_move_attachment_earlier),
                                 onClick = { onMove(index, index - 1) }
                             )
                         }
                         if (index < urls.size - 1) {
-                            StepButton(
+                            GalleryStepButton(
                                 icon = Icons.AutoMirrored.Outlined.KeyboardArrowRight,
                                 contentDescription = stringResource(R.string.cd_move_attachment_later),
                                 onClick = { onMove(index, index + 1) }
@@ -2035,29 +2044,6 @@ private fun AttachmentThumbStrip(
                 }
             }
         }
-    }
-}
-
-/** One arrow stepper — a button, so touch and keyboard both reach it. */
-@Composable
-private fun StepButton(
-    icon: ImageVector,
-    contentDescription: String,
-    onClick: () -> Unit
-) {
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = Modifier
-            .size(32.dp)
-            .clip(CircleShape)
-            .clickable(onClick = onClick)
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = contentDescription,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(22.dp)
-        )
     }
 }
 
