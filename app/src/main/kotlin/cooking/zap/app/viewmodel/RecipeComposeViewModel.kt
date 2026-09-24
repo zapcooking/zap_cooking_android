@@ -394,15 +394,16 @@ class RecipeComposeViewModel : ViewModel() {
     }
 
     fun removeImage(id: Long) {
-        _images.update { list ->
-            list.filterNot { item ->
-                if (item.id != id) return@filterNot false
-                // A removed image takes its description with it.
-                (item.status as? ImageItem.Status.Done)?.url?.let { url ->
-                    _altTexts.value = _altTexts.value - url
-                }
-                true
-            }
+        // Compute outside the CAS: StateFlow.update retries its lambda on
+        // contention, and a state write inside it (dropping the alt) would
+        // run once per retry against intermediate lists. Read, then write
+        // each flow exactly once.
+        val list = _images.value
+        val removed = list.firstOrNull { it.id == id } ?: return
+        _images.value = list.filterNot { it.id == id }
+        // A removed image takes its description with it.
+        (removed.status as? ImageItem.Status.Done)?.url?.let { url ->
+            _altTexts.value = _altTexts.value - url
         }
     }
 
