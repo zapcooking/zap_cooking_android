@@ -210,6 +210,28 @@ fun WalletScreen(
     val walletState by viewModel.walletState.collectAsState()
     val currentPage by viewModel.currentPage.collectAsState()
 
+    // NWC liveness failure (revoked / unresponsive) — raised as an alert so a
+    // dead wallet surfaces within seconds instead of hanging in silence
+    // (zapcooking_ios#140 parity). Dismissal is UI-local: the underlying
+    // problem stays set so refreshState keeps cheaply re-probing instead
+    // of firing full balance RPCs at a dead wallet; only a PASSED re-probe
+    // clears it. A NEW failure (different problem text) re-alerts.
+    val nwcConnectionProblem by viewModel.nwcConnectionProblem.collectAsState()
+    var problemDismissedText by remember { mutableStateOf<String?>(null) }
+    val standingProblem = nwcConnectionProblem?.takeIf { it != problemDismissedText }
+    if (standingProblem != null) {
+        AlertDialog(
+            onDismissRequest = { problemDismissedText = standingProblem },
+            title = { Text(stringResource(R.string.wallet_nwc_not_responding_title)) },
+            text = { Text(standingProblem) },
+            confirmButton = {
+                TextButton(onClick = { problemDismissedText = standingProblem }) {
+                    Text(stringResource(R.string.btn_ok))
+                }
+            }
+        )
+    }
+
     // Always refresh wallet state when this screen appears
     LaunchedEffect(Unit) {
         viewModel.refreshState()
