@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.verticalScroll
 import android.media.MediaPlayer
 import androidx.compose.material.icons.Icons
@@ -59,6 +60,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -198,24 +201,9 @@ fun InterfaceScreen(
     var liveStreamsHidden by remember { mutableStateOf(interfacePrefs.isLiveStreamsHidden()) }
     var notifFeedStyle by remember { mutableStateOf(interfacePrefs.getNotificationFeedStyle()) }
     var autoTranslate by remember { mutableStateOf(interfacePrefs.isAutoTranslate()) }
-    var selectedTheme by remember { mutableStateOf(interfacePrefs.getTheme()) }
-    var isCustomTheme by remember { mutableStateOf(selectedTheme == "custom") }
+    var appearance by remember { mutableStateOf(interfacePrefs.getAppearanceMode()) }
     var selectedLanguage by remember { mutableStateOf(interfacePrefs.getLanguage()) }
     var languagesExpanded by remember { mutableStateOf(false) }
-
-    val savedColor = remember { Color(interfacePrefs.getAccentColor()) }
-    val initialHsv = remember {
-        val hsv = FloatArray(3)
-        android.graphics.Color.colorToHSV(savedColor.toArgb(), hsv)
-        hsv
-    }
-    var hue by remember { mutableFloatStateOf(initialHsv[0]) }
-    var saturation by remember { mutableFloatStateOf(initialHsv[1]) }
-    var brightness by remember { mutableFloatStateOf(initialHsv[2]) }
-
-    val currentColor = remember(hue, saturation, brightness) {
-        Color(android.graphics.Color.HSVToColor(floatArrayOf(hue, saturation, brightness)))
-    }
 
     Scaffold(
         contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
@@ -342,137 +330,25 @@ fun InterfaceScreen(
 
             Spacer(Modifier.height(24.dp))
 
-            // Popular Themes section
-            var themesExpanded by remember { mutableStateOf(false) }
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { themesExpanded = !themesExpanded }
-                    .padding(vertical = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text(
-                        text = stringResource(R.string.settings_popular_themes),
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = stringResource(R.string.settings_choose_color_scheme),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+            // Appearance section — the only color choice the app offers.
+            // Replaces the sixteen-scheme picker and the custom accent HSV
+            // wheel: one brand palette, light or dark, or follow the system.
+            Text(
+                text = stringResource(R.string.settings_appearance),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(Modifier.height(12.dp))
+            AppearanceSelector(
+                selected = appearance,
+                onSelect = { mode ->
+                    appearance = mode
+                    interfacePrefs.setAppearanceMode(mode)
+                    onChanged()
                 }
-                Text(
-                    text = if (themesExpanded) "▲" else "▼",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            if (themesExpanded) {
-                Spacer(Modifier.height(12.dp))
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Themes.themes.forEach { theme ->
-                        ThemeCard(
-                            theme = theme,
-                            isSelected = selectedTheme == theme.name,
-                            isDark = true,
-                            onClick = {
-                                selectedTheme = theme.name
-                                isCustomTheme = theme.name == "custom"
-                                interfacePrefs.setTheme(theme.name)
-                                onChanged()
-                            }
-                        )
-                    }
-                }
-            }
+            )
 
             Spacer(Modifier.height(24.dp))
-
-            if (isCustomTheme) {
-                // Accent Color section — collapsed by default, tap to expand
-                var colorPickerExpanded by remember { mutableStateOf(false) }
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { colorPickerExpanded = !colorPickerExpanded }
-                        .padding(vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(32.dp)
-                                .clip(CircleShape)
-                                .background(currentColor)
-                        )
-                        Spacer(Modifier.width(12.dp))
-                        Column {
-                            Text(
-                                text = stringResource(R.string.settings_accent_color),
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = "Tap to customize",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                    Text(
-                        text = if (colorPickerExpanded) "▲" else "▼",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                AnimatedVisibility(visible = colorPickerExpanded) {
-                    Column {
-                        Spacer(Modifier.height(12.dp))
-
-                        // Saturation/Brightness square
-                        SatBrightnessSquare(
-                            hue = hue,
-                            saturation = saturation,
-                            brightness = brightness,
-                            onChanged = { s, b ->
-                                saturation = s
-                                brightness = b
-                                interfacePrefs.setAccentColor(
-                                    android.graphics.Color.HSVToColor(floatArrayOf(hue, s, b))
-                                )
-                                onChanged()
-                            }
-                        )
-
-                        Spacer(Modifier.height(12.dp))
-
-                        // Hue slider
-                        HueBar(
-                            hue = hue,
-                            onHueChanged = { h ->
-                                hue = h
-                                interfacePrefs.setAccentColor(
-                                    android.graphics.Color.HSVToColor(floatArrayOf(h, saturation, brightness))
-                                )
-                                onChanged()
-                            }
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(24.dp))
-            }
 
             // New Notes Button section
             Text(
@@ -944,160 +820,67 @@ fun InterfaceScreen(
     }
 }
 
+/**
+ * System / Light / Dark, as one segmented control.
+ *
+ * A segmented row rather than a dropdown or three radio rows: the options are
+ * mutually exclusive, few, and short, and showing all three at once makes the
+ * current one readable at a glance without opening anything.
+ */
 @Composable
-private fun HueBar(
-    hue: Float,
-    onHueChanged: (Float) -> Unit
+private fun AppearanceSelector(
+    selected: InterfacePreferences.AppearanceMode,
+    onSelect: (InterfacePreferences.AppearanceMode) -> Unit
 ) {
-    val hueColors = remember {
-        List(7) { i -> Color(android.graphics.Color.HSVToColor(floatArrayOf(i * 60f, 1f, 1f))) }
-    }
-
-    Canvas(
+    val options = listOf(
+        InterfacePreferences.AppearanceMode.SYSTEM to R.string.settings_appearance_system,
+        InterfacePreferences.AppearanceMode.LIGHT to R.string.settings_appearance_light,
+        InterfacePreferences.AppearanceMode.DARK to R.string.settings_appearance_dark
+    )
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(36.dp)
-            .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
-            .pointerInput(Unit) {
-                detectTapGestures { offset ->
-                    onHueChanged((offset.x / size.width * 360f).coerceIn(0f, 360f))
-                }
-            }
-            .pointerInput(Unit) {
-                detectDragGestures { change, _ ->
-                    change.consume()
-                    onHueChanged((change.position.x / size.width * 360f).coerceIn(0f, 360f))
-                }
-            }
+            .clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        drawRect(brush = Brush.horizontalGradient(hueColors))
-
-        // Indicator
-        val x = (hue / 360f) * size.width
-        drawCircle(
-            color = Color.White,
-            radius = 14.dp.toPx(),
-            center = Offset(x.coerceIn(14.dp.toPx(), size.width - 14.dp.toPx()), size.height / 2),
-            style = Stroke(width = 3.dp.toPx())
-        )
-    }
-}
-
-@Composable
-private fun SatBrightnessSquare(
-    hue: Float,
-    saturation: Float,
-    brightness: Float,
-    onChanged: (saturation: Float, brightness: Float) -> Unit
-) {
-    val pureHueColor = remember(hue) {
-        Color(android.graphics.Color.HSVToColor(floatArrayOf(hue, 1f, 1f)))
-    }
-
-    Canvas(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(200.dp)
-            .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
-            .pointerInput(Unit) {
-                detectTapGestures { offset ->
-                    val s = (offset.x / size.width).coerceIn(0f, 1f)
-                    val b = (1f - offset.y / size.height).coerceIn(0f, 1f)
-                    onChanged(s, b)
-                }
-            }
-            .pointerInput(Unit) {
-                detectDragGestures { change, _ ->
-                    change.consume()
-                    val s = (change.position.x / size.width).coerceIn(0f, 1f)
-                    val b = (1f - change.position.y / size.height).coerceIn(0f, 1f)
-                    onChanged(s, b)
-                }
-            }
-    ) {
-        // White to hue color (horizontal: saturation)
-        drawRect(brush = Brush.horizontalGradient(listOf(Color.White, pureHueColor)))
-        // Transparent to black (vertical: brightness)
-        drawRect(brush = Brush.verticalGradient(listOf(Color.Transparent, Color.Black)))
-
-        // Indicator
-        val x = (saturation * size.width).coerceIn(10f, size.width - 10f)
-        val y = ((1f - brightness) * size.height).coerceIn(10f, size.height - 10f)
-        drawCircle(
-            color = Color.White,
-            radius = 10.dp.toPx(),
-            center = Offset(x, y),
-            style = Stroke(width = 2.dp.toPx())
-        )
-        drawCircle(
-            color = Color.Black,
-            radius = 12.dp.toPx(),
-            center = Offset(x, y),
-            style = Stroke(width = 1.dp.toPx())
-        )
-    }
-}
-
-@Composable
-private fun ThemeCard(
-    theme: ThemePreset,
-    isSelected: Boolean,
-    isDark: Boolean,
-    onClick: () -> Unit
-) {
-    val colors = if (isDark) theme.dark else theme.light
-
-    Card(
-        modifier = Modifier
-            .width(100.dp)
-            .clickable(onClick = onClick)
-            .then(
-                if (isSelected) {
-                    Modifier.border(
-                        width = 2.dp,
-                        color = MaterialTheme.colorScheme.primary,
-                        shape = RoundedCornerShape(12.dp)
-                    )
-                } else {
-                    Modifier
-                }
-            ),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = colors.surface
-        )
-    ) {
-        Column(
-            modifier = Modifier.padding(8.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(24.dp)
-                        .background(colors.primary, RoundedCornerShape(4.dp))
-                )
-                Box(
-                    modifier = Modifier
-                        .size(24.dp)
-                        .background(colors.secondary, RoundedCornerShape(4.dp))
-                )
-            }
-            Spacer(Modifier.height(6.dp))
+        options.forEach { (mode, labelRes) ->
+            val isSelected = mode == selected
+            val label = stringResource(labelRes)
             Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .height(16.dp)
-                    .background(colors.background, RoundedCornerShape(4.dp))
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = theme.displayName,
-                style = MaterialTheme.typography.labelSmall,
-                color = colors.onSurface
-            )
+                    .weight(1f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(
+                        if (isSelected) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant
+                        }
+                    )
+                    // `selectable` with a role gives TalkBack the
+                    // "selected"/"not selected" state a plain clickable drops.
+                    .selectable(
+                        selected = isSelected,
+                        role = Role.RadioButton,
+                        onClick = { onSelect(mode) }
+                    )
+                    .padding(vertical = 12.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                    color = if (isSelected) {
+                        MaterialTheme.colorScheme.onPrimary
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
+                    maxLines = 1
+                )
+            }
         }
     }
 }
