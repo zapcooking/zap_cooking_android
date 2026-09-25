@@ -104,6 +104,39 @@ internal fun shouldDiscardOnDispose(
         currentDraftId != null &&
         currentDraftId == restoredDraftId
 
+/**
+ * Auto-save gate for the composer: should leaving the editor (re)persist the draft?
+ *
+ * False only when the editor still holds exactly what was last persisted for [currentDraftId]
+ * (restored, or already saved this session) — backing out of an untouched restored draft must
+ * not republish it or flash "Draft saved". A new draft ([currentDraftId] null) always saves, as
+ * does a draft id with no baseline yet.
+ *
+ * [content] and [lastPersistedContent] are [draftFingerprint]s, not bare text: a draft is its
+ * prose AND its attachment slots, so an attachment or alt-text edit with unchanged prose still saves.
+ */
+internal fun shouldSaveDraft(
+    content: String,
+    currentDraftId: String?,
+    lastPersistedContent: String?
+): Boolean =
+    currentDraftId == null || content != lastPersistedContent
+
+/**
+ * What [shouldSaveDraft] compares: the saved prose plus each attachment slot's URL and alt, in
+ * order. Metadata (mime/dim/thumbhash) is left out — it's derived, and a late metadata fill isn't
+ * an edit.
+ */
+internal fun draftFingerprint(
+    text: String,
+    media: List<cooking.zap.app.ui.component.ComposerMedia>
+): String = buildString {
+    append(text)
+    for (m in media) {
+        append('\u0000').append(m.url).append('\u0001').append(m.alt.orEmpty())
+    }
+}
+
 /** Per-event outcome for the slow-path draft restore. See [draftRestoreVerdict]. */
 internal sealed class DraftRestoreVerdict {
     /** An older copy of a coordinate we've already seen a newer version of — ignore. */
@@ -1599,6 +1632,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         _content.value = TextFieldValue(text, TextRange(text.length))
         savedStateHandle["draft_content"] = text
         applyRestoredMedia(media)
+        lastPersistedContent = currentDraftFingerprint()
     }
 
     /** Rebuilds the attachment slots (order, metadata, descriptions) after a
@@ -1636,6 +1670,16 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
     // when nothing was auto-restored. Drafts opened from the Drafts list are deliberate picks and
     // never set it. See [shouldDiscardOnDispose].
     private var restoredDraftId: String? = null
+
+    // [draftFingerprint] of what was last persisted (restored or saved) under [currentDraftId];
+    // null when there's no baseline. See [shouldSaveDraft].
+    private var lastPersistedContent: String? = null
+
+    /** The editor's current [draftFingerprint], computed exactly as [saveDraft] computes it. */
+    private fun currentDraftFingerprint(): String {
+        val (materialized, _) = materializeMentions(_content.value.text, _mentions.value)
+        return draftFingerprint(materialized.trim(), mediaSnapshot())
+    }
 
     // Local deletion registry, so publishing a draft tombstones its coordinate on-device (parity
     // with DraftsViewModel.deleteDraft). Attached from the COMPOSE route; null in tests.
@@ -1686,6 +1730,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
                         lastDraftCache.getMedia(signer.pubkeyHex)
                     )
                 )
+                lastPersistedContent = currentDraftFingerprint()
                 restoringDraft = false
                 return
             }
@@ -1828,6 +1873,9 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         // A media-only draft (empty caption) is worth saving too — the slots
         // carry the note now that URLs no longer live in the text.
         if ((text.isBlank() && media.isEmpty()) || signer == null) return
+        // Untouched since it was restored/saved — nothing to persist, and no "Draft saved".
+        val fingerprint = draftFingerprint(text, media)
+        if (!shouldSaveDraft(fingerprint, currentDraftId, lastPersistedContent)) return
 
         // A tombstoned coordinate (already published, or deleted from the Drafts list — which
         // still lists such drafts) is never written again: the tombstone is permanent, so a draft
@@ -1837,6 +1885,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         }
         val draftId = reusable ?: Nip37.newDraftId()
         currentDraftId = draftId
+        lastPersistedContent = fingerprint
 
         // The local last-draft cache backs top-level "continue where you left off". Only populate
         // it for top-level composers — reply/quote drafts carry context that restoreLatestDraft
@@ -1929,6 +1978,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         if (signer == null) return
         currentDraftId = null
         restoredDraftId = null
+        lastPersistedContent = null
 
         // Drop the local last-draft cache only when it points at the draft we're deleting — an
         // unrelated top-level draft cached under this account must survive publishing from a
@@ -1980,6 +2030,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
     fun clear() {
         currentDraftId = null
         restoredDraftId = null
+        lastPersistedContent = null
         restoringDraft = false
         _content.value = TextFieldValue()
         _mentions.value = emptyList()
