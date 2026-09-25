@@ -252,6 +252,19 @@ internal fun draftRestoreVerdict(
 internal fun restoreFastPathShouldDrop(cachedId: String?, registryDeletionTime: Long?): Boolean =
     cachedId != null && registryDeletionTime != null
 
+/**
+ * Restore gate: is [dTag] the draft of a publish that's still pending? Never auto-restore it —
+ * both restore paths skip it. A composer reopened mid-countdown would otherwise show the post
+ * that's about to go out; once the publish settled, that text would stay in the editor and be
+ * re-saved under a fresh id, bringing the published post back as a draft.
+ *
+ * Skip, don't drop: the fast path leaves the cache alone (Undo keeps the draft, and the next
+ * open restores it normally). A fresh post that was never saved owns no draft (null) and skips
+ * nothing.
+ */
+internal fun restoreSkipsPendingPublishDraft(dTag: String?, pendingPublishDraftId: String?): Boolean =
+    dTag != null && dTag == pendingPublishDraftId
+
 private fun restoreMentionsFromState(state: SavedStateHandle): List<Mention> {
     val raw = state.get<Array<String>>("draft_mentions") ?: return emptyList()
     return raw.mapNotNull { entry ->
@@ -726,6 +739,18 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
     /** Who a publish belongs to, captured when it's queued — never re-read at completion. */
     private class PublishOwner(val draftId: String?, val session: Long)
 
+    /** The pending publish's owned draft id, while one is pending; see
+     *  [restoreSkipsPendingPublishDraft]. Cleared when the publish settles. Volatile: the slow
+     *  restore path reads it from Dispatchers.Default. */
+    @Volatile
+    private var pendingPublishDraftId: String? = null
+
+    /** The pending publish settled: it went out ([published]), or it didn't (Undo, failure). */
+    private fun publishSettled(published: Boolean) {
+        pendingPublishDraftId = null
+        settleDeferredDraftSave(published)
+    }
+
     /**
      * A draft save that arrived while a publish was pending (the user backed out during the undo
      * countdown / an in-flight publish). Snapshotted at that moment — the editor may be cleared
@@ -1178,6 +1203,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         // Ownership is fixed NOW: the draft and editor session this post came from. The countdown
         // outlives the screen, so completion must not read currentDraftId/session afresh.
         val owner = PublishOwner(draftId = currentDraftId, session = composeSession)
+        pendingPublishDraftId = owner.draftId
 
         _publishing.value = true
         if (!useTimer || timerSeconds <= 0) {
@@ -1204,7 +1230,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         viewModelScope.launch {
             try {
                 val sentCount = publishNote(owner, content, signer, relayPool, replyTo, quoteTo, outboxRouter, powManager, powPrefs, resolvedEmojis)
-                settleDeferredDraftSave(published = sentCount != 0)
+                publishSettled(published = sentCount != 0)
                 if (sentCount == 0) return@launch
                 onNotePublished?.invoke()
                 // onSuccess navigates (the composer pops itself). Only the session that queued
@@ -1214,7 +1240,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
             } catch (e: Exception) {
                 _error.value = getApplication<Application>().getString(R.string.error_publish_failed, e.message ?: "Unknown error")
                 _publishing.value = false
-                settleDeferredDraftSave(published = false)
+                publishSettled(published = false)
             }
         }
     }
@@ -1264,7 +1290,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         // Undo can be tapped after the composer that queued the post was disposed: every entry
         // point clears the editor, but a reopened composer still shows the countdown's Undo. If
         // the user backed out mid-countdown, their text lives only in the deferred save — keep it.
-        settleDeferredDraftSave(published = false)
+        publishSettled(published = false)
     }
 
     fun publishNow() {
@@ -1830,8 +1856,11 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         // Fast path: restore the local last-draft cache instantly (covers the common
         // close-then-reopen case and cold starts without waiting on relays).
         val cached = lastDraftCache.getContent(signer.pubkeyHex)
-        if (!cached.isNullOrBlank()) {
-            val cachedId = lastDraftCache.getId(signer.pubkeyHex)
+        val cachedIdForPending = lastDraftCache.getId(signer.pubkeyHex)
+        // The cached draft is the one a pending publish is about to post: not restorable, but
+        // keep the cache (Undo needs it) — fall through to the slow path, which skips it too.
+        if (!cached.isNullOrBlank() && !restoreSkipsPendingPublishDraft(cachedIdForPending, pendingPublishDraftId)) {
+            val cachedId = cachedIdForPending
             val cachedDeletionTime = cachedId?.let {
                 deletedEventsRepo?.deletionTimeForAddress(Nip37.KIND_DRAFT, signer.pubkeyHex, it)
             }
@@ -1910,6 +1939,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
                         if (event.kind != Nip37.KIND_DRAFT) return@collect
                         if (event.pubkey != signer.pubkeyHex) return@collect
                         val dTag = event.tags.firstOrNull { it.size >= 2 && it[0] == "d" }?.get(1) ?: return@collect
+                        if (restoreSkipsPendingPublishDraft(dTag, pendingPublishDraftId)) return@collect
                         val ts = event.created_at
                         val newestSeen = newestPerCoord[dTag]
                         val regTime = deletedEventsRepo?.deletionTimeForAddress(
@@ -1972,7 +2002,9 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
                         val regTime = chosenCoord?.let {
                             deletedEventsRepo?.deletionTimeForAddress(Nip37.KIND_DRAFT, signer.pubkeyHex, it)
                         }
-                        if (regTime == null || chosenTs > regTime) {
+                        if ((regTime == null || chosenTs > regTime) &&
+                            !restoreSkipsPendingPublishDraft(chosenCoord, pendingPublishDraftId)
+                        ) {
                             applyLoadedDraft(chosen)
                             restoredDraftId = chosen.dTag
                         }
