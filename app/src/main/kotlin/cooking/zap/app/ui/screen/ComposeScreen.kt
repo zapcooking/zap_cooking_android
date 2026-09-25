@@ -14,6 +14,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.content.MediaType
@@ -115,6 +116,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -131,6 +134,7 @@ import cooking.zap.app.repo.MentionCandidate
 import cooking.zap.app.repo.ProfileRepository
 import cooking.zap.app.repo.PowPreferences
 import cooking.zap.app.R
+import cooking.zap.app.ui.component.AltTextEditorDialog
 import cooking.zap.app.ui.component.EmojiShortcodePopup
 import cooking.zap.app.ui.component.EmojiVisualTransformation
 import cooking.zap.app.ui.component.MentionOutputTransformation
@@ -231,6 +235,29 @@ fun ComposeScreen(
     val scheduleTimestamp by viewModel.scheduleTimestamp.collectAsState()
     val privateReply by viewModel.privateReply.collectAsState()
     val privateReplyLocked by viewModel.privateReplyLocked.collectAsState()
+    // Alt text (NIP-92 imeta) — per-image editor state (alt-text handoff §3)
+    val altTexts by viewModel.altTexts.collectAsState()
+    val altGeneration by viewModel.altGeneration.collectAsState()
+    var altEditorUrl by remember { mutableStateOf<String?>(null) }
+
+    altEditorUrl?.let { url ->
+        AltTextEditorDialog(
+            url = url,
+            initialAlt = altTexts[url] ?: "",
+            generation = altGeneration,
+            onGenerate = { viewModel.generateAltText(url, signer) },
+            onConsumeGeneration = { viewModel.consumeAltGeneration() },
+            onSave = { value ->
+                viewModel.setAltText(url, value)
+                altEditorUrl = null
+                viewModel.consumeAltGeneration()
+            },
+            onDismiss = {
+                altEditorUrl = null
+                viewModel.consumeAltGeneration()
+            }
+        )
+    }
 
     LaunchedEffect(replyTo) {
         viewModel.configureForReply(replyTo)
@@ -378,6 +405,9 @@ fun ComposeScreen(
                         uploadedUrls = uploadedUrls,
                         uploadProgress = uploadProgress,
                         countdownSeconds = countdownSeconds,
+                        savedAltUrls = altTexts.keys,
+                        isImageUpload = { viewModel.isImageUpload(it) },
+                        onEditAlt = { altEditorUrl = it },
                         onPickMedia = {
                             photoPickerLauncher.launch(
                                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
@@ -1022,6 +1052,65 @@ fun ComposeScreen(
                         }
                     }
 
+                    // Attached-images strip (inline note/reply mode) — per-image
+                    // alt chip, the non-gallery counterpart of the gallery's
+                    // "+ALT" overlay (alt-text handoff §3). Sits directly under
+                    // the attach row so it can't get lost below the live preview.
+                    if (!galleryMode) {
+                        val imageUrls = uploadedUrls.filter { viewModel.isImageUpload(it) }
+                        if (imageUrls.isNotEmpty()) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState())
+                                    .padding(vertical = 6.dp)
+                            ) {
+                                imageUrls.forEach { url ->
+                                    Box(modifier = Modifier.size(88.dp)) {
+                                        AsyncImage(
+                                            model = url,
+                                            contentDescription = null,
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                        )
+                                        AltChip(
+                                            saved = url in altTexts,
+                                            onClick = { altEditorUrl = url },
+                                            modifier = Modifier.align(Alignment.TopStart)
+                                        )
+                                        // Remove the attachment — drops the URL from
+                                        // the note text and forgets any description
+                                        // with it. A plain Box, not an IconButton:
+                                        // IconButton applies its own 40dp state-layer
+                                        // size after the caller's modifier, which
+                                        // overrides any size set here.
+                                        Box(
+                                            modifier = Modifier
+                                                .align(Alignment.TopEnd)
+                                                .padding(3.dp)
+                                                .size(20.dp)
+                                                .clip(CircleShape)
+                                                .background(Color.White)
+                                                .clickable { viewModel.removeMediaUrl(url) },
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                Icons.Filled.Close,
+                                                contentDescription = stringResource(R.string.cd_remove_image),
+                                                tint = Color.Black,
+                                                modifier = Modifier.size(12.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // Hashtag chips
                     AnimatedVisibility(
                         visible = hashtags.isNotEmpty(),
@@ -1598,9 +1687,13 @@ private fun MentionCandidateRow(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun GalleryComposeSection(
+
     uploadedUrls: List<String>,
     uploadProgress: String?,
     countdownSeconds: Int?,
+    savedAltUrls: Set<String>,
+    isImageUpload: (String) -> Boolean,
+    onEditAlt: (String) -> Unit,
     onPickMedia: () -> Unit,
     onRemoveUrl: (String) -> Unit
 ) {
@@ -1661,16 +1754,27 @@ private fun GalleryComposeSection(
                     state = pagerState,
                     modifier = Modifier.fillMaxSize()
                 ) { page ->
+                    val pageUrl = uploadedUrls[page]
                     Box(modifier = Modifier.fillMaxSize()) {
                         AsyncImage(
-                            model = uploadedUrls[page],
+                            model = pageUrl,
                             contentDescription = "Uploaded media ${page + 1}",
                             contentScale = ContentScale.Crop,
                             modifier = Modifier.fillMaxSize()
                         )
+                        // Alt chip (top-start) — "+ ALT" undescribed, "✓ ALT" saved
+                        if (isImageUpload(pageUrl)) {
+                            AltChip(
+                                saved = pageUrl in savedAltUrls,
+                                onClick = { onEditAlt(pageUrl) },
+                                modifier = Modifier
+                                    .align(Alignment.TopStart)
+                                    .padding(8.dp)
+                            )
+                        }
                         // Remove button
                         IconButton(
-                            onClick = { onRemoveUrl(uploadedUrls[page]) },
+                            onClick = { onRemoveUrl(pageUrl) },
                             modifier = Modifier
                                 .align(Alignment.TopEnd)
                                 .padding(8.dp)
@@ -1747,5 +1851,33 @@ private fun GalleryComposeSection(
                 }
             }
         }
+    }
+}
+
+/**
+ * The composer's per-image alt chip (alt-text handoff §3): "+ ALT" on an
+ * undescribed image, "✓ ALT" (accent) once a description is saved. Tapping
+ * opens the editor; saving nothing (clear) removes the imeta on publish.
+ */
+@Composable
+private fun AltChip(
+    saved: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val cdText = stringResource(R.string.cd_add_alt_text)
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(if (saved) MaterialTheme.colorScheme.primary else Color.Black.copy(alpha = 0.6f))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 6.dp, vertical = 3.dp)
+            .semantics { contentDescription = cdText }
+    ) {
+        Text(
+            text = if (saved) stringResource(R.string.alt_chip_saved) else stringResource(R.string.alt_chip_add),
+            style = MaterialTheme.typography.labelSmall,
+            color = if (saved) MaterialTheme.colorScheme.onPrimary else Color.White
+        )
     }
 }
