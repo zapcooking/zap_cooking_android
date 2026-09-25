@@ -123,6 +123,21 @@ internal fun shouldSaveDraft(
     currentDraftId == null || content != lastPersistedContent
 
 /**
+ * Is a publish of this composer's content still in flight? True while the undo countdown runs
+ * ([countdownActive] / [pendingPublishQueued]) and while the publish itself is underway
+ * ([publishing] — also covers a no-timer publish awaiting relays, and PoW hand-off).
+ *
+ * The auto-save on leave must not persist or toast a draft then: the post is about to go out,
+ * and "Draft saved" for it is a lie. The save is deferred instead, and only happens if the
+ * publish doesn't (Undo, or a failure) — see ComposeViewModel.settleDeferredDraftSave.
+ */
+internal fun isPublishPending(
+    publishing: Boolean,
+    countdownActive: Boolean,
+    pendingPublishQueued: Boolean
+): Boolean = publishing || countdownActive || pendingPublishQueued
+
+/**
  * What [shouldSaveDraft] compares: the saved prose plus each attachment slot's URL and alt, in
  * order. Metadata (mime/dim/thumbhash) is left out — it's derived, and a late metadata fill isn't
  * an edit.
@@ -670,6 +685,61 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
     private var mentionStartIndex: Int = -1
     private var countdownJob: Job? = null
     private var pendingPublish: (() -> Unit)? = null
+
+    /**
+     * A draft save that arrived while a publish was pending (the user backed out during the undo
+     * countdown / an in-flight publish). Snapshotted at that moment — the editor may be cleared
+     * by a reopened composer before the publish settles — and persisted only if the publish
+     * doesn't happen. Deliberately survives [clear]: every composer entry point calls clear(),
+     * and a reopened composer still shows the countdown's Undo.
+     */
+    private class DeferredDraftSave(
+        val relayPool: RelayPool,
+        val replyTo: NostrEvent?,
+        val quoteTo: NostrEvent?,
+        val signer: NostrSigner,
+        val text: String,
+        val media: List<cooking.zap.app.ui.component.ComposerMedia>,
+        val fingerprint: String,
+        val draftId: String?
+    )
+
+    private var deferredDraftSave: DeferredDraftSave? = null
+
+    private fun publishPending(): Boolean = isPublishPending(
+        publishing = _publishing.value,
+        countdownActive = countdownJob?.isActive == true,
+        pendingPublishQueued = pendingPublish != null
+    )
+
+    /**
+     * The pending publish settled. [published] true → the post went out; drop the deferred save
+     * (publishing tombstones the draft). False (Undo, no relays, exception) → persist the
+     * deferred snapshot, so text the user backed out of isn't lost. Its "Draft saved" is honest.
+     */
+    private fun settleDeferredDraftSave(published: Boolean) {
+        val d = deferredDraftSave ?: return
+        deferredDraftSave = null
+        if (published) return
+        val signer = d.signer
+        val reusable = reusableDraftId(d.draftId, signer)
+        val editorHoldsSnapshot = currentDraftFingerprint() == d.fingerprint
+        // A reopened composer may show an older copy of the same coordinate (fast-path restore of
+        // the cache, which the deferred save never updated). Never overwrite a different editor
+        // state's coordinate — give the snapshot its own id then.
+        val draftId = if (!editorHoldsSnapshot && reusable != null && reusable == currentDraftId) {
+            Nip37.newDraftId()
+        } else {
+            reusable ?: Nip37.newDraftId()
+        }
+        if (editorHoldsSnapshot) {
+            // Nothing cleared the editor: it's the same draft, now persisted.
+            currentDraftId = draftId
+            lastPersistedContent = d.fingerprint
+        }
+        persistDraft(draftId, d.text, d.media, d.replyTo, d.quoteTo, d.signer, d.relayPool)
+    }
+
     private var mentionSearchRepo: MentionSearchRepository? = null
     private var eventRepo: EventRepository? = null
     private var dmRepo: DmRepository? = null
@@ -1070,12 +1140,14 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
             viewModelScope.launch {
                 try {
                     val sentCount = publishNote(text, s, relayPool, replyTo, quoteTo, outboxRouter, powManager, powPrefs, resolvedEmojis)
+                    settleDeferredDraftSave(published = sentCount != 0)
                     if (sentCount == 0) return@launch
                     onNotePublished?.invoke()
                     onSuccess()
                 } catch (e: Exception) {
                     _error.value = getApplication<Application>().getString(R.string.error_publish_failed, e.message ?: "Unknown error")
                     _publishing.value = false
+                    settleDeferredDraftSave(published = false)
                 }
             }
             return
@@ -1102,12 +1174,14 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
             viewModelScope.launch {
                 try {
                     val sentCount = publishNote(content, signer, relayPool, replyTo, quoteTo, outboxRouter, powManager, powPrefs, resolvedEmojis)
+                    settleDeferredDraftSave(published = sentCount != 0)
                     if (sentCount == 0) return@launch
                     onNotePublished?.invoke()
                     onSuccess()
                 } catch (e: Exception) {
                     _error.value = getApplication<Application>().getString(R.string.error_publish_failed, e.message ?: "Unknown error")
                     _publishing.value = false
+                    settleDeferredDraftSave(published = false)
                 }
             }
         }
@@ -1134,6 +1208,10 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         _countdownSeconds.value = null
         _countdownStartedAt.value = null
         _publishing.value = false
+        // Undo can be tapped after the composer that queued the post was disposed: every entry
+        // point clears the editor, but a reopened composer still shows the countdown's Undo. If
+        // the user backed out mid-countdown, their text lives only in the deferred save — keep it.
+        settleDeferredDraftSave(published = false)
     }
 
     fun publishNow() {
@@ -1893,17 +1971,42 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         // Untouched since it was restored/saved — nothing to persist, and no "Draft saved".
         val fingerprint = draftFingerprint(text, media)
         if (!shouldSaveDraft(fingerprint, currentDraftId, lastPersistedContent)) return
-
-        // A tombstoned coordinate (already published, or deleted from the Drafts list — which
-        // still lists such drafts) is never written again: the tombstone is permanent, so a draft
-        // saved under it could never be restored. Mint a fresh id instead.
-        val reusable = currentDraftId?.takeIf {
-            deletedEventsRepo?.deletionTimeForAddress(Nip37.KIND_DRAFT, signer.pubkeyHex, it) == null
+        // A publish of this content is pending (backed out during the undo countdown, or while
+        // it's in flight): no cache write, no relay publish, no "Draft saved". Keep a snapshot in
+        // case the publish doesn't happen — settleDeferredDraftSave persists it then.
+        if (publishPending()) {
+            deferredDraftSave = DeferredDraftSave(
+                relayPool, replyTo, quoteTo, signer, text, media, fingerprint, currentDraftId
+            )
+            return
         }
-        val draftId = reusable ?: Nip37.newDraftId()
+
+        val draftId = reusableDraftId(currentDraftId, signer) ?: Nip37.newDraftId()
         currentDraftId = draftId
         lastPersistedContent = fingerprint
+        persistDraft(draftId, text, media, replyTo, quoteTo, signer, relayPool)
+    }
 
+    /**
+     * [draftId] if it may be written again. A tombstoned coordinate (already published, or
+     * deleted from the Drafts list — which still lists such drafts) is never written again: the
+     * tombstone is permanent, so a draft saved under it could never be restored.
+     */
+    private fun reusableDraftId(draftId: String?, signer: NostrSigner): String? = draftId?.takeIf {
+        deletedEventsRepo?.deletionTimeForAddress(Nip37.KIND_DRAFT, signer.pubkeyHex, it) == null
+    }
+
+    /** Writes a draft: the local last-draft cache (top-level only), "Draft saved", and the
+     *  encrypted NIP-37 event to relays (best-effort, in the background). */
+    private fun persistDraft(
+        draftId: String,
+        text: String,
+        media: List<cooking.zap.app.ui.component.ComposerMedia>,
+        replyTo: NostrEvent?,
+        quoteTo: NostrEvent?,
+        signer: NostrSigner,
+        relayPool: RelayPool
+    ) {
         // The local last-draft cache backs top-level "continue where you left off". Only populate
         // it for top-level composers — reply/quote drafts carry context that restoreLatestDraft
         // can't rehydrate, so caching one would let it be restored (and posted) as a root note.
