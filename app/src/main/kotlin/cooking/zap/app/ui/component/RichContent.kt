@@ -979,8 +979,8 @@ fun RichContent(
     val allMediaItems = remember(segments) {
         segments.mapNotNull { seg ->
             when (seg) {
-                is ContentSegment.ImageSegment -> MediaPagerItem.Image(seg.meta.url)
-                is ContentSegment.UnknownMediaSegment -> MediaPagerItem.Image(seg.meta.url)
+                is ContentSegment.ImageSegment -> MediaPagerItem.Image(seg.meta.url, seg.meta.alt)
+                is ContentSegment.UnknownMediaSegment -> MediaPagerItem.Image(seg.meta.url, seg.meta.alt)
                 is ContentSegment.VideoSegment -> MediaPagerItem.Video(seg.meta.url, posterModel = seg.meta.url)
                 else -> null
             }
@@ -2030,7 +2030,7 @@ private fun ArticleCard(
                     val ratio = remember(meta.dimension) { parseAspectRatio(meta.dimension) }
                     LoadingAsyncImage(
                         model = image,
-                        contentDescription = title,
+                        contentDescription = meta.alt ?: title,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
                             .fillMaxWidth()
@@ -2199,7 +2199,7 @@ private fun LiveStreamCardContent(
                     val blurPainter = rememberMediaPlaceholderPainter(meta.thumbhash, meta.blurhash, meta.dimension)
                     LoadingAsyncImage(
                         model = image,
-                        contentDescription = title,
+                        contentDescription = meta.alt ?: title,
                         contentScale = ContentScale.Crop,
                         blurPainter = blurPainter,
                         modifier = Modifier
@@ -2744,7 +2744,7 @@ private fun ImageWithContextMenu(meta: MediaMeta, onFullScreen: () -> Unit) {
     Box {
         LoadingAsyncImage(
             model = url,
-            contentDescription = "Image",
+            contentDescription = meta.alt ?: "Image",
             contentScale = ContentScale.FillWidth,
             blurPainter = blurPainter,
             onClick = onFullScreen,
@@ -2754,6 +2754,16 @@ private fun ImageWithContextMenu(meta: MediaMeta, onFullScreen: () -> Unit) {
                 .let { if (ratio != null) it.aspectRatio(ratio) else it }
                 .clip(RoundedCornerShape(12.dp)),
         )
+        // Sibling of the image tap target (never nested) so assistive tech
+        // gets two clean focus stops: the described image, then the badge.
+        if (!meta.alt.isNullOrBlank()) {
+            AltBadgeWithSheet(
+                alt = meta.alt,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(8.dp)
+            )
+        }
         DropdownMenu(
             expanded = showMenu,
             onDismissRequest = { showMenu = false }
@@ -2808,7 +2818,7 @@ internal fun InlineVideoPlayerWithFullscreen(meta: MediaMeta, onFullScreen: (pos
             ) {
                 Icon(
                     imageVector = Icons.Filled.PlayArrow,
-                    contentDescription = "Load video",
+                    contentDescription = meta.alt ?: "Load video",
                     modifier = Modifier.size(48.dp),
                     tint = if (blurPainter != null) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
                 )

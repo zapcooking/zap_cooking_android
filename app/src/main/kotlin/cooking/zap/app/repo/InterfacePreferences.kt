@@ -30,6 +30,24 @@ class InterfacePreferences(context: Context) {
         }
     }
 
+    /**
+     * Light/dark selection. Replaces the old palette picker: Zap Cooking ships
+     * one brand palette in a light and a dark cut, and this chooses between
+     * them.
+     */
+    enum class AppearanceMode(val key: String) {
+        /** Follow the OS light/dark setting. */
+        SYSTEM("system"),
+        LIGHT("light"),
+        DARK("dark");
+
+        companion object {
+            fun fromKey(key: String?): AppearanceMode =
+                values().firstOrNull { it.key == key } ?: SYSTEM
+        }
+    }
+
+    private val appContext = context.applicationContext
     private val prefs = context.getSharedPreferences("wisp_settings", Context.MODE_PRIVATE)
 
     fun getAccentColor(): Int = prefs.getInt("accent_color", 0xFFFF5722.toInt())
@@ -41,8 +59,58 @@ class InterfacePreferences(context: Context) {
     fun isNewNotesButtonHidden(): Boolean = prefs.getBoolean("new_notes_button_hidden", false)
     fun setNewNotesButtonHidden(hidden: Boolean) = prefs.edit().putBoolean("new_notes_button_hidden", hidden).apply()
 
-    fun getTheme(): String = prefs.getString("theme", "zapcooking") ?: "zapcooking"
-    fun setTheme(theme: String) = prefs.edit().putString("theme", theme).apply()
+    /**
+     * Light/dark preference, migrating anyone who set the old boolean.
+     *
+     * `dark_theme` was a two-state toggle that defaulted to dark, so it has no
+     * way to express "follow the system" — an install that already carries one
+     * keeps the mode it was actually looking at rather than being silently
+     * flipped to whatever the OS happens to be set to.
+     *
+     * The absence of that key is ambiguous: either a genuinely fresh install
+     * (starts on [AppearanceMode.SYSTEM]) or an upgraded install whose user
+     * never toggled — which was RENDERING the old dark default. The two are
+     * told apart by whether this app has ever been updated
+     * ([isUpdatedSinceInstall]), and the decision is PERSISTED immediately so
+     * a later app update can't re-classify a fresh install as upgraded.
+     */
+    fun getAppearanceMode(): AppearanceMode {
+        val stored = prefs.getString(KEY_APPEARANCE, null)
+        val hasLegacy = prefs.contains(KEY_LEGACY_DARK_THEME)
+        if (stored != null || hasLegacy) {
+            return resolveAppearanceMode(
+                stored = stored,
+                hasLegacyDarkTheme = hasLegacy,
+                legacyDarkTheme = prefs.getBoolean(KEY_LEGACY_DARK_THEME, true)
+            )
+        }
+        // Neither key — decide once, then write it down.
+        val mode = resolveAppearanceMode(
+            stored = null,
+            hasLegacyDarkTheme = false,
+            legacyDarkTheme = true,
+            upgradedInstall = isUpdatedSinceInstall()
+        )
+        setAppearanceMode(mode)
+        return mode
+    }
+
+    /** True when this package has received at least one update over its
+     *  original install — i.e. it predates the current build. */
+    private fun isUpdatedSinceInstall(): Boolean = try {
+        val info = appContext.packageManager.getPackageInfo(appContext.packageName, 0)
+        info.lastUpdateTime > info.firstInstallTime
+    } catch (_: Exception) {
+        false
+    }
+
+    fun setAppearanceMode(mode: AppearanceMode) {
+        prefs.edit()
+            .putString(KEY_APPEARANCE, mode.key)
+            // Drop the legacy boolean so it can never win a later read.
+            .remove(KEY_LEGACY_DARK_THEME)
+            .apply()
+    }
 
     fun isClientTagEnabled(): Boolean = prefs.getBoolean("client_tag_enabled", true)
     fun setClientTagEnabled(enabled: Boolean) = prefs.edit().putBoolean("client_tag_enabled", enabled).apply()
@@ -141,6 +209,41 @@ class InterfacePreferences(context: Context) {
          * filter their `OnSharedPreferenceChangeListener` callbacks by it.
          */
         const val KEY_NOTIFICATION_FEED_STYLE = "notification_feed_style"
+
+        /** Pref key backing [AppearanceMode]. */
+        const val KEY_APPEARANCE = "appearance_mode"
+
+        /**
+         * The pre-appearance-selector boolean, read once for migration in
+         * [getAppearanceMode] and cleared on the first explicit choice.
+         */
+        const val KEY_LEGACY_DARK_THEME = "dark_theme"
+
+        /**
+         * Decide the appearance from what is on disk. Split out from
+         * [getAppearanceMode] so the migration rule is testable without a
+         * `SharedPreferences` (there is no Robolectric in the JVM suite).
+         *
+         * An explicit choice always wins. Failing that, an install carrying
+         * the old boolean keeps the mode it was actually rendering — that
+         * toggle had no "follow the system" state, so inferring one would
+         * change the look of an app the user had already set. Only a genuinely
+         * fresh install, with neither key, starts on [AppearanceMode.SYSTEM].
+         */
+        fun resolveAppearanceMode(
+            stored: String?,
+            hasLegacyDarkTheme: Boolean,
+            legacyDarkTheme: Boolean,
+            upgradedInstall: Boolean = false
+        ): AppearanceMode = when {
+            stored != null -> AppearanceMode.fromKey(stored)
+            hasLegacyDarkTheme -> if (legacyDarkTheme) AppearanceMode.DARK else AppearanceMode.LIGHT
+            // No legacy key at all: an install that has seen an update
+            // rendered the old dark-by-default toggle; only a first install
+            // follows the system.
+            upgradedInstall -> AppearanceMode.DARK
+            else -> AppearanceMode.SYSTEM
+        }
     }
 
     /** Reset all interface preferences to defaults (called on full logout). */
@@ -150,7 +253,8 @@ class InterfacePreferences(context: Context) {
             .remove("theme")
             .remove("large_text")
             .remove("new_notes_button_hidden")
-            .remove("dark_theme")
+            .remove(KEY_APPEARANCE)
+            .remove(KEY_LEGACY_DARK_THEME)
             .remove("balance_hidden")
             .remove("live_streams_hidden")
             .remove("post_undo_timer_enabled")

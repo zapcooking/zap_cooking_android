@@ -439,9 +439,10 @@
     <string name="settings_large_text">大字体</string>
     <string name="settings_increase_text_size">增大整个应用的字体</string>
     <string name="settings_language">语言</string>
-    <string name="settings_popular_themes">主题</string>
-    <string name="settings_choose_color_scheme">选择配色方案</string>
-    <string name="settings_accent_color">强调色</string>
+    <string name="settings_appearance">外观</string>
+    <string name="settings_appearance_system">跟随系统</string>
+    <string name="settings_appearance_light">浅色</string>
+    <string name="settings_appearance_dark">深色</string>
     <string name="settings_preview">预览</string>
     <string name="settings_new_notes_button">新帖子按钮</string>
     <string name="settings_hide_new_notes_button">隐藏新帖子按钮</string>

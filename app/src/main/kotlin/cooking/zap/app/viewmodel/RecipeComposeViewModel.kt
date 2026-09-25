@@ -86,6 +86,42 @@ class RecipeComposeViewModel : ViewModel() {
     private val _images = MutableStateFlow<List<ImageItem>>(emptyList())
     val images: StateFlow<List<ImageItem>> = _images
 
+    /** Image description (NIP-92 imeta `alt`) per hosted image URL
+     *  (alt-text handoff §3). Blank/absent means undescribed. */
+    private val _altTexts = MutableStateFlow<Map<String, String>>(emptyMap())
+    val altTexts: StateFlow<Map<String, String>> = _altTexts
+
+    /** Set (or clear, when blank-after-trim) the alt text for an uploaded image URL. */
+    fun setAltText(url: String, rawAlt: String) {
+        val sanitized = cooking.zap.app.ui.component.sanitizeAltText(rawAlt)
+        _altTexts.value = if (sanitized == null) _altTexts.value - url else _altTexts.value + (url to sanitized)
+    }
+
+    private val _altGeneration = MutableStateFlow<cooking.zap.app.ui.component.AltTextGeneration?>(null)
+    val altGeneration: StateFlow<cooking.zap.app.ui.component.AltTextGeneration?> = _altGeneration
+
+    private val zapCookingApi = cooking.zap.app.api.ZapCookingApi()
+
+    /** "Generate with AI (Cook+)" — see [ComposeViewModel.generateAltText]. */
+    fun generateAltText(url: String, signer: NostrSigner?) {
+        if (signer == null) return
+        if (_altGeneration.value?.running == true) return
+        _altGeneration.value = cooking.zap.app.ui.component.AltTextGeneration(url, running = true)
+        viewModelScope.launch {
+            val base64 = cooking.zap.app.cheffy.AltTextImagePrep.fetchAsBase64(url)
+            val result = if (base64 == null) {
+                cooking.zap.app.api.AltTextResult.ImageUnreadable
+            } else {
+                zapCookingApi.requestAltText(base64, signer)
+            }
+            _altGeneration.value = cooking.zap.app.ui.component.AltTextGeneration(url, running = false, result = result)
+        }
+    }
+
+    fun consumeAltGeneration() {
+        _altGeneration.value = null
+    }
+
     private val _publishState = MutableStateFlow<PublishState>(PublishState.Idle)
     val publishState: StateFlow<PublishState> = _publishState
 
@@ -250,6 +286,18 @@ class RecipeComposeViewModel : ViewModel() {
         _images.value = recipe.images
             .filter { it.isNotBlank() }
             .map { ImageItem(nextId(), ImageItem.Status.Done(it)) }
+        // Alt text: seed the editor from the original's NIP-92 imeta tags
+        // (matched by exact URL against the image tags) so an edit shows,
+        // edits, or clears each description instead of silently keeping the
+        // old ones — the publisher prunes imeta as an owned tag and rewrites
+        // it from this map.
+        // Re-sanitize seeded descriptions (2000-code-point cap + blank
+        // collapse): the original event's imeta is third-party input.
+        _altTexts.value = cooking.zap.app.ui.component.parseImetaTags(event.tags)
+            .mapNotNull { (url, meta) ->
+                meta.alt?.let { alt -> cooking.zap.app.ui.component.sanitizeAltText(alt)?.let { url to it } }
+            }
+            .toMap()
 
         val c = recipe.content
         _chefNotes.value = c.chefNotes.orEmpty()
@@ -296,6 +344,7 @@ class RecipeComposeViewModel : ViewModel() {
         _ingredients.value = listOf(Row(nextId(), ""))
         _directions.value = listOf(Row(nextId(), ""))
         _images.value = emptyList()
+        _altTexts.value = emptyMap()
         _prefillNotice.value = null
     }
 
@@ -345,7 +394,17 @@ class RecipeComposeViewModel : ViewModel() {
     }
 
     fun removeImage(id: Long) {
-        _images.update { list -> list.filterNot { it.id == id } }
+        // Compute outside the CAS: StateFlow.update retries its lambda on
+        // contention, and a state write inside it (dropping the alt) would
+        // run once per retry against intermediate lists. Read, then write
+        // each flow exactly once.
+        val list = _images.value
+        val removed = list.firstOrNull { it.id == id } ?: return
+        _images.value = list.filterNot { it.id == id }
+        // A removed image takes its description with it.
+        (removed.status as? ImageItem.Status.Done)?.url?.let { url ->
+            _altTexts.value = _altTexts.value - url
+        }
     }
 
     // --- derived validation (mirrors the web `canPublish` + upload-block guard) ---
@@ -437,6 +496,7 @@ class RecipeComposeViewModel : ViewModel() {
                         imageUrls = imageUrls,
                         signer = signer,
                         includeClientTag = clientTagEnabled,
+                        altByImageUrl = _altTexts.value,
                     )
                 } else {
                     publisher.publish(
@@ -445,6 +505,7 @@ class RecipeComposeViewModel : ViewModel() {
                         imageUrls = imageUrls,
                         signer = signer,
                         includeClientTag = clientTagEnabled,
+                        altByImageUrl = _altTexts.value,
                     )
                 }
             ) {

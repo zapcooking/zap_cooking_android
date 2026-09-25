@@ -834,10 +834,30 @@ fun WispNavHost(
     val drawerScope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val onOpenDrawer: () -> Unit = { drawerScope.launch { drawerState.open() } }
+    // Refresh the wallet when the drawer opens, so the mini-wallet's figure
+    // is live rather than only as fresh as the last wallet-tab visit. Keyed
+    // off targetValue, which flips as soon as the drawer starts opening.
+    // Skipped while a connection attempt is already in flight — refreshState()
+    // is NOT idempotent mid-handshake: the not-yet-connected branch would
+    // restart NWC negotiation on every drawer open. Skipped for watch-only
+    // accounts, which can't run a wallet. (Configured wallets still connect
+    // eagerly at ViewModel init — WalletViewModel.init — so this call is a
+    // balance refresh in the common case, not the first connection.)
+    val drawerOpening by remember {
+        derivedStateOf { drawerState.targetValue == DrawerValue.Open }
+    }
+    LaunchedEffect(drawerOpening) {
+        if (drawerOpening && activeSigner != null &&
+            walletViewModel.walletState.value !is cooking.zap.app.viewmodel.WalletState.Connecting) {
+            walletViewModel.refreshState()
+        }
+    }
     // Edge-swipe-to-open is allowed only on the root tabs — never on sub-screens
     // (recipe detail, threads, DM/group rooms, settings, etc.).
     val rootTabRoutes = remember {
-        setOf(Routes.RECIPES, Routes.FEED, Routes.WALLET, Routes.DM_LIST, Routes.NOTIFICATIONS)
+        // SEARCH is a root tab since the bottom-bar parity change — without it
+        // the drawer (Wallet's only entry) can't be edge-swiped open on Search.
+        setOf(Routes.RECIPES, Routes.FEED, Routes.SEARCH, Routes.WALLET, Routes.DM_LIST, Routes.NOTIFICATIONS)
     }
     val drawerPubkey = feedViewModel.getUserPubkey()
     val drawerProfileVersion by feedViewModel.eventRepo.profileVersion.collectAsState()
@@ -847,6 +867,12 @@ fun WispNavHost(
     val drawerStatusVersion by feedViewModel.eventRepo.statusVersion.collectAsState()
     val drawerHasEmbeddedWallet =
         walletViewModel.walletMode.collectAsState().value == cooking.zap.app.repo.WalletMode.SPARK
+    // Mini-wallet widget state (wisp-ios #474). The balance is null whenever
+    // it's unknown so the stripe shows "…" rather than a bogus "0".
+    val drawerWalletConfigured =
+        walletViewModel.walletMode.collectAsState().value != cooking.zap.app.repo.WalletMode.NONE
+    val drawerWalletBalanceMsats =
+        (walletViewModel.walletState.collectAsState().value as? cooking.zap.app.viewmodel.WalletState.Connected)?.balanceMsats
     val closeDrawerAndNavigate: (String) -> Unit = { route ->
         drawerScope.launch { drawerState.close() }
         navController.navigate(route)
@@ -868,6 +894,12 @@ fun WispNavHost(
         drawerState = drawerState,
         gesturesEnabled = currentRoute in rootTabRoutes,
         drawerContent = {
+            // The drawer composable sits OUTSIDE the NavHost's
+            // LocalCanSign provider, and the composition-local defaults to
+            // true — so a watch-only account would see the signing UI (the
+            // mini-wallet included). Scope the same provider over the
+            // drawer's content explicitly.
+            CompositionLocalProvider(LocalCanSign provides (signingMode != SigningMode.READ_ONLY)) {
             WispDrawerContent(
                 profile = drawerProfile,
                 pubkey = drawerPubkey,
@@ -1010,8 +1042,11 @@ fun WispNavHost(
                 onScanResult = { route ->
                     drawerScope.launch { drawerState.close() }
                     navController.navigate(route)
-                }
+                },
+                walletConfigured = drawerWalletConfigured,
+                walletBalanceMsats = drawerWalletBalanceMsats
             )
+            }
         }
     ) {
 
@@ -3730,6 +3765,7 @@ fun WispNavHost(
             RecipeComposeScreen(
                 viewModel = recipeComposeViewModel,
                 canSign = feedViewModel.signer != null,
+                signer = feedViewModel.signer,
                 onPickImages = { uris ->
                     recipeComposeViewModel.addImages(
                         uris = uris,

@@ -63,4 +63,20 @@ class Nip68Test {
         )).single()
         assertEquals(entry, parsed)
     }
+    @Test
+    fun `multiline alt round trips with breaks normalized`() {
+        val tags = Nip68.buildPictureTags(
+            title = null,
+            media = listOf(
+                Nip68.ImetaEntry(url = "https://h/a.jpg", alt = " line one \r\n\r\n\r\nline two ")
+            )
+        )
+        val imeta = tags.single { it.first() == "imeta" }
+        assertEquals("alt line one\n\nline two", imeta.last())
+        val parsed = Nip68.parseImetaEntries(NostrEvent(
+            id = "x", pubkey = "p", created_at = 0L, kind = 20,
+            tags = tags, content = "", sig = "s"
+        ))
+        assertEquals("line one\n\nline two", parsed.single().alt)
+    }
 }

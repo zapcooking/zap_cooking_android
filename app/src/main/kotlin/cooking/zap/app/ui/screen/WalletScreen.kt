@@ -210,6 +210,28 @@ fun WalletScreen(
     val walletState by viewModel.walletState.collectAsState()
     val currentPage by viewModel.currentPage.collectAsState()
 
+    // NWC liveness failure (revoked / unresponsive) — raised as an alert so a
+    // dead wallet surfaces within seconds instead of hanging in silence
+    // (zapcooking_ios#140 parity). Dismissal is UI-local: the underlying
+    // problem stays set so refreshState keeps cheaply re-probing instead
+    // of firing full balance RPCs at a dead wallet; only a PASSED re-probe
+    // clears it. A NEW failure (different problem text) re-alerts.
+    val nwcConnectionProblem by viewModel.nwcConnectionProblem.collectAsState()
+    var problemDismissedText by remember { mutableStateOf<String?>(null) }
+    val standingProblem = nwcConnectionProblem?.takeIf { it != problemDismissedText }
+    if (standingProblem != null) {
+        AlertDialog(
+            onDismissRequest = { problemDismissedText = standingProblem },
+            title = { Text(stringResource(R.string.wallet_nwc_not_responding_title)) },
+            text = { Text(standingProblem) },
+            confirmButton = {
+                TextButton(onClick = { problemDismissedText = standingProblem }) {
+                    Text(stringResource(R.string.btn_ok))
+                }
+            }
+        )
+    }
+
     // Always refresh wallet state when this screen appears
     LaunchedEffect(Unit) {
         viewModel.refreshState()
@@ -1131,8 +1153,11 @@ private fun WalletHomeContent(
     val prefs = remember { context.getSharedPreferences("wisp_settings", android.content.Context.MODE_PRIVATE) }
     // Tri-state balance display (sats / dollars / hidden) — tap the dashboard
     // balance to cycle. Per-pubkey storage; migrates the legacy global
-    // `balance_hidden` Bool on first read for a given pubkey.
-    var balanceDisplay by remember(pubkey) {
+    // `balance_hidden` Bool on first read for a given pubkey. The changes
+    // flow re-reads on writes from the drawer's mini-wallet toggle — the
+    // drawer can be open over this screen, so the mask must apply live.
+    val displayModeVersion by WalletBalanceDisplayMode.changes.collectAsState()
+    var balanceDisplay by remember(pubkey, displayModeVersion) {
         mutableStateOf(WalletBalanceDisplayMode.read(prefs, pubkey))
     }
     val balanceHidden = balanceDisplay == WalletBalanceDisplayMode.HIDDEN
@@ -2971,8 +2996,12 @@ private fun TransactionHistoryContent(
     // Mirror the dashboard's tri-state display mode on tx rows so a
     // HIDDEN state masks both the dashboard balance AND every per-row
     // amount + fee. iOS port keeps these in lockstep via the same
-    // per-pubkey storage key (`walletBalanceDisplay_<pubkey>`).
-    val displayMode = remember(pubkey) { WalletBalanceDisplayMode.read(prefs, pubkey) }
+    // per-pubkey storage key (`walletBalanceDisplay_<pubkey>`). The
+    // changes signal re-reads on writes from the drawer's mini-wallet
+    // toggle — the drawer can be open over the Transactions page, so
+    // the mask must apply live here too (same contract as the dashboard).
+    val displayModeVersion by WalletBalanceDisplayMode.changes.collectAsState()
+    val displayMode = remember(pubkey, displayModeVersion) { WalletBalanceDisplayMode.read(prefs, pubkey) }
     Column(
         modifier = modifier.fillMaxSize()
     ) {

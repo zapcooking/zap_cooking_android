@@ -1828,12 +1828,14 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
                 // undescribed ones carry just url/m/dim/thumbhash (no `alt`
                 // slot), keeping the draft restorable. The published note
                 // still emits imeta per its own rules at publish time.
+                // sanitizeAltText on the way out too: every re-entry path
+                // re-sanitizes, so a stored description can't bypass the cap.
                 for (m in media) {
                     val parts = mutableListOf("imeta", "url ${m.url}")
                     m.mimeType?.let { parts.add("m $it") }
                     m.dimensions?.let { parts.add("dim $it") }
                     m.thumbhash?.let { parts.add("thumbhash $it") }
-                    m.alt?.trim()?.takeIf { it.isNotEmpty() }?.let { parts.add("alt $it") }
+                    m.alt?.let { cooking.zap.app.ui.component.sanitizeAltText(it) }?.let { parts.add("alt $it") }
                     innerTags.add(parts)
                 }
                 val innerJson = Nip37.serializeDraftContent(
