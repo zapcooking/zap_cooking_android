@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -61,6 +62,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
@@ -313,7 +315,7 @@ private fun TimerTabContent(viewModel: CookingTimerViewModel) {
             Spacer(Modifier.height(16.dp))
         }
 
-        // Active timers — one horizontal row, evenly spaced
+        // Active timers — stacked vertically, one full-width row each
         item {
             if (timers.isEmpty()) {
                 Box(
@@ -329,16 +331,31 @@ private fun TimerTabContent(viewModel: CookingTimerViewModel) {
                     )
                 }
             } else {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                // Stacked, not side by side: splitting the width between
+                // timers left each card too narrow for its own countdown, so
+                // "4:37" wrapped to "4:3 / 7" and "Done!" to "Do / ne!". A
+                // full-width row per timer has room for the digits however
+                // many are running.
+                // Lazy: only the visible cards compose. A plain scrolling
+                // Column measures every running timer each second-tick even
+                // when it's scrolled out of the 300dp cap.
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        // Cap the stack at roughly three cards and scroll past
+                        // that. Unbounded, a fourth timer grew the sheet to
+                        // full screen height, where it drew under the status
+                        // bar clock — and a kitchen with eight timers running
+                        // does not want eight screens of sheet either.
+                        .heightIn(max = 300.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    timers.forEach { timer ->
+                    items(timers, key = { it.id }) { timer ->
                         ActiveTimerCard(
                             timer = timer,
                             onReset = { viewModel.resetTimer(timer.id) },
                             onRemove = { viewModel.removeTimer(timer.id) },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.fillMaxWidth()
                         )
                     }
                 }
@@ -439,45 +456,38 @@ private fun ActiveTimerCard(
             .background(surfaceColor)
             .padding(horizontal = 12.dp, vertical = 12.dp)
     ) {
-        Text(
-            text = timer.label,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1
-        )
-        Spacer(Modifier.height(2.dp))
-        Text(
-            text = if (timer.isFinished) "Done!" else formatSeconds(timer.remainingSeconds),
-            style = androidx.compose.ui.text.TextStyle(
-                fontFamily = OrbitronFontFamily,
-                fontWeight = FontWeight.Bold,
-                fontSize = 28.sp,
-                letterSpacing = (-0.01).em,
-                fontFeatureSettings = "tnum",
-                lineHeight = 32.sp
-            ),
-            color = if (timer.isFinished) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurface
-        )
-        if (!timer.isFinished) {
-            Spacer(Modifier.height(6.dp))
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(3.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(progress)
-                        .height(3.dp)
-                        .background(MaterialTheme.colorScheme.primary)
+        // Label and countdown on the left, actions on the right: a full-width
+        // card is wide enough to put them side by side, which keeps each
+        // running timer to about the height of one list row.
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = timer.label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = if (timer.isFinished) "Done!" else formatSeconds(timer.remainingSeconds),
+                    style = androidx.compose.ui.text.TextStyle(
+                        fontFamily = OrbitronFontFamily,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 28.sp,
+                        letterSpacing = (-0.01).em,
+                        fontFeatureSettings = "tnum",
+                        lineHeight = 32.sp
+                    ),
+                    color = if (timer.isFinished) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurface,
+                    // Belt and braces after the wrapping bug: a countdown is
+                    // one token and must never break across lines, whatever
+                    // width it ends up with.
+                    maxLines = 1,
+                    softWrap = false
                 )
             }
-        }
-        Spacer(Modifier.height(6.dp))
-        Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
             if (timer.isFinished) {
                 IconButton(onClick = onReset, modifier = Modifier.size(32.dp)) {
                     Icon(
@@ -494,6 +504,23 @@ private fun ActiveTimerCard(
                     contentDescription = "Remove",
                     modifier = Modifier.size(16.dp),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        if (!timer.isFinished) {
+            Spacer(Modifier.height(8.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(3.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(progress)
+                        .height(3.dp)
+                        .background(MaterialTheme.colorScheme.primary)
                 )
             }
         }
