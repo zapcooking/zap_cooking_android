@@ -1624,6 +1624,14 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
     // Guards against firing more than one restore fetch per fresh composer open.
     private var restoringDraft = false
 
+    // Local deletion registry, so publishing a draft tombstones its coordinate on-device (parity
+    // with DraftsViewModel.deleteDraft). Attached from the COMPOSE route; null in tests.
+    private var deletedEventsRepo: DeletedEventsRepository? = null
+
+    fun attachDeletedEventsRepo(repo: DeletedEventsRepository) {
+        deletedEventsRepo = repo
+    }
+
     /**
      * iOS-parity "continue where you left off": when a fresh top-level composer opens
      * (empty editor, no draft already loaded), pull the author's most recent NIP-37 draft
@@ -1806,7 +1814,13 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         // carry the note now that URLs no longer live in the text.
         if ((text.isBlank() && media.isEmpty()) || signer == null) return
 
-        val draftId = currentDraftId ?: Nip37.newDraftId()
+        // A tombstoned coordinate (already published, or deleted from the Drafts list — which
+        // still lists such drafts) is never written again: the tombstone is permanent, so a draft
+        // saved under it could never be restored. Mint a fresh id instead.
+        val reusable = currentDraftId?.takeIf {
+            deletedEventsRepo?.deletionTimeForAddress(Nip37.KIND_DRAFT, signer.pubkeyHex, it) == null
+        }
+        val draftId = reusable ?: Nip37.newDraftId()
         currentDraftId = draftId
 
         // The local last-draft cache backs top-level "continue where you left off". Only populate
@@ -1905,6 +1919,13 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         // unrelated top-level draft cached under this account must survive publishing from a
         // reply/quote (or already-cleared) composer.
         lastDraftCache.clearIfId(signer.pubkeyHex, dTag)
+        // Tombstone the coordinate locally BEFORE the best-effort empty replacement: if that
+        // replacement fails to sign/send, or loses a same-second race against a pending auto-save
+        // (lowest id wins a created_at tie), the relay copy still holds the published text — and
+        // restoreLatestDraft's slow path would resurrect it. The registry check there wins over
+        // any relay copy. Permanent (Long.MAX_VALUE), same as DraftsViewModel.deleteDraft;
+        // saveDraft mints a fresh id rather than reuse a tombstoned one.
+        deletedEventsRepo?.markDeletedAddress(Nip37.KIND_DRAFT, signer.pubkeyHex, dTag)
 
         val app = getApplication<Application>()
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.Default) {
