@@ -231,6 +231,7 @@ fun ComposeScreen(
 ) {
     val content by viewModel.content.collectAsState()
     val publishing by viewModel.publishing.collectAsState()
+    val restoredDraft by viewModel.restoredDraft.collectAsState()
     val error by viewModel.error.collectAsState()
     val uploadedUrls by viewModel.uploadedUrls.collectAsState()
     // Attachment slots (ordered, authoritative — the editor text never carries
@@ -672,6 +673,24 @@ fun ComposeScreen(
                         .padding(top = 16.dp)
                         .verticalScroll(scrollState)
                 ) {
+                    // Auto-restored draft: say so, and offer a way out to a fresh post.
+                    if (restoredDraft && countdownSeconds == null && !publishing) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = stringResource(R.string.compose_restored_draft_notice),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f)
+                            )
+                            TextButton(onClick = { viewModel.discardRestoredDraft(relayPool, signer) }) {
+                                Text(stringResource(R.string.compose_restored_draft_discard))
+                            }
+                        }
+                    }
+
                     // Reply context (expandable)
                     replyTo?.let {
                         val replyProfile = profileRepo?.get(it.pubkey)

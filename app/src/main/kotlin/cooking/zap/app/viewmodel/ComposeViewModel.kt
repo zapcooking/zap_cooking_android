@@ -677,7 +677,20 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
     private var initialized = false
 
     var currentDraftId: String? = null
-        private set
+        private set(value) {
+            field = value
+            syncRestoredDraft()
+        }
+
+    private val _restoredDraft = MutableStateFlow(false)
+
+    /** True while the editor shows the draft restoreLatestDraft auto-loaded — drives the
+     *  "Continuing your last draft · Discard" row. */
+    val restoredDraft: StateFlow<Boolean> = _restoredDraft
+
+    private fun syncRestoredDraft() {
+        _restoredDraft.value = restoredDraftId != null && currentDraftId == restoredDraftId
+    }
 
     fun init(
         profileRepo: ProfileRepository,
@@ -1670,6 +1683,10 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
     // when nothing was auto-restored. Drafts opened from the Drafts list are deliberate picks and
     // never set it. See [shouldDiscardOnDispose].
     private var restoredDraftId: String? = null
+        set(value) {
+            field = value
+            syncRestoredDraft()
+        }
 
     // [draftFingerprint] of what was last persisted (restored or saved) under [currentDraftId];
     // null when there's no baseline. See [shouldSaveDraft].
@@ -1971,6 +1988,28 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
             )
         ) return
         deleteDraftOnPublish(relayPool, signer)
+    }
+
+    /**
+     * "Discard" on the restored-draft row: throw away the auto-restored draft and leave the user
+     * on a blank composer to start a new post. Same teardown as publishing it (cache clear, local
+     * tombstone, best-effort empty replacement), minus the publish. No "Draft saved" — the
+     * editor is empty, and the id is gone, so onDispose has nothing to save or discard.
+     */
+    fun discardRestoredDraft(relayPool: RelayPool, signer: NostrSigner?) {
+        if (signer == null || !_restoredDraft.value) return
+        deleteDraftOnPublish(relayPool, signer)
+        _content.value = TextFieldValue()
+        _mentions.value = emptyList()
+        clearMentionState()
+        savedStateHandle.remove<String>("draft_content")
+        savedStateHandle.remove<Array<String>>("draft_mentions")
+        _uploadedUrls.value = emptyList()
+        _uploadedMediaMeta.clear()
+        _altTexts.value = emptyMap()
+        _galleryHasVideo.value = false
+        persistUploadsToState()
+        _error.value = null
     }
 
     fun deleteDraftOnPublish(relayPool: RelayPool, signer: NostrSigner?) {
