@@ -122,6 +122,35 @@ internal fun shouldSaveDraft(
 ): Boolean =
     currentDraftId == null || content != lastPersistedContent
 
+/** What a settling publish does to the editor. See [publishCompletionAction]. */
+internal enum class PublishCompletion {
+    /** Same composer session as the publish: reset the editor, as a successful post always has. */
+    RESET_EDITOR,
+    /** Session moved on, but the editor holds the published draft's coordinate (a reopened
+     *  composer restored it): drop the coordinate so a later save mints a fresh id. Text stays. */
+    DETACH_DRAFT,
+    /** Session moved on to unrelated work: don't touch it. */
+    LEAVE_EDITOR
+}
+
+/**
+ * Editor side of a publish completing. The published draft itself is always tombstoned (by its
+ * owned id, whatever session is current); this decides only what happens to the editor now.
+ *
+ * The composer ViewModel is shared and the undo countdown outlives the screen, so by the time a
+ * publish settles the user may have reopened the composer (new session) and be writing something
+ * else — that editor, its text and its draft are not the publish's to clear.
+ */
+internal fun publishCompletionAction(
+    sessionMatches: Boolean,
+    ownedDraftId: String?,
+    currentDraftId: String?
+): PublishCompletion = when {
+    sessionMatches -> PublishCompletion.RESET_EDITOR
+    ownedDraftId != null && currentDraftId == ownedDraftId -> PublishCompletion.DETACH_DRAFT
+    else -> PublishCompletion.LEAVE_EDITOR
+}
+
 /**
  * Is a publish of this composer's content still in flight? True while the undo countdown runs
  * ([countdownActive] / [pendingPublishQueued]) and while the publish itself is underway
@@ -222,6 +251,19 @@ internal fun draftRestoreVerdict(
  */
 internal fun restoreFastPathShouldDrop(cachedId: String?, registryDeletionTime: Long?): Boolean =
     cachedId != null && registryDeletionTime != null
+
+/**
+ * Restore gate: is [dTag] the draft of a publish that's still pending? Never auto-restore it —
+ * both restore paths skip it. A composer reopened mid-countdown would otherwise show the post
+ * that's about to go out; once the publish settled, that text would stay in the editor and be
+ * re-saved under a fresh id, bringing the published post back as a draft.
+ *
+ * Skip, don't drop: the fast path leaves the cache alone (Undo keeps the draft, and the next
+ * open restores it normally). A fresh post that was never saved owns no draft (null) and skips
+ * nothing.
+ */
+internal fun restoreSkipsPendingPublishDraft(dTag: String?, pendingPublishDraftId: String?): Boolean =
+    dTag != null && dTag == pendingPublishDraftId
 
 private fun restoreMentionsFromState(state: SavedStateHandle): List<Mention> {
     val raw = state.get<Array<String>>("draft_mentions") ?: return emptyList()
@@ -687,6 +729,75 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
     private var pendingPublish: (() -> Unit)? = null
 
     /**
+     * Editor-session token. Bumped by everything that starts a new editor session — [clear]
+     * (every fresh/reply/quote composer entry point) and the Drafts-list [loadDraft] — never by
+     * restoreLatestDraft's internals. A publish captures it, so on completion it can tell whether
+     * the editor is still the one that queued it.
+     */
+    private var composeSession = 0L
+
+    /** Who a publish belongs to, captured when it's queued — never re-read at completion. */
+    private class PublishOwner(val draftId: String?, val session: Long)
+
+    /**
+     * Everything publishNote builds the event from besides the text, snapshotted when the post is
+     * queued. Reading the live fields at completion let a reopened composer's clear() rewrite a
+     * pending post: a private reply went out public, a gallery post lost its media, a scheduled
+     * post published immediately, a poll became a plain note, the content warning was dropped.
+     */
+    private class PublishInputs(
+        val explicit: Boolean,
+        val privateReply: Boolean,
+        val hashtags: List<String>,
+        val galleryMode: Boolean,
+        val uploadedUrls: List<String>,
+        val mediaMeta: Map<String, UploadedMediaMeta>,
+        val altTexts: Map<String, String>,
+        val pollEnabled: Boolean,
+        val pollOptions: List<String>,
+        val pollType: Nip88.PollType,
+        val isZapPoll: Boolean,
+        val zapPollMinSats: Long?,
+        val zapPollMaxSats: Long?,
+        val zapPollConsensus: Int?,
+        val scheduleEnabled: Boolean,
+        val scheduleTimestamp: Long?,
+        val powEnabled: Boolean
+    )
+
+    private fun snapshotPublishInputs() = PublishInputs(
+        explicit = _explicit.value,
+        privateReply = _privateReply.value,
+        hashtags = _hashtags.value,
+        galleryMode = _galleryMode.value,
+        uploadedUrls = _uploadedUrls.value,
+        mediaMeta = _uploadedMediaMeta.toMap(),
+        altTexts = _altTexts.value,
+        pollEnabled = _pollEnabled.value,
+        pollOptions = _pollOptions.value,
+        pollType = _pollType.value,
+        isZapPoll = _isZapPoll.value,
+        zapPollMinSats = _zapPollMinSats.value,
+        zapPollMaxSats = _zapPollMaxSats.value,
+        zapPollConsensus = _zapPollConsensus.value,
+        scheduleEnabled = _scheduleEnabled.value,
+        scheduleTimestamp = _scheduleTimestamp.value,
+        powEnabled = _powEnabled.value
+    )
+
+    /** The pending publish's owned draft id, while one is pending; see
+     *  [restoreSkipsPendingPublishDraft]. Cleared when the publish settles. Volatile: the slow
+     *  restore path reads it from Dispatchers.Default. */
+    @Volatile
+    private var pendingPublishDraftId: String? = null
+
+    /** The pending publish settled: it went out ([published]), or it didn't (Undo, failure). */
+    private fun publishSettled(published: Boolean) {
+        pendingPublishDraftId = null
+        settleDeferredDraftSave(published)
+    }
+
+    /**
      * A draft save that arrived while a publish was pending (the user backed out during the undo
      * countdown / an in-flight publish). Snapshotted at that moment — the editor may be cleared
      * by a reopened composer before the publish settles — and persisted only if the publish
@@ -701,7 +812,9 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         val text: String,
         val media: List<cooking.zap.app.ui.component.ComposerMedia>,
         val fingerprint: String,
-        val draftId: String?
+        val draftId: String?,
+        /** [composeSession] when deferred — identifies the editor the snapshot came from. */
+        val session: Long
     )
 
     private var deferredDraftSave: DeferredDraftSave? = null
@@ -723,16 +836,19 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         if (published) return
         val signer = d.signer
         val reusable = reusableDraftId(d.draftId, signer)
-        val editorHoldsSnapshot = currentDraftFingerprint() == d.fingerprint
-        // A reopened composer may show an older copy of the same coordinate (fast-path restore of
-        // the cache, which the deferred save never updated). Never overwrite a different editor
-        // state's coordinate — give the snapshot its own id then.
-        val draftId = if (!editorHoldsSnapshot && reusable != null && reusable == currentDraftId) {
+        // Same session = the very editor the snapshot was taken from, untouched since (a save is
+        // only deferred from the composer's onDispose, and dispose doesn't start a session).
+        // Identity, not content: a new session that happens to hold equal text is still new.
+        val sameSession = d.session == composeSession
+        // A new session may hold an older copy of the same coordinate (opened from the Drafts
+        // list mid-countdown). Never write the snapshot over a different editor's coordinate —
+        // give it its own id then.
+        val draftId = if (!sameSession && reusable != null && reusable == currentDraftId) {
             Nip37.newDraftId()
         } else {
             reusable ?: Nip37.newDraftId()
         }
-        if (editorHoldsSnapshot) {
+        if (sameSession) {
             // Nothing cleared the editor: it's the same draft, now persisted.
             currentDraftId = draftId
             lastPersistedContent = d.fingerprint
@@ -1135,27 +1251,56 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         val useTimer = interfacePrefs.isPostUndoTimerEnabled() && (!isReply || interfacePrefs.isPostUndoTimerForReplies())
         val timerSeconds = interfacePrefs.getPostUndoTimerSeconds()
 
+        // Ownership is fixed NOW: the draft and editor session this post came from. The countdown
+        // outlives the screen, so completion must not read currentDraftId/session afresh.
+        val owner = PublishOwner(draftId = currentDraftId, session = composeSession)
+        val inputs = snapshotPublishInputs()
+        pendingPublishDraftId = owner.draftId
+
         _publishing.value = true
         if (!useTimer || timerSeconds <= 0) {
-            viewModelScope.launch {
-                try {
-                    val sentCount = publishNote(text, s, relayPool, replyTo, quoteTo, outboxRouter, powManager, powPrefs, resolvedEmojis)
-                    settleDeferredDraftSave(published = sentCount != 0)
-                    if (sentCount == 0) return@launch
-                    onNotePublished?.invoke()
-                    onSuccess()
-                } catch (e: Exception) {
-                    _error.value = getApplication<Application>().getString(R.string.error_publish_failed, e.message ?: "Unknown error")
-                    _publishing.value = false
-                    settleDeferredDraftSave(published = false)
-                }
-            }
+            launchPublish(owner, inputs, text, s, relayPool, replyTo, quoteTo, outboxRouter, onSuccess, onNotePublished, powManager, powPrefs, resolvedEmojis)
             return
         }
-        startCountdown(text, s, relayPool, replyTo, quoteTo, outboxRouter, onSuccess, onNotePublished, powManager, powPrefs, resolvedEmojis, timerSeconds)
+        startCountdown(owner, inputs, text, s, relayPool, replyTo, quoteTo, outboxRouter, onSuccess, onNotePublished, powManager, powPrefs, resolvedEmojis, timerSeconds)
+    }
+
+    private fun launchPublish(
+        owner: PublishOwner,
+        inputs: PublishInputs,
+        content: String,
+        signer: NostrSigner,
+        relayPool: RelayPool,
+        replyTo: NostrEvent?,
+        quoteTo: NostrEvent?,
+        outboxRouter: OutboxRouter?,
+        onSuccess: () -> Unit,
+        onNotePublished: (() -> Unit)?,
+        powManager: PowManager?,
+        powPrefs: cooking.zap.app.repo.PowPreferences?,
+        resolvedEmojis: Map<String, String>
+    ) {
+        viewModelScope.launch {
+            try {
+                val sentCount = publishNote(owner, inputs, content, signer, relayPool, replyTo, quoteTo, outboxRouter, powManager, powPrefs, resolvedEmojis)
+                publishSettled(published = sentCount != 0)
+                if (sentCount == 0) return@launch
+                onNotePublished?.invoke()
+                // onSuccess navigates (the composer pops itself). Only the session that queued
+                // the post may do that — after a back-out the callback's screen is gone, and the
+                // pop would close whatever is on top now (or, on a root tab, empty the back stack).
+                if (owner.session == composeSession) onSuccess()
+            } catch (e: Exception) {
+                _error.value = getApplication<Application>().getString(R.string.error_publish_failed, e.message ?: "Unknown error")
+                _publishing.value = false
+                publishSettled(published = false)
+            }
+        }
     }
 
     private fun startCountdown(
+        owner: PublishOwner,
+        inputs: PublishInputs,
         content: String,
         signer: NostrSigner,
         relayPool: RelayPool,
@@ -1171,19 +1316,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
     ) {
         countdownJob?.cancel()
         pendingPublish = {
-            viewModelScope.launch {
-                try {
-                    val sentCount = publishNote(content, signer, relayPool, replyTo, quoteTo, outboxRouter, powManager, powPrefs, resolvedEmojis)
-                    settleDeferredDraftSave(published = sentCount != 0)
-                    if (sentCount == 0) return@launch
-                    onNotePublished?.invoke()
-                    onSuccess()
-                } catch (e: Exception) {
-                    _error.value = getApplication<Application>().getString(R.string.error_publish_failed, e.message ?: "Unknown error")
-                    _publishing.value = false
-                    settleDeferredDraftSave(published = false)
-                }
-            }
+            launchPublish(owner, inputs, content, signer, relayPool, replyTo, quoteTo, outboxRouter, onSuccess, onNotePublished, powManager, powPrefs, resolvedEmojis)
         }
         _countdownSeconds.value = seconds
         _countdownTotalSeconds.value = seconds
@@ -1211,7 +1344,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         // Undo can be tapped after the composer that queued the post was disposed: every entry
         // point clears the editor, but a reopened composer still shows the countdown's Undo. If
         // the user backed out mid-countdown, their text lives only in the deferred save — keep it.
-        settleDeferredDraftSave(published = false)
+        publishSettled(published = false)
     }
 
     fun publishNow() {
@@ -1225,6 +1358,8 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
 
     /** Publishes a note and stores the event ID. Returns the number of relays sent to (0 = failure, -1 = handed to PowManager). */
     private suspend fun publishNote(
+        owner: PublishOwner,
+        inputs: PublishInputs,
         content: String,
         signer: NostrSigner,
         relayPool: RelayPool,
@@ -1236,7 +1371,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         resolvedEmojis: Map<String, String> = emptyMap()
     ): Int {
         val tags = mutableListOf<List<String>>()
-        if (_explicit.value) {
+        if (inputs.explicit) {
             tags.add(listOf("content-warning", ""))
         }
         // NIP-22: a reply to an external-rooted kind-1111 comment must itself be
@@ -1266,11 +1401,11 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         // publicly. The compose UI hides the toggle in gallery/poll/schedule/quote modes, so we
         // branch before those tag-building paths and emit just the reply + mentions + hashtags
         // + emojis inside the encrypted rumor.
-        if (replyTo != null && _privateReply.value) {
-            for (hashtag in _hashtags.value) tags.add(listOf("t", hashtag))
+        if (replyTo != null && inputs.privateReply) {
+            for (hashtag in inputs.hashtags) tags.add(listOf("t", hashtag))
             tags.addAll(Nip30.buildEmojiTagsForContent(content, resolvedEmojis))
             if (interfacePrefs.isClientTagEnabled()) tags.add(Nip89.clientTag())
-            return publishPrivateReply(content, replyTo, tags, signer, relayPool, powPrefs)
+            return publishPrivateReply(owner, inputs, content, replyTo, tags, signer, relayPool, powPrefs)
         }
 
         val finalContent = if (quoteTo != null) {
@@ -1282,14 +1417,14 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
             content
         }
 
-        for (hashtag in _hashtags.value) {
+        for (hashtag in inputs.hashtags) {
             tags.add(listOf("t", hashtag))
         }
 
         // Build poll tags if poll is enabled
         val eventKind: Int
-        if (_galleryMode.value) {
-            val urls = _uploadedUrls.value
+        if (inputs.galleryMode) {
+            val urls = inputs.uploadedUrls
             if (urls.isEmpty()) {
                 _error.value = "Gallery post requires at least one uploaded image or video"
                 _publishing.value = false
@@ -1303,19 +1438,19 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
             }
             if (isVideo) {
                 val videoUrl = urls.first()
-                val meta = _uploadedMediaMeta[videoUrl]
+                val meta = inputs.mediaMeta[videoUrl]
                 val dims = meta?.dimensions
                 val dimStr = dims?.let { "${it.first}x${it.second}" }
                 val isVertical = dims != null && dims.second > dims.first
                 val videoMeta = listOf(Nip71.VideoMeta(url = videoUrl, mimeType = meta?.mimeType, dim = dimStr))
-                tags.addAll(Nip71.buildVideoTags(title = null, media = videoMeta, hashtags = _hashtags.value))
+                tags.addAll(Nip71.buildVideoTags(title = null, media = videoMeta, hashtags = inputs.hashtags))
                 eventKind = if (isVertical) Nip71.KIND_VIDEO_VERTICAL else Nip71.KIND_VIDEO_HORIZONTAL
             } else {
-                val altTexts = _altTexts.value
+                val altTexts = inputs.altTexts
                 // One imeta per URL — duplicate slots (same link attached
                 // twice) publish the URL twice in content but a single tag.
                 val imetaEntries = urls.map { url ->
-                    val meta = _uploadedMediaMeta[url]
+                    val meta = inputs.mediaMeta[url]
                     val dimStr = meta?.dimensions?.let { "${it.first}x${it.second}" }
                     Nip68.ImetaEntry(
                         url = url,
@@ -1325,11 +1460,11 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
                         alt = altTexts[url]
                     )
                 }.distinctBy { it.url }
-                tags.addAll(Nip68.buildPictureTags(title = null, media = imetaEntries, hashtags = _hashtags.value))
+                tags.addAll(Nip68.buildPictureTags(title = null, media = imetaEntries, hashtags = inputs.hashtags))
                 eventKind = Nip68.KIND_PICTURE
             }
-        } else if (_pollEnabled.value) {
-            val nonBlankOptions = _pollOptions.value
+        } else if (inputs.pollEnabled) {
+            val nonBlankOptions = inputs.pollOptions
                 .filter { it.isNotBlank() }
             if (nonBlankOptions.size < 2) {
                 _error.value = getApplication<Application>().getString(R.string.error_poll_options)
@@ -1337,15 +1472,15 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
                 return 0
             }
             val pollRelays = relayPool.getWriteRelayUrls()
-            if (_isZapPoll.value) {
+            if (inputs.isZapPoll) {
                 val zapPollOptions = nonBlankOptions.mapIndexed { i, label ->
                     Nip69.ZapPollOption(i, label.trim())
                 }
                 tags.addAll(Nip69.buildZapPollTags(
                     options = zapPollOptions,
-                    valueMinimum = _zapPollMinSats.value,
-                    valueMaximum = _zapPollMaxSats.value,
-                    consensusThreshold = _zapPollConsensus.value,
+                    valueMinimum = inputs.zapPollMinSats,
+                    valueMaximum = inputs.zapPollMaxSats,
+                    consensusThreshold = inputs.zapPollConsensus,
                     relayUrls = pollRelays
                 ))
                 eventKind = Nip69.KIND_ZAP_POLL
@@ -1353,20 +1488,20 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
                 val nip88Options = nonBlankOptions.mapIndexed { i, label ->
                     Nip88.PollOption(i.toString(), label.trim())
                 }
-                tags.addAll(Nip88.buildPollTags(nip88Options, _pollType.value, relayUrls = pollRelays))
+                tags.addAll(Nip88.buildPollTags(nip88Options, inputs.pollType, relayUrls = pollRelays))
                 eventKind = Nip88.KIND_POLL
             }
         } else {
             eventKind = if (replyingToComment) Nip22.KIND_COMMENT else 1
         }
 
-        if (!_galleryMode.value) {
-            val altTexts = _altTexts.value
+        if (!inputs.galleryMode) {
+            val altTexts = inputs.altTexts
             // Unknown mime (an attachment restored from a draft/cache copy that
             // predates its metadata) is included with null slots rather than
             // dropped — the alt would otherwise silently vanish at publish.
-            val imageEntries = _uploadedUrls.value.mapNotNull { url ->
-                val meta = _uploadedMediaMeta[url]
+            val imageEntries = inputs.uploadedUrls.mapNotNull { url ->
+                val meta = inputs.mediaMeta[url]
                 if (meta?.mimeType?.startsWith("image/") == false) return@mapNotNull null
                 Nip68.ImetaEntry(
                     url = url,
@@ -1389,8 +1524,8 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         }
 
         // Scheduled post — sign with future created_at and send to scheduler relays
-        if (_scheduleEnabled.value && _scheduleTimestamp.value != null) {
-            val scheduledAt = _scheduleTimestamp.value!!
+        if (inputs.scheduleEnabled && inputs.scheduleTimestamp != null) {
+            val scheduledAt = inputs.scheduleTimestamp
             val event = signer.signEvent(kind = eventKind, content = finalContent, tags = tags, createdAt = scheduledAt)
             val msg = ClientMessage.event(event)
             var sentCount = 0
@@ -1410,19 +1545,10 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
                 _publishing.value = false
                 return 0
             }
-            deleteDraftOnPublish(relayPool, signer)
-            _content.value = TextFieldValue()
-            _mentions.value = emptyList()
-            savedStateHandle.remove<String>("draft_content")
-            savedStateHandle.remove<Array<String>>("draft_mentions")
-            _uploadedUrls.value = emptyList()
-            _uploadedMediaMeta.clear()
-            _altTexts.value = emptyMap()
-            persistUploadsToState()
-            _error.value = null
-            _publishing.value = false
-            _scheduleEnabled.value = false
-            _scheduleTimestamp.value = null
+            completePublish(owner, relayPool, signer) {
+                _scheduleEnabled.value = false
+                _scheduleTimestamp.value = null
+            }
             return sentCount
         }
 
@@ -1434,7 +1560,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         }
 
         // Hand off to PowManager for background mining if PoW enabled
-        if (_powEnabled.value && powManager != null) {
+        if (inputs.powEnabled && powManager != null) {
             powManager.submitNote(
                 signer = signer,
                 content = finalContent,
@@ -1451,22 +1577,12 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
                     }
                 }
             )
-            deleteDraftOnPublish(relayPool, signer)
-            _content.value = TextFieldValue()
-            _mentions.value = emptyList()
-            savedStateHandle.remove<String>("draft_content")
-            savedStateHandle.remove<Array<String>>("draft_mentions")
-            _uploadedUrls.value = emptyList()
-            _uploadedMediaMeta.clear()
-            _altTexts.value = emptyMap()
-            persistUploadsToState()
-            _error.value = null
-            _publishing.value = false
+            completePublish(owner, relayPool, signer)
             return -1
         }
 
         val event = signer.signEvent(kind = eventKind, content = finalContent, tags = tags)
-        android.util.Log.d("GALLERY", "[ComposeVM] publishNote kind=$eventKind id=${event.id.take(12)} content='${finalContent.take(50)}' tags=${tags.size} galleryMode=${_galleryMode.value} uploadedUrls=${_uploadedUrls.value.size}")
+        android.util.Log.d("GALLERY", "[ComposeVM] publishNote kind=$eventKind id=${event.id.take(12)} content='${finalContent.take(50)}' tags=${tags.size} galleryMode=${inputs.galleryMode} uploadedUrls=${inputs.uploadedUrls.size}")
         val msg = ClientMessage.event(event)
         var sentCount = if (outboxRouter != null && inboxPubkeys.isNotEmpty()) {
             outboxRouter.publishToInbox(msg, inboxPubkeys)
@@ -1502,19 +1618,13 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
             }
             lastPublishedReplyId = event.id
         }
-        deleteDraftOnPublish(relayPool, signer)
-        _content.value = TextFieldValue()
-        savedStateHandle.remove<String>("draft_content")
-        _uploadedUrls.value = emptyList()
-        _uploadedMediaMeta.clear()
-        _altTexts.value = emptyMap()
-        persistUploadsToState()
-        _error.value = null
-        _publishing.value = false
+        completePublish(owner, relayPool, signer)
         return sentCount
     }
 
     private suspend fun publishPrivateReply(
+        owner: PublishOwner,
+        inputs: PublishInputs,
         content: String,
         replyTo: NostrEvent,
         replyTags: List<List<String>>,
@@ -1529,7 +1639,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
             return 0
         }
 
-        val difficulty = if (_powEnabled.value && powPrefs != null) powPrefs.getNoteDifficulty() else 0
+        val difficulty = if (inputs.powEnabled && powPrefs != null) powPrefs.getNoteDifficulty() else 0
 
         val result = try {
             PrivateReplyPublisher.send(
@@ -1555,18 +1665,9 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
             return 0
         }
 
-        deleteDraftOnPublish(relayPool, signer)
-        _content.value = TextFieldValue()
-        _mentions.value = emptyList()
-        savedStateHandle.remove<String>("draft_content")
-        savedStateHandle.remove<Array<String>>("draft_mentions")
-        _uploadedUrls.value = emptyList()
-        _uploadedMediaMeta.clear()
-        _altTexts.value = emptyMap()
-        persistUploadsToState()
-        _error.value = null
-        _publishing.value = false
-        _privateReply.value = false
+        completePublish(owner, relayPool, signer) {
+            _privateReply.value = false
+        }
 
         return result.sentCount
     }
@@ -1704,7 +1805,15 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         return sampleSize
     }
 
+    /** Open [draft] from the Drafts list — a new editor session. */
     fun loadDraft(draft: Nip37.Draft) {
+        composeSession++
+        applyLoadedDraft(draft)
+    }
+
+    /** Put [draft] in the editor. The slow restore path calls this directly: a restore fills the
+     *  session it runs in rather than starting a new one. */
+    private fun applyLoadedDraft(draft: Nip37.Draft) {
         currentDraftId = draft.dTag
         // A draft picked from the Drafts list is not an auto-restore; the slow restore path
         // re-marks it right after calling this.
@@ -1803,8 +1912,11 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         // Fast path: restore the local last-draft cache instantly (covers the common
         // close-then-reopen case and cold starts without waiting on relays).
         val cached = lastDraftCache.getContent(signer.pubkeyHex)
-        if (!cached.isNullOrBlank()) {
-            val cachedId = lastDraftCache.getId(signer.pubkeyHex)
+        val cachedIdForPending = lastDraftCache.getId(signer.pubkeyHex)
+        // The cached draft is the one a pending publish is about to post: not restorable, but
+        // keep the cache (Undo needs it) — fall through to the slow path, which skips it too.
+        if (!cached.isNullOrBlank() && !restoreSkipsPendingPublishDraft(cachedIdForPending, pendingPublishDraftId)) {
+            val cachedId = cachedIdForPending
             val cachedDeletionTime = cachedId?.let {
                 deletedEventsRepo?.deletionTimeForAddress(Nip37.KIND_DRAFT, signer.pubkeyHex, it)
             }
@@ -1883,6 +1995,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
                         if (event.kind != Nip37.KIND_DRAFT) return@collect
                         if (event.pubkey != signer.pubkeyHex) return@collect
                         val dTag = event.tags.firstOrNull { it.size >= 2 && it[0] == "d" }?.get(1) ?: return@collect
+                        if (restoreSkipsPendingPublishDraft(dTag, pendingPublishDraftId)) return@collect
                         val ts = event.created_at
                         val newestSeen = newestPerCoord[dTag]
                         val regTime = deletedEventsRepo?.deletionTimeForAddress(
@@ -1945,8 +2058,10 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
                         val regTime = chosenCoord?.let {
                             deletedEventsRepo?.deletionTimeForAddress(Nip37.KIND_DRAFT, signer.pubkeyHex, it)
                         }
-                        if (regTime == null || chosenTs > regTime) {
-                            loadDraft(chosen)
+                        if ((regTime == null || chosenTs > regTime) &&
+                            !restoreSkipsPendingPublishDraft(chosenCoord, pendingPublishDraftId)
+                        ) {
+                            applyLoadedDraft(chosen)
                             restoredDraftId = chosen.dTag
                         }
                     }
@@ -1976,7 +2091,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         // case the publish doesn't happen — settleDeferredDraftSave persists it then.
         if (publishPending()) {
             deferredDraftSave = DeferredDraftSave(
-                relayPool, replyTo, quoteTo, signer, text, media, fingerprint, currentDraftId
+                relayPool, replyTo, quoteTo, signer, text, media, fingerprint, currentDraftId, composeSession
             )
             return
         }
@@ -2069,7 +2184,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
      * exact top-level draft restored into this session, discard it. Clearing the local fast-path
      * cache is the required behavior (it's what stops the phantom draft from reappearing); the
      * relay-side empty NIP-37 replacement is best-effort. Both are handled by delegating to
-     * [deleteDraftOnPublish], which clears the cache synchronously *before* launching the
+     * [deleteCurrentDraft], which clears the cache synchronously *before* launching the
      * background replacement publish — so a signer/relay failure on that publish (e.g. Amber
      * after navigation) can never prevent the cache clear. No-op unless [shouldDiscardOnDispose]
      * holds, so a blank reply/quote composer or an un-restored composer leaves the cache intact.
@@ -2090,7 +2205,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
                 mediaIsEmpty = _uploadedUrls.value.isEmpty()
             )
         ) return
-        deleteDraftOnPublish(relayPool, signer)
+        deleteCurrentDraft(relayPool, signer)
     }
 
     /**
@@ -2101,7 +2216,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
      */
     fun discardRestoredDraft(relayPool: RelayPool, signer: NostrSigner?) {
         if (signer == null || !_restoredDraft.value) return
-        deleteDraftOnPublish(relayPool, signer)
+        deleteCurrentDraft(relayPool, signer)
         _content.value = TextFieldValue()
         _mentions.value = emptyList()
         clearMentionState()
@@ -2115,12 +2230,63 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         _error.value = null
     }
 
-    fun deleteDraftOnPublish(relayPool: RelayPool, signer: NostrSigner?) {
+    /**
+     * A publish succeeded. The published draft (the [owner]'s id, captured at queue time) is
+     * always tombstoned — it must die even if the user has moved on. The editor is reset only if
+     * it's still the session that queued the post; see [publishCompletionAction].
+     * [resetSessionExtras] clears path-specific editor state (schedule, private reply) on reset.
+     */
+    private fun completePublish(
+        owner: PublishOwner,
+        relayPool: RelayPool,
+        signer: NostrSigner,
+        resetSessionExtras: () -> Unit = {}
+    ) {
+        owner.draftId?.let { deleteDraftById(it, relayPool, signer) }
+        when (publishCompletionAction(owner.session == composeSession, owner.draftId, currentDraftId)) {
+            PublishCompletion.RESET_EDITOR -> {
+                currentDraftId = null
+                restoredDraftId = null
+                lastPersistedContent = null
+                _content.value = TextFieldValue()
+                _mentions.value = emptyList()
+                savedStateHandle.remove<String>("draft_content")
+                savedStateHandle.remove<Array<String>>("draft_mentions")
+                _uploadedUrls.value = emptyList()
+                _uploadedMediaMeta.clear()
+                _altTexts.value = emptyMap()
+                persistUploadsToState()
+                _error.value = null
+                resetSessionExtras()
+            }
+            PublishCompletion.DETACH_DRAFT -> {
+                currentDraftId = null
+                restoredDraftId = null
+                lastPersistedContent = null
+            }
+            PublishCompletion.LEAVE_EDITOR -> Unit
+        }
+        // Not per-session: there is one publish in flight at a time, and it just finished.
+        _publishing.value = false
+    }
+
+    /** Delete the draft the editor currently holds (the discard paths) and detach the editor
+     *  from it. See [deleteDraftById]. */
+    fun deleteCurrentDraft(relayPool: RelayPool, signer: NostrSigner?) {
         val dTag = currentDraftId ?: return
         if (signer == null) return
         currentDraftId = null
         restoredDraftId = null
         lastPersistedContent = null
+        deleteDraftById(dTag, relayPool, signer)
+    }
+
+    /**
+     * Delete draft [dTag]: clear the local fast-path cache if it points at it, tombstone the
+     * coordinate locally, and publish a best-effort empty NIP-37 replacement. Doesn't touch the
+     * editor.
+     */
+    private fun deleteDraftById(dTag: String, relayPool: RelayPool, signer: NostrSigner) {
 
         // Drop the local last-draft cache only when it points at the draft we're deleting — an
         // unrelated top-level draft cached under this account must survive publishing from a
@@ -2170,6 +2336,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
     }
 
     fun clear() {
+        composeSession++
         currentDraftId = null
         restoredDraftId = null
         lastPersistedContent = null

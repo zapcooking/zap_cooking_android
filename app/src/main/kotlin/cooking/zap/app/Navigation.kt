@@ -1470,7 +1470,7 @@ fun WispNavHost(
             )
         }
 
-        composable(Routes.COMPOSE) {
+        composable(Routes.COMPOSE) { composeEntry ->
             // Initialize PoW toggle from persisted preferences
             LaunchedEffect(Unit) {
                 composeViewModel.initPowState(feedViewModel.powPrefs.isNotePowEnabled())
@@ -1505,7 +1505,13 @@ fun WispNavHost(
                 relayPool = feedViewModel.relayPool,
                 replyTo = replyTarget,
                 quoteTo = quoteTarget,
-                onBack = { navController.popBackStack() },
+                // Pop only while THIS composer is on top. onBack is also the publish-success
+                // callback, and the undo countdown outlives the screen: fired after a back-out, a
+                // bare popBackStack() would close whatever is on top now — and NavController
+                // doesn't guard the start destination, so on the feed it empties the back stack.
+                onBack = {
+                    if (navController.currentBackStackEntry === composeEntry) navController.popBackStack()
+                },
                 // Same path as the back button: popping triggers the onDispose auto-save above,
                 // so the explicit save icon and back gesture persist the draft identically.
                 onSaveDraft = { navController.popBackStack() },
