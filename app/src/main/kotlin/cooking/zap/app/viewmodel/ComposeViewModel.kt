@@ -766,7 +766,9 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         val text: String,
         val media: List<cooking.zap.app.ui.component.ComposerMedia>,
         val fingerprint: String,
-        val draftId: String?
+        val draftId: String?,
+        /** [composeSession] when deferred — identifies the editor the snapshot came from. */
+        val session: Long
     )
 
     private var deferredDraftSave: DeferredDraftSave? = null
@@ -788,16 +790,19 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         if (published) return
         val signer = d.signer
         val reusable = reusableDraftId(d.draftId, signer)
-        val editorHoldsSnapshot = currentDraftFingerprint() == d.fingerprint
-        // A reopened composer may show an older copy of the same coordinate (fast-path restore of
-        // the cache, which the deferred save never updated). Never overwrite a different editor
-        // state's coordinate — give the snapshot its own id then.
-        val draftId = if (!editorHoldsSnapshot && reusable != null && reusable == currentDraftId) {
+        // Same session = the very editor the snapshot was taken from, untouched since (a save is
+        // only deferred from the composer's onDispose, and dispose doesn't start a session).
+        // Identity, not content: a new session that happens to hold equal text is still new.
+        val sameSession = d.session == composeSession
+        // A new session may hold an older copy of the same coordinate (opened from the Drafts
+        // list mid-countdown). Never write the snapshot over a different editor's coordinate —
+        // give it its own id then.
+        val draftId = if (!sameSession && reusable != null && reusable == currentDraftId) {
             Nip37.newDraftId()
         } else {
             reusable ?: Nip37.newDraftId()
         }
-        if (editorHoldsSnapshot) {
+        if (sameSession) {
             // Nothing cleared the editor: it's the same draft, now persisted.
             currentDraftId = draftId
             lastPersistedContent = d.fingerprint
@@ -2035,7 +2040,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         // case the publish doesn't happen — settleDeferredDraftSave persists it then.
         if (publishPending()) {
             deferredDraftSave = DeferredDraftSave(
-                relayPool, replyTo, quoteTo, signer, text, media, fingerprint, currentDraftId
+                relayPool, replyTo, quoteTo, signer, text, media, fingerprint, currentDraftId, composeSession
             )
             return
         }
