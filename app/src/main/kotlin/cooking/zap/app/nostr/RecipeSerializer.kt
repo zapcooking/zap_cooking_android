@@ -118,8 +118,13 @@ object RecipeSerializer {
      * is here but is **not** written by [toTags]: the publisher adds it per the
      * member's NIP-89 preference, so carrying the original's forward would both
      * duplicate it and override a preference since turned off.
+     *
+     * `imeta` is the same shape: [cooking.zap.app.repo.RecipePublisher.publishCore]
+     * appends the NIP-92 alt-text tags after serialization, so an edit must prune
+     * the original's imeta (a cleared description would otherwise survive at the
+     * same address) and let the publisher rewrite only the current ones.
      */
-    private val OWNED_TAG_NAMES = setOf("d", "title", "summary", "image", "published_at", "client")
+    private val OWNED_TAG_NAMES = setOf("d", "title", "summary", "image", "published_at", "client", "imeta")
 
     /**
      * True when a `#t` value is one [toTags] generates — the root itself or any

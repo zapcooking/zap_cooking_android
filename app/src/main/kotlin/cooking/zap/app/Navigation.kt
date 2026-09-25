@@ -837,7 +837,9 @@ fun WispNavHost(
     // Edge-swipe-to-open is allowed only on the root tabs — never on sub-screens
     // (recipe detail, threads, DM/group rooms, settings, etc.).
     val rootTabRoutes = remember {
-        setOf(Routes.RECIPES, Routes.FEED, Routes.WALLET, Routes.DM_LIST, Routes.NOTIFICATIONS)
+        // SEARCH is a root tab since the bottom-bar parity change — without it
+        // the drawer (Wallet's only entry) can't be edge-swiped open on Search.
+        setOf(Routes.RECIPES, Routes.FEED, Routes.SEARCH, Routes.WALLET, Routes.DM_LIST, Routes.NOTIFICATIONS)
     }
     val drawerPubkey = feedViewModel.getUserPubkey()
     val drawerProfileVersion by feedViewModel.eventRepo.profileVersion.collectAsState()
@@ -3726,6 +3728,7 @@ fun WispNavHost(
             RecipeComposeScreen(
                 viewModel = recipeComposeViewModel,
                 canSign = feedViewModel.signer != null,
+                signer = feedViewModel.signer,
                 onPickImages = { uris ->
                     recipeComposeViewModel.addImages(
                         uris = uris,

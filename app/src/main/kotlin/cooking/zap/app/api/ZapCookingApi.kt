@@ -541,6 +541,45 @@ class ZapCookingApi(
         }
     }
 
+    /**
+     * `POST /api/zappy/ask-photo` with `purpose: "alt"` — Cook+ image
+     * description generation for the composer's alt editor (alt-text
+     * handoff §4). Long-timeout compute client: vision description has the
+     * same latency profile as note review.
+     *
+     * [imageBase64] is the image **without** a `data:` prefix. Membership
+     * is enforced server-side and fails closed: a 403 `NOT_MEMBER` maps to
+     * [AltTextResult.NotMember] for the editor to render as an upsell.
+     * Rate budget is shared with note review (8/hour, 30/day per pubkey).
+     */
+    suspend fun requestAltText(
+        imageBase64: String,
+        signer: NostrSigner,
+    ): AltTextResult {
+        val bodyString = json.encodeToString(
+            AltTextRequest.serializer(),
+            AltTextRequest(image = imageBase64, purpose = "alt"),
+        )
+        return try {
+            val resp = authedRaw(
+                method = "POST",
+                url = "$baseUrl/api/zappy/ask-photo",
+                bodyString = bodyString,
+                signer = signer,
+                httpClient = HttpClientFactory.getComputeClient(),
+            )
+            mapAltTextResponse(resp.code, resp.body)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: SignerRejectedException) {
+            AltTextResult.SignFailed
+        } catch (e: SignerCancelledException) {
+            AltTextResult.SignFailed
+        } catch (e: Exception) {
+            AltTextResult.Error(NETWORK_ERROR_MESSAGE)
+        }
+    }
+
     /** Raw status + body of an HTTP response, for callers that map codes themselves. */
     private data class RawResponse(val code: Int, val body: String)
 
@@ -734,6 +773,39 @@ class ZapCookingApi(
                     error ?: MEAL_PLAN_UNPARSEABLE_MESSAGE,
                 )
                 else -> MealPlanResult.Failed(error ?: MEAL_PLAN_UNPARSEABLE_MESSAGE)
+            }
+        }
+
+        /**
+         * Map an ask-photo (`purpose: "alt"`) response onto [AltTextResult].
+         * Pure — unit-tested against the server's real shapes, same contract
+         * as [mapNoteReviewResponse]: typed `code` wins over HTTP status.
+         * The generated description is a draft — callers must put it in an
+         * editable field, never publish it sight-unseen.
+         */
+        internal fun mapAltTextResponse(code: Int, body: String): AltTextResult {
+            val resp = decodeOrNull(AltTextResponse.serializer(), body)
+            if (code in 200..299 && resp != null && resp.ok) {
+                val output = resp.output?.trim()
+                if (!output.isNullOrEmpty()) {
+                    return AltTextResult.Success(output)
+                }
+                return AltTextResult.Error("Cheffy went quiet for a second. Please try again.")
+            }
+            return when (resp?.code) {
+                "NOT_MEMBER" -> AltTextResult.NotMember
+                "MEMBERSHIP_UNAVAILABLE" -> AltTextResult.MembershipUnavailable
+                "RATE_LIMITED" -> AltTextResult.RateLimited(resp?.retryAfter)
+                "IMAGE_UNREADABLE" -> AltTextResult.ImageUnreadable
+                else -> when (code) {
+                    403 -> AltTextResult.NotMember
+                    503 -> AltTextResult.MembershipUnavailable
+                    429 -> AltTextResult.RateLimited(resp?.retryAfter)
+                    422 -> AltTextResult.ImageUnreadable
+                    else -> AltTextResult.Error(
+                        resp?.error ?: "Cheffy could not describe that one (HTTP $code)."
+                    )
+                }
             }
         }
 
@@ -1094,6 +1166,32 @@ sealed interface CreditInvoiceResult {
 enum class CreditStatus { PAID, PENDING, EXPIRED }
 
 /**
+ * Outcome of [ZapCookingApi.requestAltText] (ask-photo, `purpose: "alt"`).
+ * The success text is a DRAFT for the editor's editable field — never
+ * auto-published sight-unseen (alt-text handoff §4).
+ */
+sealed interface AltTextResult {
+    data class Success(val description: String) : AltTextResult
+
+    /** 403 `NOT_MEMBER` — the editor renders the Cook+ upsell. */
+    data object NotMember : AltTextResult
+
+    /** 503 `MEMBERSHIP_UNAVAILABLE` — retryable outage, never an upsell. */
+    data object MembershipUnavailable : AltTextResult
+
+    /** 429 — per-pubkey budget shared with note review (8/hour, 30/day). */
+    data class RateLimited(val retryAfterSeconds: Int? = null) : AltTextResult
+
+    /** 422 `IMAGE_UNREADABLE` — no message by design; UI shows a local line. */
+    data object ImageUnreadable : AltTextResult
+
+    /** The signer declined/cancelled — a user choice, not an error. */
+    data object SignFailed : AltTextResult
+
+    data class Error(val message: String) : AltTextResult
+}
+
+/**
  * Outcome of [ZapCookingApi.checkCreditStatus]. Callers must treat
  * [SignFailed]/[Error] as "check failed → keep the invoice" (invariant 6),
  * never as expired.
@@ -1124,6 +1222,23 @@ private data class NoteReviewResponse(
     val ok: Boolean = false,
     val output: String? = null,
     val creditsRemaining: Int? = null,
+    val error: String? = null,
+    val code: String? = null,
+    val retryAfter: Int? = null,
+)
+
+/** `{ image, purpose }` — purpose "alt" selects the neutral describer. */
+@Serializable
+private data class AltTextRequest(
+    val image: String,
+    val purpose: String,
+)
+
+/** `{ ok, output?, error?, code?, retryAfter? }` — lenient. */
+@Serializable
+private data class AltTextResponse(
+    val ok: Boolean = false,
+    val output: String? = null,
     val error: String? = null,
     val code: String? = null,
     val retryAfter: Int? = null,

@@ -439,9 +439,10 @@
     <string name="settings_large_text">큰 텍스트</string>
     <string name="settings_increase_text_size">앱 전체 텍스트 크기 확대</string>
     <string name="settings_language">언어</string>
-    <string name="settings_popular_themes">테마</string>
-    <string name="settings_choose_color_scheme">색상 조합 선택</string>
-    <string name="settings_accent_color">강조 색상</string>
+    <string name="settings_appearance">화면 모드</string>
+    <string name="settings_appearance_system">시스템</string>
+    <string name="settings_appearance_light">라이트</string>
+    <string name="settings_appearance_dark">다크</string>
     <string name="settings_preview">미리보기</string>
     <string name="settings_new_notes_button">새 노트 버튼</string>
     <string name="settings_hide_new_notes_button">새 노트 버튼 숨기기</string>

@@ -439,9 +439,10 @@
     <string name="settings_large_text">Grote tekst</string>
     <string name="settings_increase_text_size">Tekstgrootte in de hele app vergroten</string>
     <string name="settings_language">Taal</string>
-    <string name="settings_popular_themes">Thema\'s</string>
-    <string name="settings_choose_color_scheme">Kies kleurenschema</string>
-    <string name="settings_accent_color">Accentkleur</string>
+    <string name="settings_appearance">Weergave</string>
+    <string name="settings_appearance_system">Systeem</string>
+    <string name="settings_appearance_light">Licht</string>
+    <string name="settings_appearance_dark">Donker</string>
     <string name="settings_preview">Voorbeeld</string>
     <string name="settings_new_notes_button">Nieuwe Notities Knop</string>
     <string name="settings_hide_new_notes_button">Nieuwe notities knop verbergen</string>

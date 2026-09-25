@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -48,14 +50,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import cooking.zap.app.R
+import cooking.zap.app.ui.component.AltTextEditorDialog
 import cooking.zap.app.viewmodel.RecipeComposeViewModel
 import cooking.zap.app.viewmodel.RecipeComposeViewModel.ImageItem
 
@@ -75,6 +81,8 @@ fun RecipeComposeScreen(
     onPublish: () -> Unit,
     onPublished: (author: String, dTag: String) -> Unit,
     onBack: () -> Unit,
+    /** Signing key for the alt editor's "Generate with AI" (null hides it). */
+    signer: cooking.zap.app.nostr.NostrSigner? = null,
 ) {
     val title by viewModel.title.collectAsState()
     val categories by viewModel.categories.collectAsState()
@@ -91,6 +99,29 @@ fun RecipeComposeScreen(
     val prefillNotice by viewModel.prefillNotice.collectAsState()
     val isEditing by viewModel.isEditing.collectAsState()
     val editUnavailable by viewModel.editUnavailable.collectAsState()
+    // Alt text (NIP-92 imeta) — per-image editor (alt-text handoff §3)
+    val altTexts by viewModel.altTexts.collectAsState()
+    val altGeneration by viewModel.altGeneration.collectAsState()
+    var altEditorUrl by remember { mutableStateOf<String?>(null) }
+
+    altEditorUrl?.let { url ->
+        AltTextEditorDialog(
+            url = url,
+            initialAlt = altTexts[url] ?: "",
+            generation = altGeneration,
+            onGenerate = { viewModel.generateAltText(url, signer) },
+            onConsumeGeneration = { viewModel.consumeAltGeneration() },
+            onSave = { value ->
+                viewModel.setAltText(url, value)
+                altEditorUrl = null
+                viewModel.consumeAltGeneration()
+            },
+            onDismiss = {
+                altEditorUrl = null
+                viewModel.consumeAltGeneration()
+            }
+        )
+    }
 
     // Optimistic nav once the event is signed + cached.
     val published = publishState as? RecipeComposeViewModel.PublishState.Published
@@ -265,6 +296,8 @@ fun RecipeComposeScreen(
                 FieldSection("Photos*", "First image will be your cover photo") {
                     PhotoEditor(
                         images = images,
+                        savedAltUrls = altTexts.keys,
+                        onEditAlt = { altEditorUrl = it },
                         onPick = {
                             photoPicker.launch(
                                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
@@ -440,13 +473,24 @@ private fun RowEditor(
 @Composable
 private fun PhotoEditor(
     images: List<ImageItem>,
+    savedAltUrls: Set<String>,
+    onEditAlt: (String) -> Unit,
     onPick: () -> Unit,
     onRemove: (Long) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (images.isNotEmpty()) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                images.forEach { item -> PhotoThumb(item, onRemove) }
+                images.forEach { item ->
+                    PhotoThumb(
+                        item = item,
+                        hasAlt = (item.status as? ImageItem.Status.Done)?.url in savedAltUrls,
+                        onEditAlt = {
+                            (item.status as? ImageItem.Status.Done)?.url?.let(onEditAlt)
+                        },
+                        onRemove = onRemove,
+                    )
+                }
             }
         }
         OutlinedButton(onClick = onPick) {
@@ -458,7 +502,12 @@ private fun PhotoEditor(
 }
 
 @Composable
-private fun PhotoThumb(item: ImageItem, onRemove: (Long) -> Unit) {
+private fun PhotoThumb(
+    item: ImageItem,
+    hasAlt: Boolean,
+    onEditAlt: () -> Unit,
+    onRemove: (Long) -> Unit,
+) {
     Box(Modifier.size(96.dp).clip(RoundedCornerShape(8.dp))) {
         when (val s = item.status) {
             is ImageItem.Status.Done -> AsyncImage(
@@ -479,6 +528,31 @@ private fun PhotoThumb(item: ImageItem, onRemove: (Long) -> Unit) {
                     "Failed",
                     color = MaterialTheme.colorScheme.error,
                     fontSize = 12.sp,
+                )
+            }
+        }
+        // Alt chip (top-start) — only meaningful once hosted (has a URL)
+        if (item.status is ImageItem.Status.Done) {
+            // Shared string resources + a semantics label, same contract as
+            // the note composer's chip: localizable, and screen readers
+            // announce the action rather than reading "+ ALT".
+            val chipCd = stringResource(R.string.cd_add_alt_text)
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(
+                        if (hasAlt) MaterialTheme.colorScheme.primary
+                        else Color.Black.copy(alpha = 0.6f)
+                    )
+                    .clickable(onClick = onEditAlt)
+                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                    .semantics { contentDescription = chipCd }
+            ) {
+                Text(
+                    text = stringResource(if (hasAlt) R.string.alt_chip_saved else R.string.alt_chip_add),
+                    color = if (hasAlt) MaterialTheme.colorScheme.onPrimary else Color.White,
+                    fontSize = 9.sp,
                 )
             }
         }

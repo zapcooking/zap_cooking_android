@@ -416,9 +416,10 @@
     <string name="settings_large_text">Крупный текст</string>
     <string name="settings_increase_text_size">Увеличить размер текста во всём приложении</string>
     <string name="settings_language">Язык</string>
-    <string name="settings_popular_themes">Темы</string>
-    <string name="settings_choose_color_scheme">Выберите цветовую схему</string>
-    <string name="settings_accent_color">Акцентный цвет</string>
+    <string name="settings_appearance">Оформление</string>
+    <string name="settings_appearance_system">Системная</string>
+    <string name="settings_appearance_light">Светлая</string>
+    <string name="settings_appearance_dark">Тёмная</string>
     <string name="settings_preview">Предпросмотр</string>
     <string name="settings_new_notes_button">Кнопка новых заметок</string>
     <string name="settings_hide_new_notes_button">Скрыть кнопку новых заметок</string>

@@ -243,6 +243,11 @@ fun RecipeDetailScreen(
                 }
             }
             else -> {
+                // NIP-92 imeta alt for the hero image, matched by exact URL
+                // against the recipe's `image` tag (alt-text handoff §1).
+                val heroAlt = remember(event?.id, current.image) {
+                    event?.tags?.let { cooking.zap.app.ui.component.parseImetaTags(it)[current.image]?.alt }
+                }
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(
@@ -255,6 +260,7 @@ fun RecipeDetailScreen(
                         multiplier = multiplier,
                         onMultiplierChange = { multiplier = it },
                         onHashtagClick = onHashtagClick,
+                        heroAlt = heroAlt,
                         headerAuthorSlot = {
                             if (authorPubkey != null) {
                                 Spacer(Modifier.height(12.dp))
