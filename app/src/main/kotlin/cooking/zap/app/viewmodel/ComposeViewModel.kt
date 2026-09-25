@@ -82,14 +82,19 @@ data class Mention(val start: Int, val end: Int, val pubkey: String)
  *  - [isTopLevel] false (a reply/quote composer) → never discard; a blank reply composer may sit
  *    over an unrelated cached top-level draft the user never opened.
  *  - [currentDraftId] null → nothing was restored this session, so there's nothing to discard.
- *  - [currentDraftId] != [cachedId] → the editor isn't showing the cached draft; leave the cache.
+ *  - [currentDraftId] != [restoredDraftId] → the editor isn't showing the auto-restored draft
+ *    (e.g. one opened from the Drafts list); leave it alone.
+ *
+ * [restoredDraftId] is tracked explicitly by restoreLatestDraft for BOTH restore paths. Comparing
+ * against the fast-path cache id instead missed relay-restored drafts (the slow path never fills
+ * the cache), so emptying one never discarded it and it kept coming back.
  *  - [textIsBlank] false → the user still has content; the non-blank auto-save path owns that.
  *  - [mediaIsEmpty] false → attachments remain; the draft isn't empty just because the prose is.
  */
 internal fun shouldDiscardOnDispose(
     isTopLevel: Boolean,
     currentDraftId: String?,
-    cachedId: String?,
+    restoredDraftId: String?,
     textIsBlank: Boolean,
     mediaIsEmpty: Boolean
 ): Boolean =
@@ -97,7 +102,7 @@ internal fun shouldDiscardOnDispose(
         textIsBlank &&
         mediaIsEmpty &&
         currentDraftId != null &&
-        currentDraftId == cachedId
+        currentDraftId == restoredDraftId
 
 /** Per-event outcome for the slow-path draft restore. See [draftRestoreVerdict]. */
 internal sealed class DraftRestoreVerdict {
@@ -1577,6 +1582,9 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
 
     fun loadDraft(draft: Nip37.Draft) {
         currentDraftId = draft.dTag
+        // A draft picked from the Drafts list is not an auto-restore; the slow restore path
+        // re-marks it right after calling this.
+        restoredDraftId = null
         // The draft's imeta records ARE the attachment slots (one per
         // attachment, in order — undescribed included, since a draft is
         // private bookkeeping).
@@ -1624,6 +1632,11 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
     // Guards against firing more than one restore fetch per fresh composer open.
     private var restoringDraft = false
 
+    // The draft id restoreLatestDraft auto-loaded into this session (fast or slow path) — null
+    // when nothing was auto-restored. Drafts opened from the Drafts list are deliberate picks and
+    // never set it. See [shouldDiscardOnDispose].
+    private var restoredDraftId: String? = null
+
     // Local deletion registry, so publishing a draft tombstones its coordinate on-device (parity
     // with DraftsViewModel.deleteDraft). Attached from the COMPOSE route; null in tests.
     private var deletedEventsRepo: DeletedEventsRepository? = null
@@ -1662,6 +1675,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
                 lastDraftCache.clear(signer.pubkeyHex)
             } else {
                 currentDraftId = cachedId
+                restoredDraftId = cachedId
                 _content.value = TextFieldValue(cached, TextRange(cached.length))
                 savedStateHandle["draft_content"] = cached
                 // The cache's media copy rehydrates the attachment slots — old
@@ -1793,6 +1807,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
                         }
                         if (regTime == null || chosenTs > regTime) {
                             loadDraft(chosen)
+                            restoredDraftId = chosen.dTag
                         }
                     }
                 }
@@ -1898,11 +1913,10 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
     ) {
         if (signer == null) return
         val isTopLevel = replyTo == null && quoteTo == null
-        val cachedId = lastDraftCache.getId(signer.pubkeyHex)
         if (!shouldDiscardOnDispose(
                 isTopLevel = isTopLevel,
                 currentDraftId = currentDraftId,
-                cachedId = cachedId,
+                restoredDraftId = restoredDraftId,
                 textIsBlank = _content.value.text.isBlank(),
                 mediaIsEmpty = _uploadedUrls.value.isEmpty()
             )
@@ -1914,6 +1928,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         val dTag = currentDraftId ?: return
         if (signer == null) return
         currentDraftId = null
+        restoredDraftId = null
 
         // Drop the local last-draft cache only when it points at the draft we're deleting — an
         // unrelated top-level draft cached under this account must survive publishing from a
@@ -1964,6 +1979,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
 
     fun clear() {
         currentDraftId = null
+        restoredDraftId = null
         restoringDraft = false
         _content.value = TextFieldValue()
         _mentions.value = emptyList()
