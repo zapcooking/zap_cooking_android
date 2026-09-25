@@ -78,20 +78,23 @@ fun AltTextEditorDialog(
             seenGeneration = true
         } else if (seenGeneration && gen.result != null) {
             if (gen.result is AltTextResult.Success) {
-                field = TextFieldValue(gen.result.description, TextRange(gen.result.description.length))
+                // Same sanitize as typed input — the server's text is input
+                // too, and an over-limit draft would show a negative
+                // remaining count and republish over-cap.
+                val capped = sanitizeAltText(gen.result.description).orEmpty()
+                field = TextFieldValue(capped, TextRange(capped.length))
             }
             onConsumeGeneration()
         }
     }
 
     fun applyInput(value: TextFieldValue): TextFieldValue {
-        // Hard cap mirrors the web editor: 2000 chars, count shown below.
-        val overflow = value.text.length - ALT_TEXT_MAX_CHARS
-        return if (overflow > 0) {
-            value.copy(text = value.text.dropLast(overflow)).let {
-                TextFieldValue(it.text, TextRange(it.text.length))
-            }
-        } else value
+        // Hard cap mirrors the web editor: 2000 CODE POINTS (a UTF-16-unit
+        // slice of a string ending in an emoji ships half a surrogate pair).
+        val points = value.text.codePointCount(0, value.text.length)
+        if (points <= ALT_TEXT_MAX_CHARS) return value
+        val cut = value.text.substring(0, value.text.offsetByCodePoints(0, ALT_TEXT_MAX_CHARS))
+        return TextFieldValue(cut, TextRange(cut.length))
     }
 
     AlertDialog(
@@ -130,7 +133,7 @@ fun AltTextEditorDialog(
                     Text(
                         text = stringResource(
                             R.string.alt_editor_chars_remaining,
-                            ALT_TEXT_MAX_CHARS - field.text.length
+                            ALT_TEXT_MAX_CHARS - field.text.codePointCount(0, field.text.length)
                         ),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -174,34 +177,45 @@ private fun GenerationRow(
     val running = generation?.url == url && generation.running
     val result = generation?.takeIf { it.url == url && !it.running }?.result
 
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        TextButton(onClick = onGenerate, enabled = !running) {
-            Text(stringResource(R.string.alt_generate_with_ai))
-        }
-        // Cook+ badge — the action is membership-gated server-side (fails closed).
-        Surface(
-            shape = RoundedCornerShape(4.dp),
-            color = MaterialTheme.colorScheme.primaryContainer
+    Column {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth()
         ) {
-            Text(
-                text = stringResource(R.string.alt_cookplus_badge),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
-            )
+            TextButton(onClick = onGenerate, enabled = !running) {
+                Text(stringResource(R.string.alt_generate_with_ai))
+            }
+            // Cook+ badge — the action is membership-gated server-side (fails closed).
+            Surface(
+                shape = RoundedCornerShape(4.dp),
+                color = MaterialTheme.colorScheme.primaryContainer
+            ) {
+                Text(
+                    text = stringResource(R.string.alt_cookplus_badge),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                )
+            }
         }
+        // Generation progress on its own line — inline with the button it
+        // gets crunched inside the dialog's width.
         if (running) {
-            Spacer(Modifier.width(2.dp))
-            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-            Text(
-                text = stringResource(R.string.alt_generating),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 4.dp, top = 2.dp)
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                Text(
+                    text = stringResource(R.string.alt_generating),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 

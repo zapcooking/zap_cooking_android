@@ -11,10 +11,10 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.content.MediaType
@@ -47,7 +47,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -64,11 +66,13 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.VisibilityOff
+import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Tag
+import androidx.compose.material.icons.outlined.Videocam
 import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -95,31 +99,44 @@ import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.clipToBounds
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlin.math.abs
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
@@ -139,7 +156,9 @@ import cooking.zap.app.ui.component.EmojiShortcodePopup
 import cooking.zap.app.ui.component.EmojiVisualTransformation
 import cooking.zap.app.ui.component.MentionOutputTransformation
 import cooking.zap.app.ui.component.ProfilePicture
+import cooking.zap.app.ui.component.RetryingAsyncImage
 import cooking.zap.app.ui.component.RichContent
+import cooking.zap.app.ui.component.composeNoteContent
 import cooking.zap.app.ui.component.parseImetaTags
 import cooking.zap.app.ui.component.detectEmojiAutocomplete
 import cooking.zap.app.ui.component.insertEmojiShortcode
@@ -214,6 +233,11 @@ fun ComposeScreen(
     val publishing by viewModel.publishing.collectAsState()
     val error by viewModel.error.collectAsState()
     val uploadedUrls by viewModel.uploadedUrls.collectAsState()
+    // Attachment slots (ordered, authoritative — the editor text never carries
+    // an attachment URL). Preview renders composeNoteContent(text, media).
+    val composerMedia by viewModel.composerMedia.collectAsState()
+    // Bare pasted URLs offered — never auto-converted — as attachment slots.
+    val urlCandidates by viewModel.attachableUrlCandidates.collectAsState()
     val uploadProgress by viewModel.uploadProgress.collectAsState()
     val countdownSeconds by viewModel.countdownSeconds.collectAsState()
     val countdownTotalSeconds by viewModel.countdownTotalSeconds.collectAsState()
@@ -293,7 +317,8 @@ fun ComposeScreen(
     var previewTopOffsetPx by remember { mutableIntStateOf(0) }
     LaunchedEffect(imeVisible, countdownSeconds) {
         if (!imeVisible && countdownSeconds != null) {
-            val showPreview = content.text.isNotBlank() || (pollEnabled && pollOptions.any { it.isNotBlank() })
+            val showPreview = content.text.isNotBlank() || uploadedUrls.isNotEmpty() ||
+                (pollEnabled && pollOptions.any { it.isNotBlank() })
             if (showPreview) scrollState.animateScrollTo(previewTopOffsetPx)
         }
     }
@@ -407,13 +432,15 @@ fun ComposeScreen(
                         countdownSeconds = countdownSeconds,
                         savedAltUrls = altTexts.keys,
                         isImageUpload = { viewModel.isImageUpload(it) },
+                        isVideoUpload = { viewModel.isVideoUpload(it) },
                         onEditAlt = { altEditorUrl = it },
                         onPickMedia = {
                             photoPickerLauncher.launch(
                                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
                             )
                         },
-                        onRemoveUrl = { viewModel.removeMediaUrl(it) }
+                        onRemoveUrl = { viewModel.removeMediaUrl(it) },
+                        onMoveMedia = { from, to -> viewModel.moveMedia(from, to) }
                     )
 
                     Spacer(Modifier.height(12.dp))
@@ -748,7 +775,7 @@ fun ComposeScreen(
                     val textFieldState = remember { TextFieldState(content.text) }
                     val enabled = !publishing && countdownSeconds == null
 
-                    // Sync ViewModel -> TextFieldState (for programmatic updates: upload URL, mention select, etc.)
+                    // Sync ViewModel -> TextFieldState (for programmatic updates: mention select, draft restore)
                     LaunchedEffect(content) {
                         if (textFieldState.text.toString() != content.text) {
                             textFieldState.edit {
@@ -817,6 +844,72 @@ fun ComposeScreen(
                             }
                         }
                     )
+
+                    // Pasted-link offers, above the attachments section: every
+                    // URL on a URL-only line becomes an attachment slot on tap
+                    // (paste several and each gets its own offer). Offered,
+                    // never auto-converted — a URL a person wrote can be
+                    // deliberate prose; the sentence form ("mirror at … if the
+                    // first dies") gets no offer.
+                    if (!galleryMode && urlCandidates.isNotEmpty()) {
+                        urlCandidates.forEach { candidate ->
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 2.dp)
+                                    .clickable { viewModel.attachUrl(candidate) }
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.AttachFile,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        // Sidecar parity: no filename/URL in
+                                        // the prompt — the offer itself is the
+                                        // affordance, the thumbnail follows.
+                                        text = stringResource(R.string.compose_attach_pasted_link),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Attachment strip (inline note/reply mode), under the text
+                    // entry field: the thumbnails are where order is changed —
+                    // arrow steppers on every cell (touch and keyboard both
+                    // reach them), plus the per-image alt chip and remove. Alt
+                    // text writes by URL, not index, so it follows its image
+                    // through a reorder for free.
+                    if (!galleryMode && uploadedUrls.isNotEmpty()) {
+                        AttachmentThumbStrip(
+                            urls = uploadedUrls,
+                            isVideoUpload = { viewModel.isVideoUpload(it) },
+                            savedAltUrls = altTexts.keys,
+                            onEditAlt = { altEditorUrl = it },
+                            onRemove = { viewModel.removeMediaUrl(it) },
+                            onMove = { from, to -> viewModel.moveMedia(from, to) }
+                        )
+
+                        // Read-only accounting for attachments that are no
+                        // longer visible in the editor text: one collapsed
+                        // line, expanding to one row per URL. Reordering
+                        // belongs to the thumbnails — two places to change
+                        // one array is two places to keep in step.
+                        AttachmentSummaryDrawer(urls = uploadedUrls)
+                    }
 
                     // Quoted post preview — shown below the comment so the user's
                     // note sits on top of the quoted note (matches iOS Wisp). Renders
@@ -1047,65 +1140,6 @@ fun ComposeScreen(
                                         maxLines = 1,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
-                                }
-                            }
-                        }
-                    }
-
-                    // Attached-images strip (inline note/reply mode) — per-image
-                    // alt chip, the non-gallery counterpart of the gallery's
-                    // "+ALT" overlay (alt-text handoff §3). Sits directly under
-                    // the attach row so it can't get lost below the live preview.
-                    if (!galleryMode) {
-                        val imageUrls = uploadedUrls.filter { viewModel.isImageUpload(it) }
-                        if (imageUrls.isNotEmpty()) {
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .horizontalScroll(rememberScrollState())
-                                    .padding(vertical = 6.dp)
-                            ) {
-                                imageUrls.forEach { url ->
-                                    Box(modifier = Modifier.size(88.dp)) {
-                                        AsyncImage(
-                                            model = url,
-                                            contentDescription = null,
-                                            contentScale = ContentScale.Crop,
-                                            modifier = Modifier
-                                                .fillMaxSize()
-                                                .clip(RoundedCornerShape(10.dp))
-                                                .background(MaterialTheme.colorScheme.surfaceVariant)
-                                        )
-                                        AltChip(
-                                            saved = url in altTexts,
-                                            onClick = { altEditorUrl = url },
-                                            modifier = Modifier.align(Alignment.TopStart)
-                                        )
-                                        // Remove the attachment — drops the URL from
-                                        // the note text and forgets any description
-                                        // with it. A plain Box, not an IconButton:
-                                        // IconButton applies its own 40dp state-layer
-                                        // size after the caller's modifier, which
-                                        // overrides any size set here.
-                                        Box(
-                                            modifier = Modifier
-                                                .align(Alignment.TopEnd)
-                                                .padding(3.dp)
-                                                .size(20.dp)
-                                                .clip(CircleShape)
-                                                .background(Color.White)
-                                                .clickable { viewModel.removeMediaUrl(url) },
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Icon(
-                                                Icons.Filled.Close,
-                                                contentDescription = stringResource(R.string.cd_remove_image),
-                                                tint = Color.Black,
-                                                modifier = Modifier.size(12.dp)
-                                            )
-                                        }
-                                    }
                                 }
                             }
                         }
@@ -1359,7 +1393,8 @@ fun ComposeScreen(
                     // Live preview — always rendered (not gated on keyboard state) so the
                     // user can just scroll the composer down to see it while typing, iOS-style.
                     AnimatedVisibility(
-                        visible = (content.text.isNotBlank() || (pollEnabled && pollOptions.any { it.isNotBlank() })) && eventRepo != null
+                        visible = (content.text.isNotBlank() || uploadedUrls.isNotEmpty() ||
+                            (pollEnabled && pollOptions.any { it.isNotBlank() })) && eventRepo != null
                     ) {
                         Surface(
                             shape = RoundedCornerShape(8.dp),
@@ -1404,8 +1439,11 @@ fun ComposeScreen(
                                         )
                                     }
                                 }
+                                // Preview renders composeNoteContent — the same
+                                // function publish uses — never the bare editor
+                                // text, so it previews the note that will go out.
                                 RichContent(
-                                    content = content.text,
+                                    content = composeNoteContent(content.text, composerMedia),
                                     emojiMap = resolvedEmojis,
                                     eventRepo = eventRepo
                                 )
@@ -1531,9 +1569,11 @@ fun ComposeScreen(
                         },
                         // Publish gating (iOS parity, wisp #567): mirrors publish()'s
                         // validation — gallery posts need an upload (caption optional),
-                        // everything else needs text (uploads insert their URL into it).
+                        // everything else needs text or an attachment slot (the URLs
+                        // are appended at publish, so media alone is a publishable note).
                         enabled = !publishing && !isMiningBusy &&
-                            (if (galleryMode) uploadedUrls.isNotEmpty() else content.text.isNotBlank()),
+                            (if (galleryMode) uploadedUrls.isNotEmpty()
+                             else content.text.isNotBlank() || uploadedUrls.isNotEmpty()),
                         modifier = Modifier.fillMaxWidth().height(44.dp),
                         contentPadding = PaddingValues(0.dp)
                     ) {
@@ -1693,9 +1733,11 @@ private fun GalleryComposeSection(
     countdownSeconds: Int?,
     savedAltUrls: Set<String>,
     isImageUpload: (String) -> Boolean,
+    isVideoUpload: (String) -> Boolean,
     onEditAlt: (String) -> Unit,
     onPickMedia: () -> Unit,
-    onRemoveUrl: (String) -> Unit
+    onRemoveUrl: (String) -> Unit,
+    onMoveMedia: (Int, Int) -> Unit
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         if (uploadedUrls.isEmpty()) {
@@ -1755,13 +1797,55 @@ private fun GalleryComposeSection(
                     modifier = Modifier.fillMaxSize()
                 ) { page ->
                     val pageUrl = uploadedUrls[page]
-                    Box(modifier = Modifier.fillMaxSize()) {
-                        AsyncImage(
-                            model = pageUrl,
+                    // Long-press drag: pull the page past the step threshold
+                    // to swap it with its neighbor, which becomes the shown
+                    // page (the pager snaps so the dragged image stays under
+                    // the finger). Drag left = later, right = earlier.
+                    val dragScope = rememberCoroutineScope()
+                    var reorderStepDragging by remember { mutableStateOf(false) }
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer {
+                                if (reorderStepDragging) {
+                                    scaleX = 1.02f; scaleY = 1.02f
+                                }
+                            }
+                            .pointerInput(uploadedUrls.size) {
+                                var accumulated = 0f
+                                detectDragGesturesAfterLongPress(
+                                    onDragStart = {
+                                        accumulated = 0f
+                                        reorderStepDragging = true
+                                    },
+                                    onDrag = { change, amount ->
+                                        change.consume()
+                                        if (uploadedUrls.size < 2) return@detectDragGesturesAfterLongPress
+                                        accumulated += amount.x
+                                        val step = 120.dp.toPx()
+                                        var current = page
+                                        while (accumulated <= -step || accumulated >= step) {
+                                            val target = if (accumulated < 0) current + 1 else current - 1
+                                            if (target !in uploadedUrls.indices) { accumulated = 0f; break }
+                                            onMoveMedia(current, target)
+                                            dragScope.launch { pagerState.scrollToPage(target) }
+                                            accumulated += if (accumulated < 0) step else -step
+                                            current = target
+                                        }
+                                    },
+                                    onDragEnd = { reorderStepDragging = false },
+                                    onDragCancel = { reorderStepDragging = false }
+                                )
+                            }
+                    ) {
+                        RetryingAsyncImage(
+                            url = pageUrl,
                             contentDescription = "Uploaded media ${page + 1}",
-                            contentScale = ContentScale.Crop,
                             modifier = Modifier.fillMaxSize()
                         )
+                        if (isVideoUpload(pageUrl)) {
+                            VideoBadge(modifier = Modifier.align(Alignment.BottomStart))
+                        }
                         // Alt chip (top-start) — "+ ALT" undescribed, "✓ ALT" saved
                         if (isImageUpload(pageUrl)) {
                             AltChip(
@@ -1769,26 +1853,16 @@ private fun GalleryComposeSection(
                                 onClick = { onEditAlt(pageUrl) },
                                 modifier = Modifier
                                     .align(Alignment.TopStart)
-                                    .padding(8.dp)
+                                    .padding(4.dp)
                             )
                         }
                         // Remove button
-                        IconButton(
+                        RemoveAttachmentButton(
                             onClick = { onRemoveUrl(pageUrl) },
                             modifier = Modifier
                                 .align(Alignment.TopEnd)
-                                .padding(8.dp)
-                                .size(32.dp)
-                                .clip(CircleShape)
-                                .background(Color.Black.copy(alpha = 0.5f))
-                        ) {
-                            Icon(
-                                Icons.Filled.Close,
-                                contentDescription = "Remove",
-                                tint = Color.White,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
+                                .padding(4.dp)
+                        )
                     }
                 }
                 // Page indicator dots
@@ -1831,23 +1905,27 @@ private fun GalleryComposeSection(
                     Spacer(Modifier.width(4.dp))
                     Text("Add more", style = MaterialTheme.typography.labelMedium)
                 }
-                if (uploadProgress != null) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Text(
-                        uploadProgress,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                } else {
-                    Text(
-                        "${uploadedUrls.size} ${if (uploadedUrls.size == 1) "item" else "items"}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                // The count label never swaps out for the progress label — a
+                // label swap resizes the row and everything sized to it.
+                Text(
+                    "${uploadedUrls.size} ${if (uploadedUrls.size == 1) "item" else "items"}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                AnimatedVisibility(visible = uploadProgress != null) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            uploadProgress.orEmpty(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
         }
@@ -1865,7 +1943,9 @@ private fun AltChip(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val cdText = stringResource(R.string.cd_add_alt_text)
+    // The saved chip opens an existing description — announce the action the
+    // tap actually performs, not the one it performed the first time.
+    val cdText = stringResource(if (saved) R.string.cd_edit_alt_text else R.string.cd_add_alt_text)
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(6.dp))
@@ -1879,5 +1959,283 @@ private fun AltChip(
             style = MaterialTheme.typography.labelSmall,
             color = if (saved) MaterialTheme.colorScheme.onPrimary else Color.White
         )
+    }
+}
+
+/**
+ * The remove X on an attachment cell: a plain scrimmed circle sized to its
+ * content. Material's IconButton enforces a 48dp minimum touch target that
+ * rendered as an outsized dark circle floating the glyph away from the
+ * corner — this stays a compact 22dp.
+ */
+@Composable
+private fun RemoveAttachmentButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .size(22.dp)
+            .clip(CircleShape)
+            .background(Color.Black.copy(alpha = 0.6f))
+            .clickable(onClick = onClick)
+    ) {
+        Icon(
+            Icons.Filled.Close,
+            contentDescription = stringResource(R.string.cd_remove_attachment),
+            tint = Color.White,
+            modifier = Modifier.size(12.dp)
+        )
+    }
+}
+
+/**
+ * Corner badge marking a video slot (iOS parity: a small scrimmed glyph in
+ * the corner rather than a glyph floating mid-image, where it drowns on a
+ * busy frame). Bottom-start — the ALT chip owns top-start, remove owns
+ * top-end.
+ */
+@Composable
+private fun VideoBadge(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .padding(4.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(Color.Black.copy(alpha = 0.6f))
+            .padding(horizontal = 5.dp, vertical = 3.dp)
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.Videocam,
+            contentDescription = null,
+            tint = Color.White,
+            modifier = Modifier.size(13.dp)
+        )
+    }
+}
+
+/**
+ * Reorderable attachment thumbnails for the inline (non-gallery) composer.
+ * ONE row, sliding horizontally when attachments overflow the viewport —
+ * a second row broke the row-matched drag math, and a strip reads better
+ * than a grid in a composer anyway. Reordering is long-press drag: pick a
+ * thumbnail up, it lifts and follows the finger, and crossing a neighbor's
+ * midline splices it there. Scroll (a plain swipe) brings off-screen
+ * attachments into view; a long-press claims the gesture, so the row
+ * doesn't scroll mid-drag. The same onMove splice the gallery pager uses;
+ * alt and upload metadata key by URL, so they follow the moved image.
+ */
+@Composable
+private fun AttachmentThumbStrip(
+    urls: List<String>,
+    isVideoUpload: (String) -> Boolean,
+    savedAltUrls: Set<String>,
+    onEditAlt: (String) -> Unit,
+    onRemove: (String) -> Unit,
+    onMove: (Int, Int) -> Unit
+) {
+    var draggingIndex by remember { mutableStateOf<Int?>(null) }
+    var dragOffsetX by remember { mutableFloatStateOf(0f) }
+    var containerOrigin by remember { mutableStateOf(Offset.Zero) }
+    val itemOrigins = remember { mutableStateMapOf<Int, Offset>() }
+    val currentOnMove by rememberUpdatedState(onMove)
+    val thumbSide = 84.dp
+
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(vertical = 4.dp)
+            .onGloballyPositioned { containerOrigin = it.positionInRoot() }
+    ) {
+        urls.forEachIndexed { index, url ->
+            val isDragging = draggingIndex == index
+            Box(
+                modifier = Modifier
+                    .zIndex(if (isDragging) 1f else 0f)
+                    .graphicsLayer {
+                        if (isDragging) {
+                            // Horizontal only: vertical drag stays with the
+                            // composer's scroll; a row swap is the whole move.
+                            translationX = dragOffsetX
+                            scaleX = 1.06f
+                            scaleY = 1.06f
+                        }
+                    }
+                    .onGloballyPositioned { coords ->
+                        itemOrigins[index] = coords.positionInRoot() - containerOrigin
+                    }
+                    .pointerInput(Unit) {
+                        // All swap math runs against a SNAPSHOT taken at drag
+                        // start. Reading live positions mid-drag raced the
+                        // recomposition (layout lags the splice by a frame),
+                        // and the one-frame-stale reads made every swap jump.
+                        // Slots are equal-size, so snapshot pitches are exact.
+                        var from = -1
+                        var offsetX = 0f
+                        var snapshot: Map<Int, Offset> = emptyMap()
+                        var rowSlots: List<Int> = emptyList()
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = {
+                                val origin = itemOrigins[index] ?: return@detectDragGesturesAfterLongPress
+                                from = index
+                                offsetX = 0f
+                                draggingIndex = index
+                                snapshot = itemOrigins.toMap()
+                                rowSlots = snapshot.entries
+                                    .filter { abs(it.value.y - origin.y) < thumbSide.toPx() / 2f }
+                                    .sortedBy { it.value.x }
+                                    .map { it.key }
+                            },
+                            onDrag = { change, amount ->
+                                change.consume()
+                                if (from < 0) return@detectDragGesturesAfterLongPress
+                                // Horizontal only — vertical movement is
+                                // ignored, both visually and for hit-testing.
+                                offsetX += amount.x
+                                dragOffsetX = offsetX
+                                val half = thumbSide.toPx() / 2f
+                                var guard = rowSlots.size
+                                while (guard-- > 0) {
+                                    val pos = rowSlots.indexOf(from)
+                                    val next = rowSlots.getOrNull(pos + 1)
+                                    val prev = rowSlots.getOrNull(pos - 1)
+                                    val fromX = snapshot[from]?.x ?: break
+                                    val centerX = fromX + offsetX + half
+                                    val swapped = when {
+                                        // Swap at the midpoint between cell centers.
+                                        next != null && centerX >
+                                            (fromX + snapshot.getValue(next).x) / 2f + half -> {
+                                            currentOnMove(from, next)
+                                            offsetX -= snapshot.getValue(next).x - fromX
+                                            from = next
+                                            true
+                                        }
+                                        prev != null && centerX <
+                                            (fromX + snapshot.getValue(prev).x) / 2f + half -> {
+                                            currentOnMove(from, prev)
+                                            offsetX -= snapshot.getValue(prev).x - fromX
+                                            from = prev
+                                            true
+                                        }
+                                        else -> false
+                                    }
+                                    if (!swapped) break
+                                    draggingIndex = from
+                                }
+                            },
+                            onDragEnd = {
+                                from = -1
+                                draggingIndex = null
+                                dragOffsetX = 0f
+                            },
+                            onDragCancel = {
+                                from = -1
+                                draggingIndex = null
+                                dragOffsetX = 0f
+                            }
+                        )
+                    }
+            ) {
+                RetryingAsyncImage(
+                    url = url,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(thumbSide)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                )
+                if (isVideoUpload(url)) {
+                    VideoBadge(modifier = Modifier.align(Alignment.BottomStart))
+                } else {
+                    // Every non-video slot gets the chip — images for sure,
+                    // and unknown-mime slots too: a pasted link whose metadata
+                    // fetch is in flight or failed is probably an image, and
+                    // alt doesn't depend on knowing the mime (publish emits
+                    // it either way). Same overlay treatment as the gallery
+                    // pager's cell: chip 8dp off the corner.
+                    AltChip(
+                        saved = url in savedAltUrls,
+                        onClick = { onEditAlt(url) },
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(4.dp)
+                    )
+                }
+                // Remove — a plain scrimmed box: an IconButton here renders
+                // its 48dp minimum touch target as a dark circle twice the
+                // intended size, pushing the X well inside the corner.
+                RemoveAttachmentButton(
+                    onClick = { onRemove(url) },
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(4.dp)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * One collapsed line accounting for attachments that are no longer visible in
+ * the editor text — "N attachments, added to the end of your post" — expanding
+ * to one read-only row per URL. Read-only on purpose: the order it shows is
+ * the thumbnails' order, and reordering belongs to the thumbnails.
+ */
+@Composable
+private fun AttachmentSummaryDrawer(urls: List<String>) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+    ) {
+        Column {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded }
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.AttachFile,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = pluralStringResource(R.plurals.compose_attachments_summary, urls.size, urls.size),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            AnimatedVisibility(visible = expanded) {
+                Column(
+                    modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp)
+                ) {
+                    urls.forEachIndexed { index, url ->
+                        Text(
+                            text = "${index + 1}.  $url",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(vertical = 2.dp)
+                        )
+                    }
+                }
+            }
+        }
     }
 }

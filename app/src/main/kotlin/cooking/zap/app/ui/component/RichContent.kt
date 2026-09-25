@@ -238,10 +238,6 @@ private val audioMimeTypes = setOf("audio/mpeg", "audio/wav", "audio/ogg", "audi
 // Matches a bare SHA-256 hex hash as the URL path (no extension)
 private val blossomPathRegex = Regex("""^/[0-9a-f]{64}$""", RegexOption.IGNORE_CASE)
 
-/**
- * Parse NIP-92 imeta tags from a list of tags to build a URL→metadata map.
- * Tag format: ["imeta", "url https://...", "m image/png", "dim 1024x768", "thumbhash ...", "blurhash ...", "image https://...", ...]
- */
 private fun classifyByMime(mime: String): String? = when {
     imageMimeTypes.any { mime.startsWith(it) } -> "image"
     videoMimeTypes.any { mime.startsWith(it) } -> "video"

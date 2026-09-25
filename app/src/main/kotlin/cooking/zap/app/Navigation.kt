@@ -1483,7 +1483,11 @@ fun WispNavHost(
             // Auto-save draft when leaving compose screen (back button, navigation, etc.)
             DisposableEffect(Unit) {
                 onDispose {
-                    if (composeViewModel.content.value.text.isNotBlank()) {
+                    // Attachment slots count as content too — a media-only
+                    // draft must save, not fall into the discard branch.
+                    if (composeViewModel.content.value.text.isNotBlank() ||
+                        composeViewModel.uploadedUrls.value.isNotEmpty()
+                    ) {
                         composeViewModel.saveDraft(feedViewModel.relayPool, replyTarget, activeSigner, quoteTarget)
                     } else {
                         // Emptying a restored top-level draft = discard it: clear the fast-path
