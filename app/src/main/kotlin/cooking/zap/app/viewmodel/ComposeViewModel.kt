@@ -739,6 +739,52 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
     /** Who a publish belongs to, captured when it's queued — never re-read at completion. */
     private class PublishOwner(val draftId: String?, val session: Long)
 
+    /**
+     * Everything publishNote builds the event from besides the text, snapshotted when the post is
+     * queued. Reading the live fields at completion let a reopened composer's clear() rewrite a
+     * pending post: a private reply went out public, a gallery post lost its media, a scheduled
+     * post published immediately, a poll became a plain note, the content warning was dropped.
+     */
+    private class PublishInputs(
+        val explicit: Boolean,
+        val privateReply: Boolean,
+        val hashtags: List<String>,
+        val galleryMode: Boolean,
+        val uploadedUrls: List<String>,
+        val mediaMeta: Map<String, UploadedMediaMeta>,
+        val altTexts: Map<String, String>,
+        val pollEnabled: Boolean,
+        val pollOptions: List<String>,
+        val pollType: Nip88.PollType,
+        val isZapPoll: Boolean,
+        val zapPollMinSats: Long?,
+        val zapPollMaxSats: Long?,
+        val zapPollConsensus: Int?,
+        val scheduleEnabled: Boolean,
+        val scheduleTimestamp: Long?,
+        val powEnabled: Boolean
+    )
+
+    private fun snapshotPublishInputs() = PublishInputs(
+        explicit = _explicit.value,
+        privateReply = _privateReply.value,
+        hashtags = _hashtags.value,
+        galleryMode = _galleryMode.value,
+        uploadedUrls = _uploadedUrls.value,
+        mediaMeta = _uploadedMediaMeta.toMap(),
+        altTexts = _altTexts.value,
+        pollEnabled = _pollEnabled.value,
+        pollOptions = _pollOptions.value,
+        pollType = _pollType.value,
+        isZapPoll = _isZapPoll.value,
+        zapPollMinSats = _zapPollMinSats.value,
+        zapPollMaxSats = _zapPollMaxSats.value,
+        zapPollConsensus = _zapPollConsensus.value,
+        scheduleEnabled = _scheduleEnabled.value,
+        scheduleTimestamp = _scheduleTimestamp.value,
+        powEnabled = _powEnabled.value
+    )
+
     /** The pending publish's owned draft id, while one is pending; see
      *  [restoreSkipsPendingPublishDraft]. Cleared when the publish settles. Volatile: the slow
      *  restore path reads it from Dispatchers.Default. */
@@ -1208,18 +1254,20 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         // Ownership is fixed NOW: the draft and editor session this post came from. The countdown
         // outlives the screen, so completion must not read currentDraftId/session afresh.
         val owner = PublishOwner(draftId = currentDraftId, session = composeSession)
+        val inputs = snapshotPublishInputs()
         pendingPublishDraftId = owner.draftId
 
         _publishing.value = true
         if (!useTimer || timerSeconds <= 0) {
-            launchPublish(owner, text, s, relayPool, replyTo, quoteTo, outboxRouter, onSuccess, onNotePublished, powManager, powPrefs, resolvedEmojis)
+            launchPublish(owner, inputs, text, s, relayPool, replyTo, quoteTo, outboxRouter, onSuccess, onNotePublished, powManager, powPrefs, resolvedEmojis)
             return
         }
-        startCountdown(owner, text, s, relayPool, replyTo, quoteTo, outboxRouter, onSuccess, onNotePublished, powManager, powPrefs, resolvedEmojis, timerSeconds)
+        startCountdown(owner, inputs, text, s, relayPool, replyTo, quoteTo, outboxRouter, onSuccess, onNotePublished, powManager, powPrefs, resolvedEmojis, timerSeconds)
     }
 
     private fun launchPublish(
         owner: PublishOwner,
+        inputs: PublishInputs,
         content: String,
         signer: NostrSigner,
         relayPool: RelayPool,
@@ -1234,7 +1282,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
     ) {
         viewModelScope.launch {
             try {
-                val sentCount = publishNote(owner, content, signer, relayPool, replyTo, quoteTo, outboxRouter, powManager, powPrefs, resolvedEmojis)
+                val sentCount = publishNote(owner, inputs, content, signer, relayPool, replyTo, quoteTo, outboxRouter, powManager, powPrefs, resolvedEmojis)
                 publishSettled(published = sentCount != 0)
                 if (sentCount == 0) return@launch
                 onNotePublished?.invoke()
@@ -1252,6 +1300,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
 
     private fun startCountdown(
         owner: PublishOwner,
+        inputs: PublishInputs,
         content: String,
         signer: NostrSigner,
         relayPool: RelayPool,
@@ -1267,7 +1316,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
     ) {
         countdownJob?.cancel()
         pendingPublish = {
-            launchPublish(owner, content, signer, relayPool, replyTo, quoteTo, outboxRouter, onSuccess, onNotePublished, powManager, powPrefs, resolvedEmojis)
+            launchPublish(owner, inputs, content, signer, relayPool, replyTo, quoteTo, outboxRouter, onSuccess, onNotePublished, powManager, powPrefs, resolvedEmojis)
         }
         _countdownSeconds.value = seconds
         _countdownTotalSeconds.value = seconds
@@ -1310,6 +1359,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
     /** Publishes a note and stores the event ID. Returns the number of relays sent to (0 = failure, -1 = handed to PowManager). */
     private suspend fun publishNote(
         owner: PublishOwner,
+        inputs: PublishInputs,
         content: String,
         signer: NostrSigner,
         relayPool: RelayPool,
@@ -1321,7 +1371,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         resolvedEmojis: Map<String, String> = emptyMap()
     ): Int {
         val tags = mutableListOf<List<String>>()
-        if (_explicit.value) {
+        if (inputs.explicit) {
             tags.add(listOf("content-warning", ""))
         }
         // NIP-22: a reply to an external-rooted kind-1111 comment must itself be
@@ -1351,11 +1401,11 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         // publicly. The compose UI hides the toggle in gallery/poll/schedule/quote modes, so we
         // branch before those tag-building paths and emit just the reply + mentions + hashtags
         // + emojis inside the encrypted rumor.
-        if (replyTo != null && _privateReply.value) {
-            for (hashtag in _hashtags.value) tags.add(listOf("t", hashtag))
+        if (replyTo != null && inputs.privateReply) {
+            for (hashtag in inputs.hashtags) tags.add(listOf("t", hashtag))
             tags.addAll(Nip30.buildEmojiTagsForContent(content, resolvedEmojis))
             if (interfacePrefs.isClientTagEnabled()) tags.add(Nip89.clientTag())
-            return publishPrivateReply(owner, content, replyTo, tags, signer, relayPool, powPrefs)
+            return publishPrivateReply(owner, inputs, content, replyTo, tags, signer, relayPool, powPrefs)
         }
 
         val finalContent = if (quoteTo != null) {
@@ -1367,14 +1417,14 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
             content
         }
 
-        for (hashtag in _hashtags.value) {
+        for (hashtag in inputs.hashtags) {
             tags.add(listOf("t", hashtag))
         }
 
         // Build poll tags if poll is enabled
         val eventKind: Int
-        if (_galleryMode.value) {
-            val urls = _uploadedUrls.value
+        if (inputs.galleryMode) {
+            val urls = inputs.uploadedUrls
             if (urls.isEmpty()) {
                 _error.value = "Gallery post requires at least one uploaded image or video"
                 _publishing.value = false
@@ -1388,19 +1438,19 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
             }
             if (isVideo) {
                 val videoUrl = urls.first()
-                val meta = _uploadedMediaMeta[videoUrl]
+                val meta = inputs.mediaMeta[videoUrl]
                 val dims = meta?.dimensions
                 val dimStr = dims?.let { "${it.first}x${it.second}" }
                 val isVertical = dims != null && dims.second > dims.first
                 val videoMeta = listOf(Nip71.VideoMeta(url = videoUrl, mimeType = meta?.mimeType, dim = dimStr))
-                tags.addAll(Nip71.buildVideoTags(title = null, media = videoMeta, hashtags = _hashtags.value))
+                tags.addAll(Nip71.buildVideoTags(title = null, media = videoMeta, hashtags = inputs.hashtags))
                 eventKind = if (isVertical) Nip71.KIND_VIDEO_VERTICAL else Nip71.KIND_VIDEO_HORIZONTAL
             } else {
-                val altTexts = _altTexts.value
+                val altTexts = inputs.altTexts
                 // One imeta per URL — duplicate slots (same link attached
                 // twice) publish the URL twice in content but a single tag.
                 val imetaEntries = urls.map { url ->
-                    val meta = _uploadedMediaMeta[url]
+                    val meta = inputs.mediaMeta[url]
                     val dimStr = meta?.dimensions?.let { "${it.first}x${it.second}" }
                     Nip68.ImetaEntry(
                         url = url,
@@ -1410,11 +1460,11 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
                         alt = altTexts[url]
                     )
                 }.distinctBy { it.url }
-                tags.addAll(Nip68.buildPictureTags(title = null, media = imetaEntries, hashtags = _hashtags.value))
+                tags.addAll(Nip68.buildPictureTags(title = null, media = imetaEntries, hashtags = inputs.hashtags))
                 eventKind = Nip68.KIND_PICTURE
             }
-        } else if (_pollEnabled.value) {
-            val nonBlankOptions = _pollOptions.value
+        } else if (inputs.pollEnabled) {
+            val nonBlankOptions = inputs.pollOptions
                 .filter { it.isNotBlank() }
             if (nonBlankOptions.size < 2) {
                 _error.value = getApplication<Application>().getString(R.string.error_poll_options)
@@ -1422,15 +1472,15 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
                 return 0
             }
             val pollRelays = relayPool.getWriteRelayUrls()
-            if (_isZapPoll.value) {
+            if (inputs.isZapPoll) {
                 val zapPollOptions = nonBlankOptions.mapIndexed { i, label ->
                     Nip69.ZapPollOption(i, label.trim())
                 }
                 tags.addAll(Nip69.buildZapPollTags(
                     options = zapPollOptions,
-                    valueMinimum = _zapPollMinSats.value,
-                    valueMaximum = _zapPollMaxSats.value,
-                    consensusThreshold = _zapPollConsensus.value,
+                    valueMinimum = inputs.zapPollMinSats,
+                    valueMaximum = inputs.zapPollMaxSats,
+                    consensusThreshold = inputs.zapPollConsensus,
                     relayUrls = pollRelays
                 ))
                 eventKind = Nip69.KIND_ZAP_POLL
@@ -1438,20 +1488,20 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
                 val nip88Options = nonBlankOptions.mapIndexed { i, label ->
                     Nip88.PollOption(i.toString(), label.trim())
                 }
-                tags.addAll(Nip88.buildPollTags(nip88Options, _pollType.value, relayUrls = pollRelays))
+                tags.addAll(Nip88.buildPollTags(nip88Options, inputs.pollType, relayUrls = pollRelays))
                 eventKind = Nip88.KIND_POLL
             }
         } else {
             eventKind = if (replyingToComment) Nip22.KIND_COMMENT else 1
         }
 
-        if (!_galleryMode.value) {
-            val altTexts = _altTexts.value
+        if (!inputs.galleryMode) {
+            val altTexts = inputs.altTexts
             // Unknown mime (an attachment restored from a draft/cache copy that
             // predates its metadata) is included with null slots rather than
             // dropped — the alt would otherwise silently vanish at publish.
-            val imageEntries = _uploadedUrls.value.mapNotNull { url ->
-                val meta = _uploadedMediaMeta[url]
+            val imageEntries = inputs.uploadedUrls.mapNotNull { url ->
+                val meta = inputs.mediaMeta[url]
                 if (meta?.mimeType?.startsWith("image/") == false) return@mapNotNull null
                 Nip68.ImetaEntry(
                     url = url,
@@ -1474,8 +1524,8 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         }
 
         // Scheduled post — sign with future created_at and send to scheduler relays
-        if (_scheduleEnabled.value && _scheduleTimestamp.value != null) {
-            val scheduledAt = _scheduleTimestamp.value!!
+        if (inputs.scheduleEnabled && inputs.scheduleTimestamp != null) {
+            val scheduledAt = inputs.scheduleTimestamp
             val event = signer.signEvent(kind = eventKind, content = finalContent, tags = tags, createdAt = scheduledAt)
             val msg = ClientMessage.event(event)
             var sentCount = 0
@@ -1510,7 +1560,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         }
 
         // Hand off to PowManager for background mining if PoW enabled
-        if (_powEnabled.value && powManager != null) {
+        if (inputs.powEnabled && powManager != null) {
             powManager.submitNote(
                 signer = signer,
                 content = finalContent,
@@ -1532,7 +1582,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         }
 
         val event = signer.signEvent(kind = eventKind, content = finalContent, tags = tags)
-        android.util.Log.d("GALLERY", "[ComposeVM] publishNote kind=$eventKind id=${event.id.take(12)} content='${finalContent.take(50)}' tags=${tags.size} galleryMode=${_galleryMode.value} uploadedUrls=${_uploadedUrls.value.size}")
+        android.util.Log.d("GALLERY", "[ComposeVM] publishNote kind=$eventKind id=${event.id.take(12)} content='${finalContent.take(50)}' tags=${tags.size} galleryMode=${inputs.galleryMode} uploadedUrls=${inputs.uploadedUrls.size}")
         val msg = ClientMessage.event(event)
         var sentCount = if (outboxRouter != null && inboxPubkeys.isNotEmpty()) {
             outboxRouter.publishToInbox(msg, inboxPubkeys)
@@ -1574,6 +1624,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
 
     private suspend fun publishPrivateReply(
         owner: PublishOwner,
+        inputs: PublishInputs,
         content: String,
         replyTo: NostrEvent,
         replyTags: List<List<String>>,
@@ -1588,7 +1639,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
             return 0
         }
 
-        val difficulty = if (_powEnabled.value && powPrefs != null) powPrefs.getNoteDifficulty() else 0
+        val difficulty = if (inputs.powEnabled && powPrefs != null) powPrefs.getNoteDifficulty() else 0
 
         val result = try {
             PrivateReplyPublisher.send(
