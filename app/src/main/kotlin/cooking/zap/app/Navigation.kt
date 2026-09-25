@@ -1474,6 +1474,9 @@ fun WispNavHost(
             // Initialize PoW toggle from persisted preferences
             LaunchedEffect(Unit) {
                 composeViewModel.initPowState(feedViewModel.powPrefs.isNotePowEnabled())
+                // Publishing a draft tombstones its coordinate locally, so a failed/raced empty
+                // replacement on relays can't bring the published text back as a draft.
+                composeViewModel.attachDeletedEventsRepo(feedViewModel.deletedEventsRepo)
                 // iOS-parity: a fresh top-level composer restores the most recent draft so the
                 // user can continue where they left off. Replies/quotes stay context-specific.
                 if (replyTarget == null && quoteTarget == null) {

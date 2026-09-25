@@ -1488,6 +1488,8 @@
     </plurals>
     <string name="cd_remove_attachment">Remove attachment</string>
     <string name="attachment_thumbnail_failed">Thumbnail failed to load</string>
+    <string name="compose_restored_draft_notice">Continuing your last draft</string>
+    <string name="compose_restored_draft_discard">Discard</string>
     <string name="compose_attach_pasted_link">Attach this media</string>
 
 </resources>
