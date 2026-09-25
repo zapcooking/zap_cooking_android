@@ -1,6 +1,21 @@
 # Changelog
 
-# Changelog
+## [1.6.0]
+
+📝 Drafts you can trust — Posts you've published no longer come back as drafts, and "Draft saved" only appears when something was actually saved. A restored draft now shows "Continuing your last draft" with a Discard option to start fresh.
+
+⏱️ Safer undo countdown — If you leave the composer during the undo countdown and come back, your pending post keeps its own settings: private replies stay private, and gallery posts, scheduled posts, polls and content warnings go out exactly as you set them.
+
+🖼️ Better attachments and alt text — Photos and media now sit as their own tiles on your draft, separate from your text, and can be reordered by dragging. Add image descriptions (alt text) for screen readers, or have Cheffy draft one for you with Cook+.
+
+⚡ Wallet at a glance — A mini-wallet in the sidebar shows your balance (with a hide option), and you'll now be told within seconds if a connected NWC wallet has been revoked or isn't responding.
+
+💱 Accurate payment history — Token transfers made from the same wallet in another app no longer show up as huge sats amounts; they're shown in their own units instead.
+
+🔍 Search in the bottom bar — Search now has its own tab, and the wallet moves to the sidebar, matching the iOS app.
+
+🎨 Plus: a simple System / Light / Dark appearance setting, poll authors can now see their own results and who voted, multiple cooking timers stack neatly instead of squeezing side by side, and a cleaner look for threads with no replies yet.
+
 
 ## [1.5.1]
 
