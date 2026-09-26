@@ -1455,4 +1455,40 @@
     <string name="about_child_safety">Child Safety Standards</string>
     <string name="about_delete_account">Account and Data Deletion</string>
 
+    <!-- Lazarus data recovery -->
+    <string name="lazarus_title">Data recovery</string>
+    <string name="lazarus_explainer">Clients overwrite your lists without reading them first — a buggy or malicious app can wipe your follows, mutes, or profile. Relays that keep superseded versions still hold the history. Scan the relay set, review what changed, and restore what was destroyed. Restores are always signed by you, only on your explicit tap.</string>
+    <string name="lazarus_tier1">Critical — identity &amp; social graph</string>
+    <string name="lazarus_tier2">Profile &amp; reference lists</string>
+    <string name="lazarus_tier3">Relay configuration</string>
+    <string name="lazarus_scan_hint">Scan relay history</string>
+    <string name="lazarus_scanning">Scanning relays…</string>
+    <string name="lazarus_scan_summary">%1$d of %2$d relays answered · %3$d versions found</string>
+    <string name="lazarus_load_older">Load older versions</string>
+    <string name="lazarus_recommended_banner">A version looks intact — the current one lost items suddenly</string>
+    <string name="lazarus_recommended_detail">%1$s items vs %2$s in the current version</string>
+    <string name="lazarus_badge_current">Current</string>
+    <string name="lazarus_badge_recommended">Recommended</string>
+    <string name="lazarus_group_clobber">%1$d versions · sudden drop</string>
+    <string name="lazarus_group_edits">%1$d versions · small edits</string>
+    <string name="lazarus_delta_title">What restoring changes</string>
+    <string name="lazarus_delta_counts">%1$d added, %2$d removed</string>
+    <string name="lazarus_delta_grows">grows the list</string>
+    <string name="lazarus_delta_shrinks">shrinks the list</string>
+    <string name="lazarus_private_unknown">Some items are encrypted and weren\'t decrypted — the change above covers public items only.</string>
+    <string name="lazarus_private_undecryptable">This version\'s encrypted items couldn\'t be decrypted, so its full contents are unknown. Restore is disabled for your protection.</string>
+    <string name="lazarus_warn_remute">Restoring re-mutes the accounts on this list.</string>
+    <string name="lazarus_warn_stale_relays">If these relays are stale, reconnecting may fail until you update them.</string>
+    <string name="lazarus_warn_affects_others">This list affects other people\'s apps too.</string>
+    <string name="lazarus_restore">Restore this version</string>
+    <string name="lazarus_restore_shrink">Confirm restore — it shrinks the list</string>
+    <string name="lazarus_restoring">Restoring…</string>
+    <string name="lazarus_restored_title">Recovered</string>
+    <string name="lazarus_restored_body">The restored version was accepted by %1$d relay(s)%2$s.</string>
+    <string name="lazarus_changed_title">Something changed</string>
+    <string name="lazarus_changed_body">The live version changed since you reviewed — the list was re-scanned so you can review the latest state.</string>
+    <string name="lazarus_wrong_account_title">Wrong account</string>
+    <string name="lazarus_wrong_account_body">The signing account changed during approval. The restore was cancelled.</string>
+    <string name="lazarus_failed_title">Couldn\'t restore</string>
+
 </resources>

@@ -69,6 +69,7 @@ import cooking.zap.app.ui.screen.BlossomServersScreen
 import cooking.zap.app.ui.screen.AuthScreen
 import cooking.zap.app.ui.screen.SplashScreen
 import cooking.zap.app.ui.screen.ComposeScreen
+import cooking.zap.app.ui.screen.LazarusScreen
 import cooking.zap.app.ui.screen.ContactPickerScreen
 import cooking.zap.app.ui.screen.DmConversationScreen
 import cooking.zap.app.ui.screen.DmListScreen
@@ -159,6 +160,7 @@ import cooking.zap.app.viewmodel.NotificationsViewModel
 import cooking.zap.app.viewmodel.ConsoleViewModel
 import cooking.zap.app.viewmodel.RelayHealthViewModel
 import cooking.zap.app.viewmodel.DraftsViewModel
+import cooking.zap.app.viewmodel.LazarusViewModel
 import cooking.zap.app.viewmodel.SearchViewModel
 import cooking.zap.app.viewmodel.HashtagFeedViewModel
 import cooking.zap.app.viewmodel.OnboardingViewModel
@@ -198,6 +200,7 @@ object Routes {
     const val WALLET = "wallet"
     const val SAFETY = "safety"
     const val ABOUT = "about"
+    const val LAZARUS = "lazarus_recovery"
     const val SEARCH = "search"
     const val CONSOLE = "console"
     const val KEYS = "keys"
@@ -939,6 +942,7 @@ fun WispNavHost(
                 onSocialGraph = { closeDrawerAndNavigate(Routes.SOCIAL_GRAPH) },
                 onSafety = { closeDrawerAndNavigate(Routes.SAFETY) },
                 onAbout = { closeDrawerAndNavigate(Routes.ABOUT) },
+                onLazarus = { closeDrawerAndNavigate(Routes.LAZARUS) },
                 onFollowRecovery = {
                     drawerScope.launch {
                         drawerState.close()
@@ -1476,6 +1480,29 @@ fun WispNavHost(
                 powManager = feedViewModel.powManager,
                 powPrefs = feedViewModel.powPrefs,
                 resolvedEmojis = feedViewModel.customEmojiRepo.resolvedEmojis.collectAsState().value
+            )
+        }
+
+        composable(Routes.LAZARUS) {
+            val lazarusViewModel: LazarusViewModel = viewModel()
+            // The scan engine owns standalone relay sockets; close them when
+            // the screen leaves (upstream finding 7 — no leaked connections).
+            DisposableEffect(Unit) {
+                onDispose { lazarusViewModel.closeEngine() }
+            }
+            LaunchedEffect(Unit) {
+                lazarusViewModel.init(
+                    relayPool = feedViewModel.relayPool,
+                    signer = activeSigner,
+                    relayListRepo = feedViewModel.relayListRepo
+                )
+                lazarusViewModel.setSigner(activeSigner)
+            }
+            LazarusScreen(
+                viewModel = lazarusViewModel,
+                pubkey = feedViewModel.getUserPubkey(),
+                signer = activeSigner,
+                onBack = { navController.popBackStack() }
             )
         }
 

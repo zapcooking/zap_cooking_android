@@ -123,6 +123,7 @@ fun WispDrawerContent(
     onSocialGraph: () -> Unit = {},
     onSafety: () -> Unit = {},
     onAbout: () -> Unit = {},
+    onLazarus: () -> Unit = {},
     onFollowRecovery: () -> Unit = {},
     onPowSettings: () -> Unit = {},
     onCustomEmojis: () -> Unit = {},
@@ -547,6 +548,15 @@ fun WispDrawerContent(
                     label = { Text(stringResource(R.string.drawer_membership_policies)) },
                     selected = false,
                     onClick = onAbout,
+                    modifier = Modifier.height(48.dp).padding(start = 36.dp, end = 12.dp)
+                )
+                // Data recovery (Lazarus): relay-history restore for lists a
+                // rogue client clobbered.
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.Outlined.History, contentDescription = null) },
+                    label = { Text(stringResource(R.string.lazarus_title)) },
+                    selected = false,
+                    onClick = onLazarus,
                     modifier = Modifier.height(48.dp).padding(start = 36.dp, end = 12.dp)
                 )
                 // Advanced — power-user / developer settings, nested one level
