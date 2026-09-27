@@ -65,6 +65,12 @@ class ProfileRepository(context: Context) {
 
     fun has(pubkey: String): Boolean = get(pubkey) != null
 
+    /** created_at of the kind 0 the cached profile came from, or null when none is cached. */
+    fun getUpdatedAt(pubkey: String): Long? {
+        get(pubkey)
+        return timestamps.get(pubkey)
+    }
+
     fun search(query: String, limit: Int = 10): List<ProfileData> {
         if (query.isBlank()) return emptyList()
         val lowerQuery = query.lowercase()

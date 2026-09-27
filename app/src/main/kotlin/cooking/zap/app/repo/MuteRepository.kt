@@ -72,6 +72,29 @@ class MuteRepository(private val context: Context, pubkeyHex: String? = null) {
         saveToPrefs()
     }
 
+    /**
+     * Apply a mute list whose private items the caller already decrypted (a
+     * Lazarus restore decrypts them for its review), so this copy covers
+     * them without asking the signer again — the next mute edit rebuilds the
+     * whole list from it.
+     */
+    fun loadFromEvent(event: NostrEvent, privateTags: List<List<String>>) {
+        if (event.kind != Nip51.KIND_MUTE_LIST) return
+        if (event.created_at <= lastUpdated) return
+        val publicMutes = Nip51.parseMuteList(event)
+        val privatePubkeys = privateTags.filter { it.size >= 2 && it[0] == "p" }.map { it[1] }
+        val privateWords = privateTags.filter { it.size >= 2 && it[0] == "word" }.map { it[1] }
+        blockedSet = (publicMutes.pubkeys + privatePubkeys).toSet()
+        wordSet = (publicMutes.words + privateWords).toSet()
+        _blockedPubkeys.value = blockedSet
+        _mutedWords.value = wordSet
+        lastUpdated = event.created_at
+        saveToPrefs()
+    }
+
+    /** created_at of the mute list this copy was built from; 0 when none. */
+    fun lastUpdatedAt(): Long = lastUpdated
+
     fun blockUser(pubkey: String) {
         blockedSet = blockedSet + pubkey
         _blockedPubkeys.value = blockedSet

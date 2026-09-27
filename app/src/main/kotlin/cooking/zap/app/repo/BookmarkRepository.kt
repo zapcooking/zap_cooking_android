@@ -49,6 +49,9 @@ class BookmarkRepository(private val context: Context, pubkeyHex: String? = null
 
     fun isBookmarked(eventId: String): Boolean = idSet.contains(eventId)
 
+    /** created_at of the bookmark list this copy was built from; 0 when none. */
+    fun lastUpdatedAt(): Long = lastUpdated
+
     fun getBookmarkedIds(): Set<String> = idSet.toSet()
     fun getCoordinates(): Set<String> = coordinateSet.toSet()
     fun getHashtags(): Set<String> = hashtagSet.toSet()

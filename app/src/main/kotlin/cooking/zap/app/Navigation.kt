@@ -69,6 +69,7 @@ import cooking.zap.app.ui.screen.BlossomServersScreen
 import cooking.zap.app.ui.screen.AuthScreen
 import cooking.zap.app.ui.screen.SplashScreen
 import cooking.zap.app.ui.screen.ComposeScreen
+import cooking.zap.app.ui.screen.LazarusScreen
 import cooking.zap.app.ui.screen.ContactPickerScreen
 import cooking.zap.app.ui.screen.DmConversationScreen
 import cooking.zap.app.ui.screen.DmListScreen
@@ -159,6 +160,8 @@ import cooking.zap.app.viewmodel.NotificationsViewModel
 import cooking.zap.app.viewmodel.ConsoleViewModel
 import cooking.zap.app.viewmodel.RelayHealthViewModel
 import cooking.zap.app.viewmodel.DraftsViewModel
+import cooking.zap.app.viewmodel.LazarusViewModel
+import cooking.zap.app.lazarus.LazarusLocalStores
 import cooking.zap.app.viewmodel.SearchViewModel
 import cooking.zap.app.viewmodel.HashtagFeedViewModel
 import cooking.zap.app.viewmodel.OnboardingViewModel
@@ -198,6 +201,17 @@ object Routes {
     const val WALLET = "wallet"
     const val SAFETY = "safety"
     const val ABOUT = "about"
+    const val LAZARUS = "lazarus_recovery"
+
+    /**
+     * The data recovery destination's declared pattern. `kind` is an optional
+     * query argument that opens one kind directly (the profile's Restore opens
+     * the follow list), so plain [LAZARUS] (the drawer's kind list) still
+     * matches this destination.
+     */
+    const val LAZARUS_ROUTE = "lazarus_recovery?kind={kind}"
+
+    fun lazarus(kind: Int): String = "lazarus_recovery?kind=$kind"
     const val SEARCH = "search"
     const val CONSOLE = "console"
     const val KEYS = "keys"
@@ -372,18 +386,6 @@ fun WispNavHost(
     val notificationsViewModel: NotificationsViewModel = viewModel()
     val draftsViewModel: DraftsViewModel = viewModel()
     val searchViewModel: SearchViewModel = viewModel()
-    val followRecoveryViewModel: cooking.zap.app.viewmodel.FollowRecoveryViewModel = viewModel(
-        factory = object : androidx.lifecycle.ViewModelProvider.Factory {
-            @Suppress("UNCHECKED_CAST")
-            override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
-                return cooking.zap.app.viewmodel.FollowRecoveryViewModel(
-                    feedViewModel.relayPool,
-                    feedViewModel.contactRepo,
-                    feedViewModel.keyRepo
-                ) as T
-            }
-        }
-    )
     val consoleViewModel: ConsoleViewModel = viewModel()
     val relayHealthViewModel: RelayHealthViewModel = viewModel()
     val onboardingViewModel: OnboardingViewModel = viewModel()
@@ -884,7 +886,6 @@ fun WispNavHost(
     val drawerOnlinePubkeys by feedViewModel.eventRepo.onlinePubkeys.collectAsState()
     val drawerGlobalOnlineCount by feedViewModel.globalOnlineCount.collectAsState()
     var showOnlineNowSheet by remember { mutableStateOf(false) }
-    var showFollowRecoverySheet by remember { mutableStateOf(false) }
     var showCookingUtilitiesSheet by remember { mutableStateOf(false) }
 
     // Active account still needs to back up its key — drives the drawer dot + feed banner.
@@ -971,12 +972,7 @@ fun WispNavHost(
                 onSocialGraph = { closeDrawerAndNavigate(Routes.SOCIAL_GRAPH) },
                 onSafety = { closeDrawerAndNavigate(Routes.SAFETY) },
                 onAbout = { closeDrawerAndNavigate(Routes.ABOUT) },
-                onFollowRecovery = {
-                    drawerScope.launch {
-                        drawerState.close()
-                        showFollowRecoverySheet = true
-                    }
-                },
+                onLazarus = { closeDrawerAndNavigate(Routes.LAZARUS) },
                 onCustomEmojis = { closeDrawerAndNavigate(Routes.CUSTOM_EMOJIS) },
                 onKeys = { closeDrawerAndNavigate(Routes.KEYS) },
                 keyBackupNeeded = keyBackupNudge,
@@ -1061,13 +1057,6 @@ fun WispNavHost(
                 navController.navigate("profile/$pk")
             },
             onDismiss = { showOnlineNowSheet = false },
-        )
-    }
-
-    if (showFollowRecoverySheet) {
-        cooking.zap.app.ui.component.FollowRecoverySheet(
-            viewModel = followRecoveryViewModel,
-            onDismiss = { showFollowRecoverySheet = false }
         )
     }
 
@@ -1527,6 +1516,42 @@ fun WispNavHost(
             )
         }
 
+        composable(
+            Routes.LAZARUS_ROUTE,
+            arguments = listOf(navArgument("kind") { type = NavType.IntType; defaultValue = -1 })
+        ) { backStackEntry ->
+            val initialKind = backStackEntry.arguments?.getInt("kind")?.takeIf { it >= 0 }
+            // Scoped to this destination: the scan engine's own relay sockets
+            // are released in onCleared when the screen is popped (not on a
+            // configuration change, which would cut a running scan short).
+            val lazarusViewModel: LazarusViewModel = viewModel()
+            val lazarusPubkey = feedViewModel.getUserPubkey()
+            // Re-run on account or signer changes: a scan belongs to the account it ran for
+            LaunchedEffect(lazarusPubkey, activeSigner, signingMode) {
+                lazarusViewModel.init(
+                    stores = LazarusLocalStores(
+                        contactRepo = feedViewModel.contactRepo,
+                        muteRepo = feedViewModel.muteRepo,
+                        bookmarkRepo = feedViewModel.bookmarkRepo,
+                        profileRepo = feedViewModel.profileRepo,
+                        relayListRepo = feedViewModel.relayListRepo,
+                        keyRepo = feedViewModel.keyRepo,
+                        eventRepo = feedViewModel.eventRepo,
+                        relayPool = feedViewModel.relayPool
+                    ),
+                    signer = activeSigner,
+                    canSign = signingMode != null && signingMode != SigningMode.READ_ONLY,
+                    activePubkey = { feedViewModel.getUserPubkey() }
+                )
+                lazarusViewModel.setAccount(lazarusPubkey)
+            }
+            LazarusScreen(
+                viewModel = lazarusViewModel,
+                initialKind = initialKind,
+                onBack = { navController.popBackStack() }
+            )
+        }
+
         composable(Routes.DRAFTS) {
             LaunchedEffect(Unit) {
                 draftsViewModel.loadDrafts(feedViewModel.relayPool, activeSigner, feedViewModel.deletedEventsRepo)
@@ -1752,7 +1777,8 @@ fun WispNavHost(
                     feedViewModel.customEmojiRepo.userEmojiList.value?.setReferences?.contains(ref) ?: false
                 },
                 onMuteUser = if (!isOwnProfile) { { feedViewModel.blockUser(pubkey) } } else null,
-                onRestoreFollows = if (isOwnProfile) { { showFollowRecoverySheet = true } } else null,
+                // Own profile only: Data recovery with the follow list preselected
+                onRestoreData = if (isOwnProfile) { { navController.navigate(Routes.lazarus(3)) } } else null,
                 onRecipeClick = { recipeAuthor, recipeDTag ->
                     navController.navigate(Routes.recipe(recipeAuthor, recipeDTag))
                 }

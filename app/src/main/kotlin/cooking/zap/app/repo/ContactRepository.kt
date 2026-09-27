@@ -37,6 +37,9 @@ class ContactRepository(private val context: Context, pubkeyHex: String? = null)
 
     fun isFollowing(pubkey: String): Boolean = followSet.contains(pubkey)
 
+    /** created_at of the kind 3 this copy was built from; 0 when none. */
+    fun lastUpdatedAt(): Long = lastUpdated
+
     fun getFollowList(): List<Nip02.FollowEntry> = _followList.value
 
     fun clear() {
