@@ -598,6 +598,8 @@
     <string name="settings_appearance_system">System</string>
     <string name="settings_appearance_light">Light</string>
     <string name="settings_appearance_dark">Dark</string>
+    <string name="settings_startup">Startup</string>
+    <string name="settings_startup_caption">The tab the app opens on. Applies the next time you open the app.</string>
     <string name="settings_preview">Preview</string>
     <string name="settings_new_notes_button">New Notes Button</string>
     <string name="settings_hide_new_notes_button">Hide new notes button</string>

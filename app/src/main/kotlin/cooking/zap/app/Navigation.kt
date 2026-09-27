@@ -49,6 +49,7 @@ import cooking.zap.app.nostr.LocalSigner
 import cooking.zap.app.nostr.RemoteSigner
 import cooking.zap.app.nostr.SignResult
 import cooking.zap.app.nostr.SignerIntentBridge
+import cooking.zap.app.repo.InterfacePreferences
 import cooking.zap.app.repo.SigningMode
 import android.content.Context
 import androidx.compose.runtime.rememberCoroutineScope
@@ -346,6 +347,17 @@ fun NostrUriData.toRoute(): String? = when (this) {
     is NostrUriData.AddressRef ->
         if (kind == 30023 && author != null) "article/$kind/$author/$dTag" else null
 }
+
+/**
+ * Where the app opens, from the Open-on Interface setting (Feed by default;
+ * Recipes stays a tap away). Read at each landing, never reactive: changing
+ * the setting applies on the next launch or login, never mid-session.
+ */
+fun startupLandingRoute(context: Context): String =
+    when (InterfacePreferences(context).getStartupTab()) {
+        InterfacePreferences.StartupTab.RECIPES -> Routes.RECIPES
+        InterfacePreferences.StartupTab.FEED -> Routes.FEED
+    }
 
 @Composable
 fun WispNavHost(
@@ -1335,7 +1347,12 @@ fun WispNavHost(
                         }
                         navController.navigate(target)
                     } else {
-                        navController.navigate(Routes.FEED) {
+                        // The Open-on Interface setting (Feed by default) decides
+                        // where the app lands — read here, so changing it applies
+                        // on the next launch or login instead of switching tabs
+                        // under the user mid-session.
+                        val landing = startupLandingRoute(context)
+                        navController.navigate(landing) {
                             popUpTo(Routes.LOADING) { inclusive = true }
                         }
                     }
@@ -1347,7 +1364,7 @@ fun WispNavHost(
             ExistingUserOnboardingScreen(
                 feedViewModel = feedViewModel,
                 onReady = {
-                    navController.navigate(Routes.FEED) {
+                    navController.navigate(startupLandingRoute(context)) {
                         popUpTo(Routes.EXISTING_USER_ONBOARDING) { inclusive = true }
                     }
                 }
@@ -1358,7 +1375,7 @@ fun WispNavHost(
             WatchOnlyOnboardingScreen(
                 feedViewModel = feedViewModel,
                 onReady = {
-                    navController.navigate(Routes.FEED) {
+                    navController.navigate(startupLandingRoute(context)) {
                         popUpTo(Routes.WATCH_ONLY_ONBOARDING) { inclusive = true }
                     }
                 }

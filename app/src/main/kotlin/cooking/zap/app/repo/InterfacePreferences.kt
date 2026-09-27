@@ -47,6 +47,15 @@ class InterfacePreferences(context: Context) {
         }
     }
 
+    /**
+     * Which tab the app opens on (Interface → Startup). Feed is the default;
+     * Recipes stays a choice for the food-first reader.
+     */
+    enum class StartupTab(val key: String) {
+        FEED("feed"),
+        RECIPES("recipes");
+    }
+
     private val appContext = context.applicationContext
     private val prefs = context.getSharedPreferences("wisp_settings", Context.MODE_PRIVATE)
 
@@ -137,6 +146,15 @@ class InterfacePreferences(context: Context) {
     fun setNotificationFeedStyle(style: NotificationFeedStyle) =
         prefs.edit().putString(KEY_NOTIFICATION_FEED_STYLE, style.key).apply()
 
+    /**
+     * The tab the app opens on. Read once where the app lands after loading,
+     * so changing it never switches tabs under the user mid-session — it
+     * applies the next time they open the app or log in.
+     */
+    fun getStartupTab(): StartupTab = resolveStartupTab(prefs.getString(KEY_STARTUP_TAB, null))
+    fun setStartupTab(tab: StartupTab) =
+        prefs.edit().putString(KEY_STARTUP_TAB, tab.key).apply()
+
     fun getLanguage(): String = prefs.getString("language", "system") ?: "system"
     fun setLanguage(language: String) = prefs.edit().putString("language", language).apply()
 
@@ -219,6 +237,19 @@ class InterfacePreferences(context: Context) {
          */
         const val KEY_LEGACY_DARK_THEME = "dark_theme"
 
+        /** Pref key backing [StartupTab]. */
+        const val KEY_STARTUP_TAB = "startup_screen"
+
+        /**
+         * Decide the startup tab from what is on disk. Split out from
+         * [getStartupTab] so the load path is testable without a
+         * `SharedPreferences` (there is no Robolectric in the JVM suite):
+         * a stored choice wins, and a value from an older or divergent build
+         * that names no choice falls back to Feed rather than crashing.
+         */
+        fun resolveStartupTab(stored: String?): StartupTab =
+            if (stored == StartupTab.RECIPES.key) StartupTab.RECIPES else StartupTab.FEED
+
         /**
          * Decide the appearance from what is on disk. Split out from
          * [getAppearanceMode] so the migration rule is testable without a
@@ -263,6 +294,7 @@ class InterfacePreferences(context: Context) {
             .remove("auto_translate")
             .remove("media_layout_style")
             .remove(KEY_NOTIFICATION_FEED_STYLE)
+            .remove(KEY_STARTUP_TAB)
             .remove("sound_reply")
             .remove("sound_activity")
             .apply()
