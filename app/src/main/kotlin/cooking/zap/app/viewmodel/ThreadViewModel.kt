@@ -54,6 +54,13 @@ class ThreadViewModel : ViewModel() {
     private var rootId: String = ""
     private var scrollTargetId: String? = null
     /**
+     * Ids the live reply stream was scoped to when it opened — the root, the
+     * seed, and the uppercase `E` anchors of every comment held at the time.
+     * The ingest guard checks against this set so what the screen accepts
+     * matches what the REQ actually asked the relays for.
+     */
+    private var streamTargets: Set<String> = emptySet()
+    /**
      * The note this thread was opened on (the tapped note), before re-rooting.
      * `rootId` resolves to the conversation root, so this is the only handle on
      * "the note they came for": the default reply parent for the sticky bar.
@@ -191,12 +198,21 @@ class ThreadViewModel : ViewModel() {
 
         // Seed from cache: BFS walks nested replies (getCachedThreadEvents already filters deletions)
         val cachedEvents = eventRepo.getCachedThreadEvents(rootId)
-        for (event in cachedEvents) {
+        // Kind 1111 replays alongside kind 1: the reply-graph BFS can't see a
+        // comment branch that hangs off a mid-thread note, but every comment
+        // names the conversation root in its uppercase `E` tag. Dropping them
+        // here made a reopened thread paint with the kind-1 replies only until
+        // the live stream happened to re-deliver the comments — which the
+        // `#e`-only half of the stream never fully did.
+        val cachedComments = eventRepo.getCachedCommentsRootedOn(rootId)
+        for (event in cachedEvents + cachedComments) {
+            if (threadEvents.containsKey(event.id)) continue
             threadEvents[event.id] = event
             if (event.id == rootId) _rootEvent.value = event
         }
+        streamTargets = buildStreamTargets()
         rebuildTree()
-        if (cachedEvents.size > 1) {
+        if (cachedEvents.size + cachedComments.size > 1) {
             _isLoading.value = false
         }
 
@@ -238,22 +254,16 @@ class ThreadViewModel : ViewModel() {
 
                 if (Nip10.isStandaloneQuote(event)) return@collect
 
-                // Validate: event must reference the thread root (some relays ignore eTags filter)
-                // A NIP-22 comment scopes to its root with an UPPERCASE `E`; the
-                // lowercase `e` names its immediate parent. So a reply to a
-                // comment carries `e` = that comment and `E` = the root, and a
-                // lowercase-only check drops it — comment threads then render
-                // flat one level deep. Relays aren't the problem: `#e` filters
-                // are case-insensitive per NIP-01, so these do arrive.
-                //
-                // Uppercase `A`/`I` roots aren't checked here because their
-                // values are addressable coordinates and external identifiers
-                // rather than event ids, so they can never equal `rootId`.
-                if (event.id != rootId &&
-                    event.tags.none {
-                        it.size >= 2 && it[1] == rootId &&
-                            (it[0] == "e" || (it[0] == "E" && Nip22.isComment(event)))
-                    }) {
+                // Validate: the event must belong to this thread by either
+                // threading system's convention — a lowercase `e` naming a
+                // stream target (NIP-10 replies) or an uppercase `E` naming
+                // one (NIP-22 comments at any depth). Case matters: `E` and
+                // `e` are different tags; a reply to a comment carries `e` =
+                // that comment and `E` = the root, so a lowercase-only check
+                // drops every comment-to-comment branch. Relays aren't fully
+                // trusted here (some ignore tag filters), so the guard is
+                // re-checked client-side against the ids the REQ scoped to.
+                if (event.id != rootId && !Nip22.threadsOffRoot(event, streamTargets)) {
                     return@collect
                 }
 
@@ -300,28 +310,66 @@ class ThreadViewModel : ViewModel() {
             if (needsFetchRoot) {
                 relayPool.sendToAll(ClientMessage.req("thread-root", Filter(ids = listOf(rootId))))
                 subManager.awaitEoseWithTimeout("thread-root", 5_000)
+                // The root can be unreachable — old notes get pruned from every
+                // relay. Degrade: keep the seed as the screen root and keep
+                // streaming — a truncated-but-correct branch beats an empty
+                // screen. The seed's own `E` anchor joins the stream targets
+                // below so its comment subtree still subscribes; the anchor
+                // walk must NOT climb NIP-10 above a comment's anchor, since a
+                // comment subtree can hang off a mid-thread note.
+                val seedId = seedEventId
+                if (_rootEvent.value == null && seedId != null && rootId != seedId) {
+                    threadEvents[seedId]?.let { seed ->
+                        rootId = seedId
+                        _rootEvent.value = seed
+                        scrollTargetId = null
+                        streamTargets = buildStreamTargets()
+                        rebuildTree()
+                    }
+                }
             }
 
-            // Phase 2: Now we (hopefully) have the root — use outbox routing for replies
+            // Phase 2: Now we (hopefully) have the root — use outbox routing for replies.
+            // Query for events tagging the root OR the seed — root catches the whole
+            // tree, seed catches direct children that some relays store without the
+            // root e-tag. NIP-22 comments add their uppercase `E` anchors — usually
+            // the seed itself when the true root is unreachable — or the whole
+            // comment branch is invisible to both filters.
             val rootEvent = _rootEvent.value
-            // Include kind 5 so deletions of the root (or any event tagging the root) come through.
-            // Kind 1111 (NIP-22 comments) rides along: replies to a comment must themselves
-            // be comments, so a kind-1-only filter would show the thread as having no replies.
-            val repliesFilter = Filter(kinds = listOf(1, 5, Nip22.KIND_COMMENT), eTags = listOf(rootId))
+            streamTargets = buildStreamTargets()
+            val targetList = streamTargets.toList()
+            // Two filters in ONE REQ gives relay-side OR; folding `#e` and `#E`
+            // into a single filter would AND them and match nothing new. A
+            // NIP-10 reply carries the root in a lowercase `e`, but a NIP-22
+            // comment names only its *immediate parent* there and puts the root
+            // in uppercase `E` — a `#e`-only REQ returns top-level comments and
+            // strands every comment-to-comment branch below them (relay-verified
+            // on a four-deep chain: `#e` returns one event, `#E` returns four).
+            // Kind 5 rides the reply filter — a deletion e-tags its target like
+            // a reply does, so deletions arrive alongside replies with no extra
+            // round-trip.
+            val repliesFilter = Filter(
+                kinds = listOf(1, 5, Nip22.KIND_COMMENT),
+                eTags = targetList,
+                limit = 500
+            )
+            val commentRootFilter = Filter(
+                kinds = listOf(Nip22.KIND_COMMENT),
+                capitalETags = targetList,
+                limit = 500
+            )
+            val twoFilterReq = ClientMessage.req("thread-replies", listOf(repliesFilter, commentRootFilter))
             if (rootEvent != null) {
                 outboxRouter.subscribeToUserReadRelays(
-                    "thread-replies", rootEvent.pubkey, repliesFilter
+                    "thread-replies", rootEvent.pubkey, listOf(repliesFilter, commentRootFilter)
                 )
             } else {
                 // Root still not found — query all relays as fallback
-                relayPool.sendToAll(
-                    ClientMessage.req("thread-replies", repliesFilter)
-                )
+                relayPool.sendToAll(twoFilterReq)
             }
             // Also query top scored relays as safety net
             for (url in topRelayUrls) {
-                relayPool.sendToRelayOrEphemeral(url,
-                    ClientMessage.req("thread-replies", repliesFilter))
+                relayPool.sendToRelayOrEphemeral(url, twoFilterReq)
             }
 
             // Wait for replies EOSE, then hide spinner
@@ -334,6 +382,26 @@ class ThreadViewModel : ViewModel() {
             // Start incremental metadata batching for late arrivals
             startMetadataBatching(relayPool)
         }
+    }
+
+    /**
+     * The ids the reply stream and ingest guard scope to: the conversation
+     * root, the seed (the tapped note), and the uppercase `E` anchor of every
+     * kind-1111 comment already held — a NIP-22 subtree anchors on its `E`
+     * root, which can sit mid-tree (a kind-1 thread that switched to comments
+     * partway down), and when a held comment anchors elsewhere — typically the
+     * seed itself when the true root is unreachable — that anchor must be
+     * targeted or the whole comment branch is invisible to both filters.
+     */
+    private fun buildStreamTargets(): Set<String> {
+        val targets = mutableSetOf(rootId)
+        seedEventId?.let { targets.add(it) }
+        for (event in threadEvents.values) {
+            if (Nip22.isComment(event)) {
+                Nip22.rootEventId(event)?.let { targets.add(it) }
+            }
+        }
+        return targets
     }
 
     /**

@@ -1374,9 +1374,12 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         if (inputs.explicit) {
             tags.add(listOf("content-warning", ""))
         }
-        // NIP-22: a reply to an external-rooted kind-1111 comment must itself be
-        // kind 1111 (carrying the root scope forward) — NIP-22 forbids answering a
-        // comment with a kind-1. Falls back to NIP-10 threading for anything else.
+        // NIP-22: a reply to a kind-1111 comment must itself be kind 1111,
+        // carrying the parent's root scope (E/A/I + K + P) forward verbatim —
+        // NIP-22 forbids answering a comment with a kind-1. Every other reply —
+        // the default — stays kind 1 with NIP-10 tags, for maximum cross-client
+        // visibility; buildReplyTags refuses (returns null) on an unscoped
+        // comment parent, which falls back to kind 1 too.
         var replyingToComment = false
         if (replyTo != null) {
             val hint = outboxRouter?.getRelayHint(replyTo.pubkey) ?: ""

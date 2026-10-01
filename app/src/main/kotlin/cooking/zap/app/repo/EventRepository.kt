@@ -5,6 +5,7 @@ import android.util.LruCache
 import cooking.zap.app.nostr.FoodHashtags
 import cooking.zap.app.nostr.Nip09
 import cooking.zap.app.nostr.Nip10
+import cooking.zap.app.nostr.Nip22
 import cooking.zap.app.nostr.Nip30
 import cooking.zap.app.nostr.Bolt11
 import cooking.zap.app.nostr.Nip57
@@ -1167,6 +1168,36 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
             }
         }
         return result
+    }
+
+    /**
+     * Cached kind-1111 comments whose uppercase `E` root names [rootId] — the
+     * persisted half of the thread cache-seed. The reply-graph BFS in
+     * [getCachedThreadEvents] can't see a comment branch that hangs off a
+     * mid-thread note, but every nested comment still names the conversation
+     * root in `E`, so matching on the parsed root tag reaches the whole
+     * comment subtree. Primary source is the in-memory [eventCache]; if that
+     * yields nothing (fresh process), fall back to the persisted catalog
+     * queried by kind and filtered in memory. Best-effort: never throws.
+     */
+    fun getCachedCommentsRootedOn(rootId: String, limit: Int = 500): List<NostrEvent> {
+        return try {
+            val fromCache = eventCache.values.asSequence()
+                .filter { Nip22.isComment(it) && Nip22.rootEventId(it) == rootId }
+                .sortedByDescending { it.created_at }
+                .take(limit)
+                .toList()
+            if (fromCache.isNotEmpty()) return fromCache
+            val persistence = eventPersistence ?: return emptyList()
+            persistence.getEventsByKind(Nip22.KIND_COMMENT, limit = 2000)
+                .asSequence()
+                .filter { Nip22.rootEventId(it) == rootId }
+                .sortedByDescending { it.created_at }
+                .take(limit)
+                .toList()
+        } catch (t: Throwable) {
+            emptyList()
+        }
     }
 
     fun addEventRelay(eventId: String, relayUrl: String) {

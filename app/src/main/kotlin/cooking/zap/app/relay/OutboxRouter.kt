@@ -305,12 +305,21 @@ class OutboxRouter(
      * Subscribe to replies on a user's read relays (where commenters should publish).
      * Falls back to general relays when no read relays are known.
      */
-    fun subscribeToUserReadRelays(subId: String, pubkey: String, filter: Filter): Set<String> {
+    fun subscribeToUserReadRelays(subId: String, pubkey: String, filter: Filter): Set<String> =
+        subscribeToUserReadRelays(subId, pubkey, listOf(filter))
+
+    /**
+     * Multi-filter variant: all filters ride in ONE REQ frame (relay-side OR
+     * between sibling filter objects). Used by the thread screen, whose NIP-22
+     * comment filter (#E) must never be folded into the reply filter (#e) —
+     * within a single filter the conditions are ANDed.
+     */
+    fun subscribeToUserReadRelays(subId: String, pubkey: String, filters: List<Filter>): Set<String> {
         val targetedRelays = mutableSetOf<String>()
         val readRelays = relayListRepo.getReadRelays(pubkey)
 
         if (readRelays != null) {
-            val msg = ClientMessage.req(subId, filter)
+            val msg = ClientMessage.req(subId, filters)
             for (url in readRelays) {
                 if (relayPool.sendToRelayOrEphemeral(url, msg)) {
                     targetedRelays.add(url)
@@ -320,7 +329,7 @@ class OutboxRouter(
 
         // Fallback: if no targeted relays found, send to all general relays
         if (targetedRelays.isEmpty()) {
-            val msg = ClientMessage.req(subId, filter)
+            val msg = ClientMessage.req(subId, filters)
             relayPool.sendToAll(msg)
             targetedRelays.addAll(relayPool.getRelayUrls())
         }

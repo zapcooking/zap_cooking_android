@@ -14,6 +14,12 @@ import java.net.URI
  * Only the external-root case is rendered specially: a comment rooted on a nostr
  * event already shows its parent inline, so it needs no extra treatment. See
  * [externalRoot] and [ExternalRef].
+ *
+ * The object also carries the mixed-thread plumbing: [rootEventId] re-roots a
+ * thread opened on a comment at its conversation root, [threadsOffRoot] is the
+ * thread-screen ingest guard for both threading systems, and [buildReplyTags]
+ * derives the kind-1111 reply tag set (the single source for both the reply-kind
+ * decision and the tags so they can never disagree).
  */
 object Nip22 {
     const val KIND_COMMENT = 1111
@@ -76,6 +82,80 @@ object Nip22 {
     }
 
     fun isComment(event: NostrEvent): Boolean = event.kind == KIND_COMMENT
+
+    // MARK: - Event-rooted comments
+
+    // A comment can be scoped to a nostr event instead of an external
+    // identifier, and in the wild that root is very often a plain kind-1
+    // note: a thread starts in NIP-10 and a participant's client switches to
+    // comments partway down, carrying `E` = the kind-1 root with `K` = "1".
+
+    /**
+     * The event this comment is rooted on (uppercase `E`), or null when the
+     * root is external (`I`) or addressable-only (`A`).
+     */
+    fun rootEventId(event: NostrEvent): String? = tagValue(event, "E")
+
+    /**
+     * The kind of the root the comment is scoped to (uppercase `K`). A string
+     * on the wire, because an external root names a NIP-73 type (`web`,
+     * `podcast:item:guid`) rather than a number.
+     */
+    fun rootKindRaw(event: NostrEvent): String? = tagValue(event, "K")
+
+    /** Author of the root event (uppercase `P`). */
+    fun rootAuthor(event: NostrEvent): String? = tagValue(event, "P")
+
+    /**
+     * The comment's immediate parent event (lowercase `e`). Equals the root for
+     * a top-level comment; points at another comment further down.
+     */
+    fun parentEventId(event: NostrEvent): String? = tagValue(event, "e")
+
+    /**
+     * The immediate parent's kind (lowercase `k`) — the tag that decides
+     * whether someone answered a note or another comment.
+     */
+    fun parentKindRaw(event: NostrEvent): String? = tagValue(event, "k")
+
+    /** The immediate parent's kind as an integer, or null when the parent is external (`k` = "web"). */
+    fun parentKind(event: NostrEvent): Int? = parentKindRaw(event)?.toIntOrNull()
+
+    /** Author of the immediate parent (lowercase `p`). */
+    fun parentAuthor(event: NostrEvent): String? = tagValue(event, "p")
+
+    /**
+     * First value of the first tag with this exact name. Case matters — `E` and
+     * `e` mean different things in this NIP, so this deliberately does not fold case.
+     */
+    private fun tagValue(event: NostrEvent, name: String): String? =
+        event.tags.firstOrNull { it.size >= 2 && it[0] == name && it.getOrNull(1)?.isNotEmpty() == true }
+            ?.getOrNull(1)
+
+    /**
+     * Whether [event] belongs on the thread screen rooted at [targets] — the
+     * thread's root id and/or focal id, plus any NIP-22 comment anchors.
+     *
+     * The two threading systems answer this differently. A kind-1 NIP-10 reply
+     * carries the conversation root in a lowercase `e` tag, so a `#e = root`
+     * filter reaches its whole tree. A NIP-22 comment carries only its
+     * *immediate parent* in lowercase `e` and names the root in uppercase `E` —
+     * so a comment-to-comment reply matches no lowercase check even though it
+     * hangs off the same root. Thread display and the live reply stream must
+     * accept both forms.
+     */
+    fun threadsOffRoot(event: NostrEvent, targets: Set<String>): Boolean {
+        val parentEventIds = mutableListOf<String>()
+        val rootEventIds = mutableListOf<String>()
+        for (tag in event.tags) {
+            if (tag.size < 2) continue
+            when (tag[0]) {
+                "e" -> parentEventIds.add(tag[1])
+                "E" -> rootEventIds.add(tag[1])
+            }
+        }
+        return parentEventIds.any { it in targets } || rootEventIds.any { it in targets }
+    }
 
     /**
      * The comment's root scope when it's a nostr event — an uppercase `E` tag
@@ -144,26 +224,39 @@ object Nip22 {
     }
 
     /**
-     * Build the tag set for a kind-1111 reply to [parent], carrying its root scope
-     * forward unchanged and pointing the lowercase tags at [parent]. Returns null
-     * when [parent] isn't an external-rooted comment — callers fall back to NIP-10
-     * kind-1 threading. NIP-22 forbids answering a comment with a kind-1, so a
-     * reply to a comment must stay kind 1111.
+     * Build the tag set for a kind-1111 reply to [parent], carrying its root
+     * scope forward unchanged and pointing the lowercase tags at [parent].
+     *
+     * Any comment parent qualifies — externally rooted (`I`) or event-rooted
+     * (`E`/`A`). NIP-22 forbids answering a comment with a kind-1: the root
+     * scope has to survive the hop, and a kind-1's NIP-10 `e` tags can neither
+     * express an `I` root nor stay visible to `#E` readers, which is how a
+     * branch silently drops out of every comment-aware client. The uppercase
+     * scope is copied verbatim from the parent (the same thing Ditto does in
+     * `usePostComment`), the lowercase side points at the parent event.
+     * Returns null when [parent] isn't a comment carrying a root scope —
+     * callers fall back to NIP-10 kind-1 threading for plain notes.
      */
     fun buildReplyTags(parent: NostrEvent, relayHint: String = ""): List<List<String>>? {
-        val root = externalRoot(parent) ?: return null
-        val tags = mutableListOf<List<String>>()
-        val rootTag = mutableListOf("I", root.value)
-        root.hint?.let { rootTag.add(it) }
-        tags.add(rootTag)
-        tags.add(listOf("K", root.kind))
+        if (!isComment(parent)) return null
+        // Copy the root scope verbatim, one tag per name: `E`/`A`/`I` name the
+        // root, `K` its kind, `P` its author. A parent without any of E/A/I is
+        // malformed — the reply would be unscoped and unthreadable, so refuse.
+        val rootScopeNames = setOf("E", "A", "I", "K", "P")
+        val seenNames = mutableSetOf<String>()
+        val rootScope = parent.tags.filter { tag ->
+            if (tag.size < 2 || tag[1].isEmpty()) return@filter false
+            val name = tag[0]
+            name in rootScopeNames && seenNames.add(name)
+        }
+        if (rootScope.none { it[0] == "E" || it[0] == "A" || it[0] == "I" }) return null
+
+        val tags = rootScope.toMutableList()
         // Parent is the comment itself — an event — so the lowercase side uses
-        // e/k/p rather than repeating the I tag.
+        // e/k/p regardless of which form the root scope takes.
         tags.add(listOf("e", parent.id, relayHint, parent.pubkey))
         tags.add(listOf("k", KIND_COMMENT.toString()))
         tags.add(listOf("p", parent.pubkey))
-        // Carry the root author forward when the parent named one.
-        parent.tags.firstOrNull { it.size >= 2 && it[0] == "P" }?.let { tags.add(it) }
         return tags
     }
 }
