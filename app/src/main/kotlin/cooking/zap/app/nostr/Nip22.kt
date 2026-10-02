@@ -145,13 +145,17 @@ object Nip22 {
      * accept both forms.
      */
     fun threadsOffRoot(event: NostrEvent, targets: Set<String>): Boolean {
+        // Uppercase `E` is a NIP-22 convention — only comments carry a root
+        // scope. A kind-1 wearing an `E` tag (relay noise, a hostile event) has
+        // no NIP-22 claim; its threading claim travels in lowercase `e` alone.
+        val comment = isComment(event)
         val parentEventIds = mutableListOf<String>()
         val rootEventIds = mutableListOf<String>()
         for (tag in event.tags) {
             if (tag.size < 2) continue
             when (tag[0]) {
                 "e" -> parentEventIds.add(tag[1])
-                "E" -> rootEventIds.add(tag[1])
+                "E" -> if (comment) rootEventIds.add(tag[1])
             }
         }
         return parentEventIds.any { it in targets } || rootEventIds.any { it in targets }

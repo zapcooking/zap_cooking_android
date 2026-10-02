@@ -554,13 +554,33 @@ class ThreadViewModel : ViewModel() {
         val pubkeysToScore = mutableSetOf<String>()
 
         val deletedRepo = eventRepoRef?.deletedEventsRepo
+
+        val admissible = mutableListOf<NostrEvent>()
         for (event in threadEvents.values) {
             if (event.id == rootId) continue
             if (deletedRepo?.isDeleted(event.id) == true) continue
             if (muteRepo?.isBlocked(event.pubkey) == true) continue
             if (Nip10.isStandaloneQuote(event)) continue
             if (eventRepoRef?.isWotFiltered(event.pubkey, event.kind) == true) continue
+            admissible.add(event)
+        }
 
+        // Degraded root: the conversation root never arrived, so the screen
+        // re-rooted onto the seed while the stream is still scoped to the true
+        // root — the `#E` result (and the cache replay keyed on it) carries the
+        // seed's ancestors and siblings too, and re-parenting every
+        // missing-parent event onto the root would render earlier comments as
+        // descendants of the seed. Degrade to the seed's descendant closure: a
+        // truncated-but-correct branch beats a mis-rooted one. Recomputed on
+        // every rebuild, so a late arrival whose parent lands after it joins
+        // on the next pass.
+        val seed = seedEventId?.let { threadEvents[it] }
+        if (seed != null && rootId == seed.id && (Nip10.getRootId(seed) ?: seed.id) != seed.id) {
+            val closure = seedDescendantClosure(rootId, admissible)
+            admissible.retainAll { it.id in closure }
+        }
+
+        for (event in admissible) {
             if (spamEnabled && spamClassifier != null &&
                 event.pubkey != currentUserPubkey &&
                 contactRepo?.isFollowing(event.pubkey) != true &&
@@ -618,4 +638,42 @@ class ThreadViewModel : ViewModel() {
             }
         }
     }
+}
+
+/**
+ * The ids of [events] whose parent chain of **held** events walks down from
+ * [rootId] — the seed's descendant closure the thread screen falls back to in
+ * degraded mode (true root unreachable, screen re-rooted onto the seed).
+ * [rootId] itself is not a member; the caller drops it from the render set
+ * before filtering.
+ *
+ * Split out of [ThreadViewModel.rebuildTree] as a pure function so it is
+ * unit-testable without a relay stack: the defect it pins — a root-scoped
+ * result set re-rooted onto the seed, rendering the seed's ancestors as its
+ * descendants — is a property of this walk, not of the view-model around it.
+ *
+ * Parent links come from `Nip10.getReplyTarget`, the same accessor
+ * `rebuildTree` groups by. An event with no parent link (a malformed comment
+ * carrying `E` without `e`) has no verifiable position in the tree and stays
+ * out; that is the degraded mode's contract, not a regression of the
+ * re-parenting the normal path still does. The walk runs over whatever is
+ * held at call time, so the caller re-runs it on every rebuild and late
+ * arrivals whose parent lands later join then.
+ */
+internal fun seedDescendantClosure(rootId: String, events: List<NostrEvent>): Set<String> {
+    val childrenByParent = mutableMapOf<String, MutableList<NostrEvent>>()
+    for (event in events) {
+        Nip10.getReplyTarget(event)?.let { parentId ->
+            childrenByParent.getOrPut(parentId) { mutableListOf() }.add(event)
+        }
+    }
+    val closure = mutableSetOf<String>()
+    val queue = ArrayDeque<String>()
+    queue.add(rootId)
+    while (queue.isNotEmpty()) {
+        for (child in childrenByParent[queue.removeFirst()].orEmpty()) {
+            if (closure.add(child.id)) queue.add(child.id)
+        }
+    }
+    return closure
 }

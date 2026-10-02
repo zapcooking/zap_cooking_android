@@ -139,6 +139,37 @@ class Nip22RealThreadTest {
     }
 
     /**
+     * The uppercase-root shortcut is a NIP-22 convention — only comments carry
+     * a root scope. The ingest guard runs on every kind the reply stream admits,
+     * including kind-1 notes, so a kind-1 wearing an `E` tag (relay noise, or a
+     * crafted event) must not be admitted by it: a note's threading claim
+     * travels in lowercase `e` alone. The lowercase path keeps working for both
+     * kinds — that is what `ThreadViewModel` relies on when it checks kind-1
+     * replies against the same guard.
+     */
+    @Test
+    fun uppercaseRootTagCountsOnlyForComments() {
+        val targets = setOf(rootId)
+        val noteWearingBigE = NostrEvent(
+            id = "note-e", pubkey = "pk", created_at = 0, kind = 1,
+            tags = listOf(listOf("E", rootId, "", "pk")),
+            content = "", sig = ""
+        )
+        assertFalse("a kind-1 has no NIP-22 root scope", Nip22.threadsOffRoot(noteWearingBigE, targets))
+
+        val commentWearingBigE = noteWearingBigE.copy(kind = Nip22.KIND_COMMENT)
+        assertTrue("a comment threads off its uppercase root", Nip22.threadsOffRoot(commentWearingBigE, targets))
+
+        val noteWithLittleE = noteWearingBigE.copy(
+            id = "note-little-e",
+            tags = listOf(listOf("e", rootId, "", "pk")),
+        )
+        assertTrue("a kind-1 threads off a lowercase e", Nip22.threadsOffRoot(noteWithLittleE, targets))
+        val commentWithLittleE = noteWithLittleE.copy(kind = Nip22.KIND_COMMENT)
+        assertTrue(Nip22.threadsOffRoot(commentWithLittleE, targets))
+    }
+
+    /**
      * A thread opened on a nested comment must re-root at the conversation
      * root (uppercase `E`), not at the comment's immediate parent —
      * `Nip10.getRootId` is what the thread screen consults, and it used to

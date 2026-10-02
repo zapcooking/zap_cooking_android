@@ -1380,15 +1380,25 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         // the default — stays kind 1 with NIP-10 tags, for maximum cross-client
         // visibility; buildReplyTags refuses (returns null) on an unscoped
         // comment parent, which falls back to kind 1 too.
+        //
+        // Private replies branch out before the kind decision: the gift-wrapped
+        // rumor is kind 1 by construction (PrivateReplyPublisher hardcodes it
+        // and the recipient's client renders it as one), so it keeps NIP-10
+        // tags — NIP-22 E/K/e/k/p tags on a kind-1 rumor would contradict the
+        // rumor's own kind.
         var replyingToComment = false
         if (replyTo != null) {
             val hint = outboxRouter?.getRelayHint(replyTo.pubkey) ?: ""
-            val commentTags = Nip22.buildReplyTags(replyTo, hint)
-            if (commentTags != null) {
-                tags.addAll(commentTags)
-                replyingToComment = true
-            } else {
+            if (inputs.privateReply) {
                 tags.addAll(Nip10.buildReplyTags(replyTo, hint))
+            } else {
+                val commentTags = Nip22.buildReplyTags(replyTo, hint)
+                if (commentTags != null) {
+                    tags.addAll(commentTags)
+                    replyingToComment = true
+                } else {
+                    tags.addAll(Nip10.buildReplyTags(replyTo, hint))
+                }
             }
         }
 
