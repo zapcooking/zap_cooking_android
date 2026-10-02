@@ -1306,16 +1306,28 @@ private fun ReviewScreen(
                     else -> {
                         val d = delta
                         if (d != null && d.shrinks) {
-                            // A shrink needs its own confirmation, separate from a grow
+                            // A shrink needs its own confirmation, separate from
+                            // a grow — including when the shrink is only visible
+                            // through current's undecrypted private items
+                            val knownRemovals = d.removedCount > 0
                             if (!armShrink) {
                                 Button(onClick = { armShrink = true }, enabled = canTap, modifier = Modifier.fillMaxWidth()) {
                                     Text(
-                                        pluralStringResource(R.plurals.lazarus_restore_shrink, d.removedCount, d.removedCount),
+                                        if (knownRemovals)
+                                            pluralStringResource(R.plurals.lazarus_restore_shrink, d.removedCount, d.removedCount)
+                                        else
+                                            stringResource(R.string.lazarus_restore_shrink_uncertain),
                                         maxLines = 1
                                     )
                                 }
                             } else {
-                                WarningText(stringResource(R.string.lazarus_shrink_warning), error = true)
+                                WarningText(
+                                    stringResource(
+                                        if (knownRemovals) R.string.lazarus_shrink_warning
+                                        else R.string.lazarus_shrink_uncertain_warning
+                                    ),
+                                    error = true
+                                )
                                 OutlinedButton(
                                     onClick = { armShrink = false },
                                     modifier = Modifier.fillMaxWidth()

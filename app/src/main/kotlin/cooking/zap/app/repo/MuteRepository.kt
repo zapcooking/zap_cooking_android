@@ -22,6 +22,9 @@ class MuteRepository(private val context: Context, pubkeyHex: String? = null) {
     private val _mutedThreads = MutableStateFlow<Set<String>>(emptySet())
     val mutedThreads: StateFlow<Set<String>> = _mutedThreads
 
+    private val _mutedHashtags = MutableStateFlow<Set<String>>(emptySet())
+    val mutedHashtags: StateFlow<Set<String>> = _mutedHashtags
+
     // Copy-on-write + @Volatile. These are read OFF the main thread — OnlyFood's
     // confined collector calls isBlocked()/containsMutedWord(), and the main feed's
     // background processing calls isThreadMuted(). Every mutation assigns a FRESH
@@ -34,6 +37,8 @@ class MuteRepository(private val context: Context, pubkeyHex: String? = null) {
     private var wordSet: Set<String> = emptySet()
     @Volatile
     private var threadSet: Set<String> = emptySet()
+    @Volatile
+    private var hashtagSet: Set<String> = emptySet()
     private var lastUpdated: Long = 0
 
     init {
@@ -43,13 +48,7 @@ class MuteRepository(private val context: Context, pubkeyHex: String? = null) {
     fun loadFromEvent(event: NostrEvent) {
         if (event.kind != Nip51.KIND_MUTE_LIST) return
         if (event.created_at <= lastUpdated) return
-        val muteList = Nip51.parseMuteList(event)
-        blockedSet = muteList.pubkeys.toSet()
-        wordSet = muteList.words.toSet()
-        _blockedPubkeys.value = blockedSet
-        _mutedWords.value = wordSet
-        lastUpdated = event.created_at
-        saveToPrefs()
+        applyMutes(event.created_at, Nip51.parseMuteList(event), MuteList())
     }
 
     suspend fun loadFromEvent(event: NostrEvent, signer: NostrSigner) {
@@ -64,11 +63,32 @@ class MuteRepository(private val context: Context, pubkeyHex: String? = null) {
                 MuteList()
             }
         } else MuteList()
+        applyMutes(event.created_at, publicMutes, privateMutes)
+    }
+
+    /**
+     * Apply a mute list whose private items the caller already decrypted (a
+     * Lazarus restore decrypts them for its review), so this copy covers
+     * them without asking the signer again — the next mute edit rebuilds the
+     * whole list from it. Threads and hashtags count too: dropping them here
+     * would silently remove them on the next publish.
+     */
+    fun loadFromEvent(event: NostrEvent, privateTags: List<List<String>>) {
+        if (event.kind != Nip51.KIND_MUTE_LIST) return
+        if (event.created_at <= lastUpdated) return
+        applyMutes(event.created_at, Nip51.parseMuteList(event), privateTags.toMuteList())
+    }
+
+    private fun applyMutes(createdAt: Long, publicMutes: MuteList, privateMutes: MuteList) {
         blockedSet = (publicMutes.pubkeys + privateMutes.pubkeys).toSet()
         wordSet = (publicMutes.words + privateMutes.words).toSet()
+        threadSet = (publicMutes.threads + privateMutes.threads).toSet()
+        hashtagSet = (publicMutes.hashtags + privateMutes.hashtags).toSet()
         _blockedPubkeys.value = blockedSet
         _mutedWords.value = wordSet
-        lastUpdated = event.created_at
+        _mutedThreads.value = threadSet
+        _mutedHashtags.value = hashtagSet
+        lastUpdated = createdAt
         saveToPrefs()
     }
 
@@ -78,20 +98,6 @@ class MuteRepository(private val context: Context, pubkeyHex: String? = null) {
      * them without asking the signer again — the next mute edit rebuilds the
      * whole list from it.
      */
-    fun loadFromEvent(event: NostrEvent, privateTags: List<List<String>>) {
-        if (event.kind != Nip51.KIND_MUTE_LIST) return
-        if (event.created_at <= lastUpdated) return
-        val publicMutes = Nip51.parseMuteList(event)
-        val privatePubkeys = privateTags.filter { it.size >= 2 && it[0] == "p" }.map { it[1] }
-        val privateWords = privateTags.filter { it.size >= 2 && it[0] == "word" }.map { it[1] }
-        blockedSet = (publicMutes.pubkeys + privatePubkeys).toSet()
-        wordSet = (publicMutes.words + privateWords).toSet()
-        _blockedPubkeys.value = blockedSet
-        _mutedWords.value = wordSet
-        lastUpdated = event.created_at
-        saveToPrefs()
-    }
-
     /** created_at of the mute list this copy was built from; 0 when none. */
     fun lastUpdatedAt(): Long = lastUpdated
 
@@ -148,13 +154,19 @@ class MuteRepository(private val context: Context, pubkeyHex: String? = null) {
 
     fun getMutedWords(): Set<String> = wordSet.toSet()
 
+    fun getMutedThreads(): Set<String> = threadSet.toSet()
+
+    fun getMutedHashtags(): Set<String> = hashtagSet.toSet()
+
     fun clear() {
         _blockedPubkeys.value = emptySet()
         _mutedWords.value = emptySet()
         _mutedThreads.value = emptySet()
+        _mutedHashtags.value = emptySet()
         blockedSet = emptySet()
         wordSet = emptySet()
         threadSet = emptySet()
+        hashtagSet = emptySet()
         lastUpdated = 0
         prefs.edit().clear().apply()
     }
@@ -170,6 +182,7 @@ class MuteRepository(private val context: Context, pubkeyHex: String? = null) {
             .putStringSet("blocked_pubkeys", blockedSet.toSet())
             .putStringSet("muted_words", wordSet.toSet())
             .putStringSet("muted_threads", threadSet.toSet())
+            .putStringSet("muted_hashtags", hashtagSet.toSet())
             .putLong("mute_updated", lastUpdated)
             .apply()
     }
@@ -191,10 +204,33 @@ class MuteRepository(private val context: Context, pubkeyHex: String? = null) {
             threadSet = threads.toSet()
             _mutedThreads.value = threadSet
         }
+        val hashtags = prefs.getStringSet("muted_hashtags", null)
+        if (hashtags != null) {
+            hashtagSet = hashtags.toSet()
+            _mutedHashtags.value = hashtagSet
+        }
     }
 
     companion object {
         private fun prefsName(pubkeyHex: String?): String =
             if (pubkeyHex != null) "wisp_mutes_$pubkeyHex" else "wisp_mutes"
     }
+}
+
+/** Decrypted mute items a caller already holds (a Lazarus restore), as a [MuteList]. */
+private fun List<List<String>>.toMuteList(): MuteList {
+    val pubkeys = mutableSetOf<String>()
+    val words = mutableSetOf<String>()
+    val threads = mutableSetOf<String>()
+    val hashtags = mutableSetOf<String>()
+    for (tag in this) {
+        if (tag.size < 2) continue
+        when (tag[0]) {
+            "p" -> pubkeys.add(tag[1])
+            "word" -> words.add(tag[1])
+            "e" -> threads.add(tag[1])
+            "t" -> hashtags.add(tag[1])
+        }
+    }
+    return MuteList(pubkeys, words, threads, hashtags)
 }

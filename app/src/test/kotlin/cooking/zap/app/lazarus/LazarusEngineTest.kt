@@ -110,6 +110,20 @@ class LazarusEngineTest {
     }
 
     @Test
+    fun `picks the lowest event id when two relay lists share a timestamp`() {
+        // NIP-01: a replaceable write keeps the lowest id within one second,
+        // so the live list is deterministic whichever relay answers first.
+        val transport = FakeTransport()
+        val lists = listOf(
+            testEvent("aa", 1000, kind = 10002, tags = listOf(listOf("r", "wss://winner/", "write"))),
+            testEvent("bb", 1000, kind = 10002, tags = listOf(listOf("r", "wss://loser/", "write")))
+        )
+        transport.answer = { _, filter -> if (filter.kinds == listOf(10002)) answered(*lists.toTypedArray()) else answered() }
+        val plan = runBlocking { engine(transport).relayPlan(pubkey) }
+        assertEquals(listOf("wss://winner"), plan.write)
+    }
+
+    @Test
     fun `counts a relay list that names no write relays as missing`() {
         val readOnlyCopy = runBlocking {
             engine(FakeTransport(), LazarusUserRelays(read = listOf("wss://inbox"), write = emptyList())).relayPlan(pubkey)

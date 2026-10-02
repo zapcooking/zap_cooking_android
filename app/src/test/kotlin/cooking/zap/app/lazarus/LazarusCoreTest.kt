@@ -155,6 +155,25 @@ class LazarusCoreTest {
     }
 
     @Test
+    fun `orders same-second versions by NIP-01, lowest id newest`() {
+        // Two versions share a timestamp: the lowest event id is the one a
+        // replaceable write keeps, so that one is the newer (current) version.
+        // With the tie reversed, the same-second growth reads as a drop and
+        // the recommendation points at the wrong version.
+        val current = followListEvent(5, 1000).copy(id = "a".padEnd(64, '0'))
+        val beforeClobber = followListEvent(20, 1000).copy(id = "b".padEnd(64, '0'))
+        val result = rankLazarusCandidates(
+            getLazarusKindProfile(3)!!,
+            listOf(
+                LazarusTaggedEvent(current, "wss://a"),
+                LazarusTaggedEvent(beforeClobber, "wss://b")
+            )
+        )
+        assertEquals(current.id, result.current?.event?.id)
+        assertEquals(beforeClobber.id, result.recommended?.event?.id)
+    }
+
+    @Test
     fun `does not recommend over a couple of items on a small list`() {
         val (_, result) = ranked(6, 4)
         assertNull(result.recommended)
@@ -341,6 +360,27 @@ class LazarusCoreTest {
         val chosen = makeEvent(tags = listOf(listOf("p", "a")))
         val delta = computeLazarusDelta(chosen, current)
         assertTrue(delta.shrinks)
+    }
+
+    @Test
+    fun `uncounted current private items need the shrink confirmation`() {
+        // A NIP-44-sized ciphertext the map holds no decryption for
+        val encrypted = "A".repeat(140)
+        val chosen = followListEvent(10, 1000)
+        val current = followListEvent(10, 2000, content = encrypted)
+        val delta = computeLazarusDelta(chosen, current)
+        assertTrue(delta.currentPrivateUncounted)
+        // The visible counts are equal, but current's unreadable items are all
+        // up for replacement: the restore may shrink, never a pure grow
+        assertTrue(delta.shrinks)
+        assertFalse(delta.grows)
+        // Once decrypted, the same pair with identical items is no change
+        val decrypted = computeLazarusDelta(
+            chosen, current,
+            mapOf(current.id to (0 until 10).map { listOf("p", "pk$it") })
+        )
+        assertFalse(decrypted.shrinks)
+        assertFalse(decrypted.grows)
     }
 
     @Test
@@ -815,6 +855,24 @@ class LazarusCoreTest {
         assertEquals(
             LazarusCurrentCheck.Proceed(reviewed),
             checkLazarusCurrent(reviewed, older, listOf(answered(older), answered()))
+        )
+    }
+
+    @Test
+    fun `a same-second lower id wins the re-read, a higher id does not`() {
+        val reviewed = version("c1", 2000)
+        // Same second, lower id: NIP-01 keeps that one, so the reviewed
+        // version was replaced and the restore must re-ask
+        val sameSecondNewer = version("c0", 2000)
+        assertEquals(
+            LazarusCurrentCheck.Changed(sameSecondNewer),
+            checkLazarusCurrent(reviewed, null, listOf(answered(sameSecondNewer)))
+        )
+        // Same second, higher id: the reviewed version still wins
+        val sameSecondOlder = version("c2", 2000)
+        assertEquals(
+            LazarusCurrentCheck.Proceed(reviewed),
+            checkLazarusCurrent(reviewed, null, listOf(answered(sameSecondOlder)))
         )
     }
 

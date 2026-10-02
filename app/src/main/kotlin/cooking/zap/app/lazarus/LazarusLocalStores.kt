@@ -63,9 +63,9 @@ class LazarusLocalStores(
 
     /**
      * Update the app's copy with a published restore. [privateTags] are the
-     * restored version's decrypted private items (NIP-51), so a mute list's
-     * copy keeps them: the app rebuilds the whole mute list from its copy on
-     * the next mute.
+     * restored version's decrypted private items (NIP-51), so a mute list's or
+     * bookmark list's copy keeps them: the app rebuilds the whole list from
+     * its copy on the next edit.
      */
     fun applyRestored(event: NostrEvent, privateTags: List<List<String>>?) {
         when (event.kind) {
@@ -77,7 +77,14 @@ class LazarusLocalStores(
                     muteRepo.loadFromEvent(event, privateTags.orEmpty())
                 }
             }
-            Nip51.KIND_BOOKMARK_LIST -> bookmarkRepo.loadFromEvent(event)
+            Nip51.KIND_BOOKMARK_LIST -> {
+                // Same rule as the mute list: the copy keeps the restored
+                // private bookmarks, or the next bookmark toggle republishes
+                // the list without them
+                if (privateTags != null || getContentEncryption(event.content) == null) {
+                    bookmarkRepo.loadFromEvent(event, privateTags.orEmpty())
+                }
+            }
             0 -> eventRepo.cacheEvent(event)
             10002 -> {
                 relayListRepo.updateFromEvent(event)

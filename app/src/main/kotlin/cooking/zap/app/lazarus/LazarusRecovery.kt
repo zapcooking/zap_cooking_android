@@ -377,11 +377,14 @@ internal fun looksClobbered(laterMax: Int, earlierMin: Int): Boolean {
     return loss >= Lazarus.CLOBBER_MIN_LOSS_ITEMS && loss >= earlierMin * Lazarus.CLOBBER_MIN_LOSS_RATIO
 }
 
-/** Versions with a known size, oldest first. */
+/** Versions with a known size, oldest first. Within one created_at second
+ *  NIP-01 keeps the lowest event id, so that one is the newer version and
+ *  walks last: the higher id goes first, or a same-second growth reads as a
+ *  drop and the recommendation points at the wrong version. */
 internal fun knownTimeline(candidates: List<LazarusCandidate>): List<LazarusCandidate> =
     candidates
         .filter { isLazarusSizeKnown(it.itemCount) }
-        .sortedWith(compareBy({ it.event.created_at }, { it.event.id }))
+        .sortedWith(compareBy<LazarusCandidate> { it.event.created_at }.thenByDescending { it.event.id })
 
 internal data class ClobberEpisode(
     /** Timeline indexes of each version that dropped suddenly from the one before it */
@@ -692,13 +695,16 @@ fun computeLazarusDelta(
     val currentIds = currentUnique.map(identity).toSet()
     val added = chosenUnique.filter { identity(it) !in currentIds }
     val removed = currentUnique.filter { identity(it) !in chosenIds }
+    // Current's undecrypted private items are all up for replacement, so the
+    // restore may shrink the list however the visible counts compare: it gets
+    // the shrink confirmation, and it never reads as a pure grow.
     return LazarusDelta(
         added = added,
         removed = removed,
         addedCount = added.size,
         removedCount = removed.size,
-        grows = added.isNotEmpty() && added.size >= removed.size,
-        shrinks = removed.size > added.size,
+        grows = added.isNotEmpty() && added.size >= removed.size && !currentUnknown,
+        shrinks = removed.size > added.size || currentUnknown,
         chosenPrivateUncounted = chosenUnknown,
         currentPrivateUncounted = currentUnknown
     )
@@ -823,7 +829,12 @@ fun checkLazarusCurrent(
 ): LazarusCurrentCheck {
     var newest = reviewed
     for (event in listOfNotNull(local) + answers.flatMap { it.events }) {
-        if (newest == null || event.created_at > newest.created_at) newest = event
+        // NIP-01: within one created_at second the lowest event id wins, so a
+        // same-second lower id is the newer version, not a tie to ignore.
+        if (newest == null ||
+            event.created_at > newest.created_at ||
+            (event.created_at == newest.created_at && event.id < newest.id)
+        ) newest = event
     }
     if (newest != null && newest.id != reviewed?.id) return LazarusCurrentCheck.Changed(newest)
     if (localCreatedAt != null && localCreatedAt > (reviewed?.created_at ?: Long.MIN_VALUE)) {

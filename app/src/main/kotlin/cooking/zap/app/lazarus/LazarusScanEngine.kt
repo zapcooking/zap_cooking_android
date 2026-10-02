@@ -150,10 +150,13 @@ class LazarusScanEngine(
         val answers = queryAll(lookup, Lazarus.SCAN_TIMEOUT_MS) {
             Filter(kinds = listOf(RELAY_LIST_KIND), authors = listOf(pubkey), limit = 1)
         }
+        // The relay a replaceable write keeps: newest created_at, and within
+        // one second the lowest event id (NIP-01), so a tie resolves the same
+        // way on every scan instead of picking whichever relay answered first.
         val newest = answers.values
             .flatMap { it.events }
             .filter { isLazarusVersion(it, RELAY_LIST_KIND, pubkey, verify) }
-            .maxByOrNull { it.created_at }
+            .minWithOrNull(compareByDescending<NostrEvent> { it.created_at }.thenBy { it.id })
         val plan = when {
             newest != null -> {
                 val relays = Nip65.parseRelayList(newest)

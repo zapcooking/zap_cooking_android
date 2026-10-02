@@ -1668,6 +1668,8 @@
         <item quantity="other">Continue: this removes %d items</item>
     </plurals>
     <string name="lazarus_shrink_warning">This restore shrinks your list below the current version.</string>
+    <string name="lazarus_restore_shrink_uncertain">Continue: this may remove items</string>
+    <string name="lazarus_shrink_uncertain_warning">Restoring replaces your current version\'s encrypted items, which couldn\'t be decrypted, so anything they hold is lost.</string>
     <string name="lazarus_confirm_shrink">Confirm removal</string>
     <string name="lazarus_stage_confirming">Confirming the current version on your write relays…</string>
     <string name="lazarus_stage_signing">Waiting for your signer…</string>
