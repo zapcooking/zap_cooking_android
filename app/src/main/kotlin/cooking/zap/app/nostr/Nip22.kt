@@ -263,4 +263,18 @@ object Nip22 {
         tags.add(listOf("p", parent.pubkey))
         return tags
     }
+
+    /**
+     * True if [event] is a kind 1 note replying to a kind 1111 comment. Comment
+     * threads are a 1111-only namespace: a stray kind 1 there belongs to the main
+     * feed, not the comment subtree, so thread views ignore it. Detected via the
+     * `k` tag when present, or by resolving the parent's kind through [parentKindOf].
+     * Ports barrydeen/wisp#667's helper (upstream Android).
+     */
+    fun isStrayKind1OnComment(event: NostrEvent, parentKindOf: (String) -> Int?): Boolean {
+        if (event.kind != 1) return false
+        if (event.tags.any { it.size >= 2 && it[0] == "k" && it[1].toIntOrNull() == KIND_COMMENT }) return true
+        val parentId = Nip10.getReplyTarget(event) ?: return false
+        return parentKindOf(parentId) == KIND_COMMENT
+    }
 }
