@@ -8,7 +8,11 @@ import kotlinx.serialization.json.jsonPrimitive
 
 data class MuteList(
     val pubkeys: Set<String> = emptySet(),
-    val words: Set<String> = emptySet()
+    val words: Set<String> = emptySet(),
+    /** Muted threads, the `e` tags of a mute list. */
+    val threads: Set<String> = emptySet(),
+    /** Muted hashtags, the `t` tags. */
+    val hashtags: Set<String> = emptySet()
 )
 
 data class FollowSet(
@@ -123,19 +127,25 @@ object Nip51 {
     fun parseMuteList(event: NostrEvent): MuteList {
         val pubkeys = mutableSetOf<String>()
         val words = mutableSetOf<String>()
+        val threads = mutableSetOf<String>()
+        val hashtags = mutableSetOf<String>()
         for (tag in event.tags) {
             if (tag.size < 2) continue
             when (tag[0]) {
                 "p" -> pubkeys.add(tag[1])
                 "word" -> words.add(tag[1])
+                "e" -> threads.add(tag[1])
+                "t" -> hashtags.add(tag[1])
             }
         }
-        return MuteList(pubkeys, words)
+        return MuteList(pubkeys, words, threads, hashtags)
     }
 
     fun parsePrivateTags(json: String): MuteList {
         val pubkeys = mutableSetOf<String>()
         val words = mutableSetOf<String>()
+        val threads = mutableSetOf<String>()
+        val hashtags = mutableSetOf<String>()
         try {
             val arr = kotlinx.serialization.json.Json.parseToJsonElement(json).jsonArray
             for (element in arr) {
@@ -144,13 +154,20 @@ object Nip51 {
                 when (tag[0].jsonPrimitive.content) {
                     "p" -> pubkeys.add(tag[1].jsonPrimitive.content)
                     "word" -> words.add(tag[1].jsonPrimitive.content)
+                    "e" -> threads.add(tag[1].jsonPrimitive.content)
+                    "t" -> hashtags.add(tag[1].jsonPrimitive.content)
                 }
             }
         } catch (_: Exception) {}
-        return MuteList(pubkeys, words)
+        return MuteList(pubkeys, words, threads, hashtags)
     }
 
-    fun buildMuteListContent(blockedPubkeys: Set<String>, mutedWords: Set<String>): String {
+    fun buildMuteListContent(
+        blockedPubkeys: Set<String>,
+        mutedWords: Set<String>,
+        mutedThreads: Set<String> = emptySet(),
+        mutedHashtags: Set<String> = emptySet()
+    ): String {
         val arr = buildJsonArray {
             for (pubkey in blockedPubkeys) {
                 add(buildJsonArray { add(JsonPrimitive("p")); add(JsonPrimitive(pubkey)) })
@@ -158,14 +175,27 @@ object Nip51 {
             for (word in mutedWords) {
                 add(buildJsonArray { add(JsonPrimitive("word")); add(JsonPrimitive(word)) })
             }
+            for (thread in mutedThreads) {
+                add(buildJsonArray { add(JsonPrimitive("e")); add(JsonPrimitive(thread)) })
+            }
+            for (hashtag in mutedHashtags) {
+                add(buildJsonArray { add(JsonPrimitive("t")); add(JsonPrimitive(hashtag)) })
+            }
         }
         return arr.toString()
     }
 
-    fun buildMuteListTags(blockedPubkeys: Set<String>, mutedWords: Set<String>): List<List<String>> {
+    fun buildMuteListTags(
+        blockedPubkeys: Set<String>,
+        mutedWords: Set<String>,
+        mutedThreads: Set<String> = emptySet(),
+        mutedHashtags: Set<String> = emptySet()
+    ): List<List<String>> {
         val tags = mutableListOf<List<String>>()
         for (pubkey in blockedPubkeys) tags.add(listOf("p", pubkey))
         for (word in mutedWords) tags.add(listOf("word", word))
+        for (thread in mutedThreads) tags.add(listOf("e", thread))
+        for (hashtag in mutedHashtags) tags.add(listOf("t", hashtag))
         return tags
     }
 

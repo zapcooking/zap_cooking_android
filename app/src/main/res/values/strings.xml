@@ -30,7 +30,6 @@
     <string name="drawer_keys">Keys</string>
     <string name="drawer_safety">Safety</string>
     <string name="drawer_membership_policies">Membership &amp; Policies</string>
-    <string name="drawer_restore_follows">Restore Follows</string>
     <string name="drawer_proof_of_work">Proof of Work</string>
     <string name="drawer_social_graph">Social Graph</string>
     <string name="drawer_custom_emojis">Custom Emojis</string>
@@ -599,6 +598,8 @@
     <string name="settings_appearance_system">System</string>
     <string name="settings_appearance_light">Light</string>
     <string name="settings_appearance_dark">Dark</string>
+    <string name="settings_startup">Startup</string>
+    <string name="settings_startup_caption">The tab the app opens on. Applies the next time you open the app.</string>
     <string name="settings_preview">Preview</string>
     <string name="settings_new_notes_button">New Notes Button</string>
     <string name="settings_hide_new_notes_button">Hide new notes button</string>
@@ -1491,5 +1492,215 @@
     <string name="compose_restored_draft_notice">Continuing your last draft</string>
     <string name="compose_restored_draft_discard">Discard</string>
     <string name="compose_attach_pasted_link">Attach this media</string>
+
+    <!-- Lazarus data recovery (https://github.com/dmnyc/lazarus/blob/main/SPEC.md) -->
+    <string name="lazarus_title">Data recovery</string>
+    <string name="lazarus_explainer">Apps overwrite your lists without reading them first, so a buggy app can wipe your follows, mutes, or profile. Relays that keep old versions still hold the history. Scan it, review exactly what would change, and restore what was lost. Nothing is restored without your tap, and every restore is signed by your own account.</string>
+    <string name="lazarus_tier1">Critical: identity &amp; social graph</string>
+    <string name="lazarus_tier2">Profile &amp; reference lists</string>
+    <string name="lazarus_tier3">Relay configuration</string>
+    <string name="lazarus_kind_3">Follow list</string>
+    <string name="lazarus_kind_10000">Mute list</string>
+    <string name="lazarus_kind_0">Profile</string>
+    <string name="lazarus_kind_10003">Bookmarks</string>
+    <string name="lazarus_kind_10044">Encryption keys (NIP-4e)</string>
+    <string name="lazarus_kind_10002">Relay list</string>
+    <string name="lazarus_kind_10050">DM relays</string>
+    <string name="lazarus_kind_10006">Blocked relays</string>
+    <!-- Short labels for the kind picker, so it wraps evenly; full names above -->
+    <string name="lazarus_chip_3">Follows</string>
+    <string name="lazarus_chip_10000">Mutes</string>
+    <string name="lazarus_chip_0">Profile</string>
+    <string name="lazarus_chip_10003">Bookmarks</string>
+    <string name="lazarus_chip_10044">Encryption keys</string>
+    <string name="lazarus_chip_10002">Relays</string>
+    <string name="lazarus_chip_10050">DM relays</string>
+    <string name="lazarus_chip_10006">Blocked relays</string>
+    <string name="lazarus_scan_hint">Scan relay history</string>
+    <string name="lazarus_scan_intro">Scanning asks your relays, and relays known to keep old versions, for every surviving version of this list. Nothing is published.</string>
+    <string name="lazarus_scanning">Scanning relays for every version of your %1$s…</string>
+    <string name="lazarus_scan_again">Scan again</string>
+    <string name="lazarus_scan_failed_no_relay">No relay answered the scan, so nothing could be checked. That isn\'t the same as having no history. Check your connection and scan again.</string>
+    <string name="lazarus_scan_failed">The scan failed. Check your connection and scan again.</string>
+    <string name="lazarus_kind_note_10002">An old relay list can strand you on relays that no longer exist and silently break delivery of your posts. Check that a version\'s relays still work before restoring it.</string>
+    <string name="lazarus_kind_note_10050">An old DM relay list can point at inboxes that no longer exist, silently breaking delivery of your direct messages.</string>
+    <string name="lazarus_kind_note_10044">An empty encryption key list is a real choice: it announces that you don\'t use NIP-4e. Nothing is recommended here; you choose the version you intend.</string>
+    <string name="lazarus_view_only_scan">This account is view-only, so you can scan its history, but restoring needs a signing account.</string>
+    <plurals name="lazarus_versions_found">
+        <item quantity="one">%d version found</item>
+        <item quantity="other">%d versions found</item>
+    </plurals>
+    <string name="lazarus_relays_answered">%1$d of %2$d relays answered</string>
+    <string name="lazarus_outcome_answered">answered</string>
+    <string name="lazarus_outcome_failed">failed</string>
+    <string name="lazarus_outcome_timed_out">timed out</string>
+    <string name="lazarus_relay_write">write</string>
+    <string name="lazarus_relay_write_default">default write</string>
+    <plurals name="lazarus_retry_relays">
+        <item quantity="one">Retry %d unreachable relay</item>
+        <item quantity="other">Retry %d unreachable relays</item>
+    </plurals>
+    <string name="lazarus_retrying">Retrying…</string>
+    <string name="lazarus_no_relay_finished">No relay finished answering, so these versions may be incomplete. Scan again to retry.</string>
+    <string name="lazarus_unconfirmed_write">None of your write relays answered, so the newest version found may not be current, and nothing is recommended. Retry the relays that didn\'t answer, or scan again.</string>
+    <string name="lazarus_unconfirmed_unknown">Your relay list couldn\'t be fetched, so the newest version found may not be current, and nothing is recommended. Scan again to retry.</string>
+    <string name="lazarus_relay_list_missing">No relay list found for this account, so the app\'s default relays stand in as its write relays: %1$s.</string>
+    <string name="lazarus_no_versions">No versions found. The relays that answered have no history of this list.</string>
+    <string name="lazarus_recommended_banner">A sudden drop was detected. The recommended version is the fullest one from before the damage.</string>
+    <string name="lazarus_no_improvement">No recoverable improvement found. Your current version looks healthy; every version is listed below.</string>
+    <string name="lazarus_recency_note">Newest first. Nothing is recommended for this kind: pick the version you want.</string>
+    <string name="lazarus_intent_notice">For this kind, an empty list can be intentional, so nothing is recommended or preselected. Choose the version you actually want.</string>
+    <string name="lazarus_sort_date">Newest first</string>
+    <string name="lazarus_sort_size">Largest first</string>
+    <plurals name="lazarus_show_empty">
+        <item quantity="one">Show %d empty version</item>
+        <item quantity="other">Show %d empty versions</item>
+    </plurals>
+    <string name="lazarus_hide_empty">Hide empty versions</string>
+    <string name="lazarus_load_older">Load older versions</string>
+    <string name="lazarus_loading_older">Loading older versions…</string>
+    <plurals name="lazarus_older_failures">
+        <item quantity="one">%d relay didn\'t answer while loading older versions. Try again to page further back.</item>
+        <item quantity="other">%d relays didn\'t answer while loading older versions. Try again to page further back.</item>
+    </plurals>
+    <string name="lazarus_badge_current">Current</string>
+    <string name="lazarus_badge_recommended">Recommended</string>
+    <string name="lazarus_badge_empty_state">Empty state</string>
+    <!-- Per-kind item nouns (count-free plurals), for counts, ranges and groups -->
+    <plurals name="lazarus_noun_3">
+        <item quantity="one">follow</item>
+        <item quantity="other">follows</item>
+    </plurals>
+    <plurals name="lazarus_noun_10000">
+        <item quantity="one">muted item</item>
+        <item quantity="other">muted items</item>
+    </plurals>
+    <plurals name="lazarus_noun_10003">
+        <item quantity="one">bookmark</item>
+        <item quantity="other">bookmarks</item>
+    </plurals>
+    <plurals name="lazarus_noun_10044">
+        <item quantity="one">key</item>
+        <item quantity="other">keys</item>
+    </plurals>
+    <plurals name="lazarus_noun_relay">
+        <item quantity="one">relay</item>
+        <item quantity="other">relays</item>
+    </plurals>
+    <string name="lazarus_items_estimated">≈ %1$d–%2$d %3$s (estimated)</string>
+    <string name="lazarus_items_empty">Empty</string>
+    <string name="lazarus_items_private_unknown">%1$s public, private items uncounted</string>
+    <string name="lazarus_row_private_incl">incl. %1$d private</string>
+    <string name="lazarus_row_private_undecryptable">private items couldn\'t be decrypted</string>
+    <string name="lazarus_row_private_estimated">private items estimated</string>
+    <plurals name="lazarus_profile_field_noun">
+        <item quantity="one">field</item>
+        <item quantity="other">fields</item>
+    </plurals>
+    <string name="lazarus_profile_empty">Empty profile</string>
+    <plurals name="lazarus_found_on">
+        <item quantity="one">on %d relay</item>
+        <item quantity="other">on %d relays</item>
+    </plurals>
+    <string name="lazarus_found_local">in this app\'s copy</string>
+    <string name="lazarus_group_clobber">Sudden drop: %1$d versions</string>
+    <string name="lazarus_group_edits">Run of small edits: %1$d versions</string>
+    <string name="lazarus_review">Review</string>
+    <string name="lazarus_changed_notice">Your list changed after the scan (another device or app edited it). The changes now compare against the newer version. Check them and restore again.</string>
+    <string name="lazarus_review_title">Review restore</string>
+    <string name="lazarus_review_heading">Restore your %1$s from %2$s?</string>
+    <string name="lazarus_delta_compared">Compared with your current version from %1$s.</string>
+    <string name="lazarus_delta_compared_local">Compared with this app\'s copy of your current version from %1$s.</string>
+    <string name="lazarus_delta_no_current">No current version was found to compare against.</string>
+    <string name="lazarus_delta_intro">Restoring republishes this version as a new event signed by your account, replacing the current one everywhere it\'s accepted.</string>
+    <string name="lazarus_delta_section">What changes</string>
+    <string name="lazarus_delta_counts">+%1$d added · −%2$d removed</string>
+    <string name="lazarus_delta_no_change">This version has the same items as your current one.</string>
+    <string name="lazarus_delta_added">Added (%1$d)</string>
+    <string name="lazarus_delta_removed">Removed (%1$d)</string>
+    <string name="lazarus_delta_added_3">Would be followed again (%1$d)</string>
+    <string name="lazarus_delta_removed_3">Would be unfollowed (%1$d)</string>
+    <string name="lazarus_delta_added_10000">Would be muted again (%1$d)</string>
+    <string name="lazarus_delta_removed_10000">Would be unmuted (%1$d)</string>
+    <string name="lazarus_delta_more">…and %1$d more</string>
+    <string name="lazarus_targets_write">Publishes to your write relays: %1$s.</string>
+    <string name="lazarus_targets_write_defaults">Publishes to the app\'s default relays (you have no relay list): %1$s.</string>
+    <string name="lazarus_targets_10002">Success is judged on the write relays this version names: %1$s.</string>
+    <string name="lazarus_targets_10002_defaults">Success is judged on the app\'s default relays: %1$s.</string>
+    <plurals name="lazarus_targets_extra">
+        <item quantity="one">%d other relay gets a copy too, so it stops serving the old version.</item>
+        <item quantity="other">%d other relays get a copy too, so they stop serving the old version.</item>
+    </plurals>
+    <string name="lazarus_profile_no_change">This version matches your current profile, fields and tags.</string>
+    <string name="lazarus_profile_replaces">A restore replaces every field and tag of your profile.</string>
+    <string name="lazarus_profile_absent">(none)</string>
+    <string name="lazarus_decrypting">Decrypting private items so the changes cover them too…</string>
+    <string name="lazarus_private_uncounted_chosen">This version\'s encrypted private items couldn\'t be decrypted, so they aren\'t counted above.</string>
+    <string name="lazarus_private_uncounted_current">Your current version\'s encrypted private items couldn\'t be decrypted, so they aren\'t counted above. Restoring replaces them.</string>
+    <string name="lazarus_private_undecryptable">This version\'s encrypted items couldn\'t be decrypted, so exactly what would be republished is unknown. Restore stays disabled for your protection.</string>
+    <string name="lazarus_decrypt_again">Try decrypting again</string>
+    <plurals name="lazarus_warn_remute">
+        <item quantity="one">Restoring re-mutes %d entry you may have deliberately unmuted since. This is a moderation action taken on your behalf.</item>
+        <item quantity="other">Restoring re-mutes %d entries you may have deliberately unmuted since. This is a moderation action taken on your behalf.</item>
+    </plurals>
+    <plurals name="lazarus_warn_unmute">
+        <item quantity="one">%d entry muted now would be unmuted.</item>
+        <item quantity="other">%d entries muted now would be unmuted.</item>
+    </plurals>
+    <string name="lazarus_warn_stale_relays">An old relay list can strand you on dead relays and silently break delivery. Make sure these relays still work before restoring.</string>
+    <string name="lazarus_warn_affects_others">Other people\'s apps read this list, so restoring it changes how they interact with you.</string>
+    <plurals name="lazarus_intent_chosen_keys">
+        <item quantity="one">The version you\'re restoring lists %d NIP-4e encryption key. Apps will encrypt direct messages to it again.</item>
+        <item quantity="other">The version you\'re restoring lists %d NIP-4e encryption keys. Apps will encrypt direct messages to them again.</item>
+    </plurals>
+    <string name="lazarus_intent_chosen_empty">The version you\'re restoring is empty: it announces that you don\'t use NIP-4e, and apps will stop encrypting direct messages to your keys.</string>
+    <plurals name="lazarus_intent_current_keys">
+        <item quantity="one">Your current version lists %d NIP-4e encryption key.</item>
+        <item quantity="other">Your current version lists %d NIP-4e encryption keys.</item>
+    </plurals>
+    <string name="lazarus_intent_current_empty">Your current, empty version announces that you don\'t use NIP-4e.</string>
+    <string name="lazarus_intent_keys_title">Keys in this version</string>
+    <string name="lazarus_intent_confirm">I intend this change</string>
+    <string name="lazarus_view_only">This is a view-only account: you can scan its history, but restoring needs an account that can sign.</string>
+    <string name="lazarus_restore">Restore this version</string>
+    <plurals name="lazarus_restore_shrink">
+        <item quantity="one">Continue: this removes %d item</item>
+        <item quantity="other">Continue: this removes %d items</item>
+    </plurals>
+    <string name="lazarus_shrink_warning">This restore shrinks your list below the current version.</string>
+    <string name="lazarus_restore_shrink_uncertain">Continue: this may remove items</string>
+    <string name="lazarus_shrink_uncertain_warning">Restoring replaces your current version\'s encrypted items, which couldn\'t be decrypted, so anything they hold is lost.</string>
+    <string name="lazarus_confirm_shrink">Confirm removal</string>
+    <string name="lazarus_stage_confirming">Confirming the current version on your write relays…</string>
+    <string name="lazarus_stage_signing">Waiting for your signer…</string>
+    <string name="lazarus_stage_publishing">Publishing to your write relays…</string>
+    <string name="lazarus_close_review">Close</string>
+    <string name="lazarus_changed_locally">This app holds a newer version of this list than the relays returned, so the changes can\'t be compared yet. Nothing was published. Scan again to review the latest version.</string>
+    <string name="lazarus_unconfirmed_restore">None of your write relays answered, so your current version couldn\'t be confirmed and nothing was published. Try again: a newer version there would otherwise be overwritten.</string>
+    <string name="lazarus_retry_restore">Retry the restore</string>
+    <string name="lazarus_override_warning">Retrying didn\'t help. You can restore without confirming the current version — for example when your relay list names only relays that are gone. Edits made since the review, on any device or app, may be lost.</string>
+    <string name="lazarus_override_confirm">I intend this, knowing edits made since the review may be lost</string>
+    <string name="lazarus_override_button">Restore anyway</string>
+    <string name="lazarus_not_accepted">No write relay accepted the restore, so it didn\'t take effect.</string>
+    <string name="lazarus_no_write_relays">There are no write relays to publish to, because your relay list couldn\'t be fetched. Scan again, or restore your relay list first.</string>
+    <string name="lazarus_wrong_account">The signing account isn\'t this list\'s account, or it changed during the approval. The restore was canceled.</string>
+    <string name="lazarus_sign_failed">Signing was declined or failed. Nothing was published.</string>
+    <string name="lazarus_signer_mismatch">The signer returned a different event than the one reviewed. Nothing was published.</string>
+    <string name="lazarus_restore_failed">The restore failed. Nothing was published.</string>
+    <string name="lazarus_restored_title">Recovered</string>
+    <string name="lazarus_restored_kind">Restored your %1$s</string>
+    <string name="lazarus_restored_body">Accepted by %1$d of %2$d write relays.</string>
+    <string name="lazarus_restored_judged_on_restored">Judged on the write relays the restored list names.</string>
+    <string name="lazarus_accepted_by">Accepted: %1$s</string>
+    <string name="lazarus_not_accepted_by">Not accepted: %1$s</string>
+    <plurals name="lazarus_best_effort">
+        <item quantity="one">Also sent to %d other relay that had this list, as a best effort.</item>
+        <item quantity="other">Also sent to %d other relays that had this list, as a best effort.</item>
+    </plurals>
+    <string name="lazarus_local_updated">This app\'s copy was updated, so your next edit builds on the recovered version.</string>
+    <string name="lazarus_local_not_updated">The active account changed during the restore, so this app\'s copy updates when the recovered version arrives from your relays.</string>
+    <string name="lazarus_default_relay">%1$s (default)</string>
+    <string name="profile_restore">Restore</string>
+    <string name="cd_profile_restore">Restore your follows, mutes, profile, or bookmarks from relay history</string>
 
 </resources>

@@ -24,12 +24,22 @@ class BookmarkRepository(private val context: Context, pubkeyHex: String? = null
     }
 
     fun loadFromEvent(event: NostrEvent) {
+        loadFromEvent(event, emptyList())
+    }
+
+    /**
+     * Apply a bookmark list whose private items the caller already decrypted
+     * (a Lazarus restore decrypts them for its review), so this copy covers
+     * them without asking the signer again — the next bookmark edit rebuilds
+     * the whole list from it, and dropping them here would undo the restore.
+     */
+    fun loadFromEvent(event: NostrEvent, privateTags: List<List<String>>) {
         if (event.kind != Nip51.KIND_BOOKMARK_LIST) return
         if (event.created_at <= lastUpdated) return
         val bookmarkList = Nip51.parseBookmarkList(event)
-        idSet = HashSet(bookmarkList.eventIds)
-        coordinateSet = HashSet(bookmarkList.coordinates)
-        hashtagSet = HashSet(bookmarkList.hashtags)
+        idSet = HashSet(bookmarkList.eventIds + privateTags.filter { it.size >= 2 && it[0] == "e" }.map { it[1] })
+        coordinateSet = HashSet(bookmarkList.coordinates + privateTags.filter { it.size >= 2 && it[0] == "a" }.map { it[1] })
+        hashtagSet = HashSet(bookmarkList.hashtags + privateTags.filter { it.size >= 2 && it[0] == "t" }.map { it[1] })
         _bookmarkedIds.value = idSet.toSet()
         lastUpdated = event.created_at
         saveToPrefs()
@@ -48,6 +58,9 @@ class BookmarkRepository(private val context: Context, pubkeyHex: String? = null
     }
 
     fun isBookmarked(eventId: String): Boolean = idSet.contains(eventId)
+
+    /** created_at of the bookmark list this copy was built from; 0 when none. */
+    fun lastUpdatedAt(): Long = lastUpdated
 
     fun getBookmarkedIds(): Set<String> = idSet.toSet()
     fun getCoordinates(): Set<String> = coordinateSet.toSet()

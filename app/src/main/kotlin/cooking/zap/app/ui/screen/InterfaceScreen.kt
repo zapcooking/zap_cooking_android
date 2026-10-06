@@ -68,6 +68,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -79,6 +80,7 @@ import cooking.zap.app.repo.DiagnosticLogger
 import cooking.zap.app.repo.InterfacePreferences
 import cooking.zap.app.repo.LocaleRepository
 import cooking.zap.app.repo.NotificationSoundPreferences
+import cooking.zap.app.ui.component.BottomTab
 import cooking.zap.app.ui.theme.ThemePreset
 import cooking.zap.app.ui.theme.Themes
 import cooking.zap.app.ui.theme.wispSwitchColors
@@ -202,6 +204,7 @@ fun InterfaceScreen(
     var notifFeedStyle by remember { mutableStateOf(interfacePrefs.getNotificationFeedStyle()) }
     var autoTranslate by remember { mutableStateOf(interfacePrefs.isAutoTranslate()) }
     var appearance by remember { mutableStateOf(interfacePrefs.getAppearanceMode()) }
+    var startupTab by remember { mutableStateOf(interfacePrefs.getStartupTab()) }
     var selectedLanguage by remember { mutableStateOf(interfacePrefs.getLanguage()) }
     var languagesExpanded by remember { mutableStateOf(false) }
 
@@ -346,6 +349,32 @@ fun InterfaceScreen(
                     interfacePrefs.setAppearanceMode(mode)
                     onChanged()
                 }
+            )
+
+            Spacer(Modifier.height(24.dp))
+
+            // Startup section — which tab the app opens on. Same treatment as
+            // the Appearance buttons: the bar's own glyphs, in the bar's order
+            // (Feed · Recipes), the selected one filled on the accent.
+            Text(
+                text = stringResource(R.string.settings_startup),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(Modifier.height(12.dp))
+            StartupTabSelector(
+                selected = startupTab,
+                onSelect = { tab ->
+                    startupTab = tab
+                    interfacePrefs.setStartupTab(tab)
+                    onChanged()
+                }
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = stringResource(R.string.settings_startup_caption),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
             Spacer(Modifier.height(24.dp))
@@ -878,6 +907,72 @@ private fun AppearanceSelector(
                     } else {
                         MaterialTheme.colorScheme.onSurface
                     },
+                    maxLines = 1
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The Startup choice: the bottom bar's own glyphs and labels, in the bar's
+ * order (Feed · Recipes), so the choice reads as "the tab I know" at a
+ * glance. The selected one gets the bar's filled glyph on the accent
+ * background, the same treatment as the Appearance buttons below it.
+ */
+@Composable
+private fun StartupTabSelector(
+    selected: InterfacePreferences.StartupTab,
+    onSelect: (InterfacePreferences.StartupTab) -> Unit
+) {
+    // The bar's tab entries, so the glyph pair and label stay the bar's own
+    val options = listOf(
+        InterfacePreferences.StartupTab.FEED to BottomTab.FEED,
+        InterfacePreferences.StartupTab.RECIPES to BottomTab.RECIPES
+    )
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        options.forEach { (tab, barTab) ->
+            val isSelected = tab == selected
+            val label = stringResource(barTab.labelResId)
+            val glyph = painterResource(
+                if (isSelected) barTab.selectedIconRes ?: barTab.unselectedIconRes ?: 0
+                else barTab.unselectedIconRes ?: barTab.selectedIconRes ?: 0
+            )
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(
+                        if (isSelected) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.surfaceVariant
+                    )
+                    // `selectable` with a role gives TalkBack the
+                    // "selected"/"not selected" state a plain clickable drops.
+                    .selectable(
+                        selected = isSelected,
+                        role = Role.RadioButton,
+                        onClick = { onSelect(tab) }
+                    )
+                    .padding(vertical = 14.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(
+                    painter = glyph,
+                    contentDescription = null,
+                    tint = if (isSelected) MaterialTheme.colorScheme.onPrimary
+                    else MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (isSelected) MaterialTheme.colorScheme.onPrimary
+                    else MaterialTheme.colorScheme.onSurface,
                     maxLines = 1
                 )
             }
