@@ -955,6 +955,9 @@ fun PostCard(
                         onProfileClick = navToProfile
                     )
                 }
+                // The event kind sits above "Seen on" so it reads beside
+                // "Posted via <client>" as the who-made-this pair.
+                EventKindSection(kind = event.kind)
                 if (displayIcons.isNotEmpty()) {
                     SeenOnSection(relayIcons = displayIcons, onRelayClick = onRelayClick)
                 }

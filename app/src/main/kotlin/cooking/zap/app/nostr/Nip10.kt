@@ -49,8 +49,23 @@ object Nip10 {
 
     /**
      * Returns the root event ID paired with its relay hint (if present).
+     *
+     * NIP-22 comments override the NIP-10 walk: their lowercase `e` names the
+     * *immediate parent* (a nested comment's parent is not the root) and the
+     * conversation root lives in uppercase `E`. Reading lowercase first would
+     * re-root a thread opened on a comment at its parent instead of the
+     * conversation.
      */
     fun getRootIdWithHint(event: NostrEvent): Pair<String, String?>? {
+        if (Nip22.isComment(event)) {
+            Nip22.rootEventId(event)?.let { rootId ->
+                val hint = event.tags
+                    .firstOrNull { it.size >= 3 && it[0] == "E" }
+                    ?.getOrNull(2)
+                    ?.takeIf { url -> url.startsWith("wss://") || url.startsWith("ws://") }
+                return rootId to hint
+            }
+        }
         val eTags = event.tags.filter { it.size >= 2 && it[0] == "e" && it.getOrNull(3) != "mention" }
         eTags.firstOrNull { it.size >= 4 && it[3] == "root" }?.let {
             return it[1] to it.getOrNull(2)?.takeIf { url -> url.startsWith("wss://") || url.startsWith("ws://") }

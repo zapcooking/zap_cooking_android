@@ -5,6 +5,7 @@ import android.util.LruCache
 import cooking.zap.app.nostr.FoodHashtags
 import cooking.zap.app.nostr.Nip09
 import cooking.zap.app.nostr.Nip10
+import cooking.zap.app.nostr.Nip22
 import cooking.zap.app.nostr.Nip30
 import cooking.zap.app.nostr.Bolt11
 import cooking.zap.app.nostr.Nip57
@@ -1169,6 +1170,40 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
         return result
     }
 
+    /**
+     * Cached kind-1111 comments whose uppercase `E` root names [rootId] — the
+     * persisted half of the thread cache-seed. The reply-graph BFS in
+     * [getCachedThreadEvents] can't see a comment branch that hangs off a
+     * mid-thread note, but every nested comment still names the conversation
+     * root in `E`, so matching on the parsed root tag reaches the whole
+     * comment subtree.
+     *
+     * In-memory cache and persistence are **merged by event id**, not
+     * either-or: on a cold open [getEvent] has already pulled the seed comment
+     * into the cache, so an "if cache is non-empty, stop" shortcut would hide
+     * the whole persisted chain behind that one event. Persistence is queried
+     * by the root itself ([EventPersistence.getEventsByKindAndRootETag]) — a
+     * global newest-N kind scan would drop an older thread on the floor — and
+     * the per-thread [limit] applies after the merge, newest first. Cache
+     * entries win on id collision (fresher than the persisted copy).
+     * Best-effort: never throws.
+     */
+    fun getCachedCommentsRootedOn(rootId: String, limit: Int = 500): List<NostrEvent> {
+        return try {
+            val fromCache = eventCache.values.asSequence()
+                .filter { Nip22.isComment(it) && Nip22.rootEventId(it) == rootId }
+                .toList()
+            val persistence = eventPersistence
+                ?: return fromCache.sortedByDescending { it.created_at }.take(limit)
+            val fromPersistence = persistence
+                .getEventsByKindAndRootETag(Nip22.KIND_COMMENT, rootId, limit = limit)
+                .filter { Nip22.rootEventId(it) == rootId }
+            mergeCommentsNewestFirst(fromPersistence, fromCache, limit)
+        } catch (t: Throwable) {
+            emptyList()
+        }
+    }
+
     fun addEventRelay(eventId: String, relayUrl: String) {
         val relays = eventRelays.get(eventId) ?: mutableSetOf<String>().also {
             eventRelays.put(eventId, it)
@@ -1851,4 +1886,28 @@ internal fun newestAddressable(
         newest = if (newest == null) event else preferNewer(newest, event)
     }
     return newest
+}
+
+/**
+ * The thread cache-seed's **merge**: persisted kind-1111 comments and the
+ * in-memory cache unioned by event id, newest first, capped at [limit].
+ *
+ * Split out of [EventRepository.getCachedCommentsRootedOn] as a pure function
+ * so the merge is unit-testable without ObjectBox (the persistence backend
+ * needs an Android runtime). The defect it pins: the old code returned the
+ * cache contents alone when non-empty — and on a cold open the seed comment
+ * pulled by [EventRepository.getEvent] had already made it non-empty, hiding
+ * the whole persisted chain behind one event. The cache copy wins an id
+ * collision (fresher than the persisted one); persistence entries listed
+ * first means the collision overwrite is the only write the cache does.
+ */
+internal fun mergeCommentsNewestFirst(
+    persisted: List<NostrEvent>,
+    cached: List<NostrEvent>,
+    limit: Int,
+): List<NostrEvent> {
+    val merged = LinkedHashMap<String, NostrEvent>(persisted.size + cached.size)
+    for (event in persisted) merged[event.id] = event
+    for (event in cached) merged[event.id] = event
+    return merged.values.sortedByDescending { it.created_at }.take(limit)
 }

@@ -53,6 +53,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.annotation.StringRes
 import cooking.zap.app.R
 import cooking.zap.app.ui.util.AmountFormatter
+import cooking.zap.app.nostr.EventKindLabel
 import cooking.zap.app.nostr.Nip88
 import cooking.zap.app.nostr.NostrEvent
 import cooking.zap.app.nostr.toNpub
@@ -720,6 +721,30 @@ fun ClientTagSection(
                 fontWeight = FontWeight.Medium
             )
         }
+    }
+}
+
+/**
+ * The event kind, styled like the other drawer rows so it sits above "Seen on"
+ * as part of the who-made-this pair with "Posted via …" — kind from
+ * [EventKindLabel], client from the `client` tag. Ports wisp-ios `kindSection`.
+ */
+@Composable
+fun EventKindSection(
+    kind: Int,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+    ) {
+        Text(
+            text = EventKindLabel.label(kind),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 

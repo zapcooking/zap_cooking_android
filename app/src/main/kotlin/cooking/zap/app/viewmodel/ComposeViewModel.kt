@@ -1374,18 +1374,31 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         if (inputs.explicit) {
             tags.add(listOf("content-warning", ""))
         }
-        // NIP-22: a reply to an external-rooted kind-1111 comment must itself be
-        // kind 1111 (carrying the root scope forward) — NIP-22 forbids answering a
-        // comment with a kind-1. Falls back to NIP-10 threading for anything else.
+        // NIP-22: a reply to a kind-1111 comment must itself be kind 1111,
+        // carrying the parent's root scope (E/A/I + K + P) forward verbatim —
+        // NIP-22 forbids answering a comment with a kind-1. Every other reply —
+        // the default — stays kind 1 with NIP-10 tags, for maximum cross-client
+        // visibility; buildReplyTags refuses (returns null) on an unscoped
+        // comment parent, which falls back to kind 1 too.
+        //
+        // Private replies branch out before the kind decision: the gift-wrapped
+        // rumor is kind 1 by construction (PrivateReplyPublisher hardcodes it
+        // and the recipient's client renders it as one), so it keeps NIP-10
+        // tags — NIP-22 E/K/e/k/p tags on a kind-1 rumor would contradict the
+        // rumor's own kind.
         var replyingToComment = false
         if (replyTo != null) {
             val hint = outboxRouter?.getRelayHint(replyTo.pubkey) ?: ""
-            val commentTags = Nip22.buildReplyTags(replyTo, hint)
-            if (commentTags != null) {
-                tags.addAll(commentTags)
-                replyingToComment = true
-            } else {
+            if (inputs.privateReply) {
                 tags.addAll(Nip10.buildReplyTags(replyTo, hint))
+            } else {
+                val commentTags = Nip22.buildReplyTags(replyTo, hint)
+                if (commentTags != null) {
+                    tags.addAll(commentTags)
+                    replyingToComment = true
+                } else {
+                    tags.addAll(Nip10.buildReplyTags(replyTo, hint))
+                }
             }
         }
 

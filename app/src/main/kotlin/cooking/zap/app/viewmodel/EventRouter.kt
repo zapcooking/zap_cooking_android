@@ -45,6 +45,7 @@ import cooking.zap.app.repo.RelayListRepository
 import cooking.zap.app.repo.RelaySetRepository
 import cooking.zap.app.repo.SigningMode
 import java.util.concurrent.ConcurrentHashMap
+import cooking.zap.app.nostr.Nip22
 
 /**
  * Routes incoming relay events to the appropriate repositories based on subscription ID.
@@ -106,6 +107,17 @@ class EventRouter(
         selfDataTimestamps.clear()
     }
 
+
+    /**
+     * Kind 1 notes replying to a 1111 comment are main-feed notes, not comment
+     * replies — they must not bump the comment's reply count (thread views hide
+     * them). Private rumor replies are exempt: private comment publishing is not
+     * implemented yet, so those rumors are still kind 1. Ports barrydeen/wisp#667.
+     */
+    private fun isStrayKind1OnComment(event: NostrEvent): Boolean =
+        event.kind == 1 && !eventRepo.isPrivate(event.id) &&
+            Nip22.isStrayKind1OnComment(event) { id -> eventRepo.getEvent(id)?.kind }
+
     suspend fun processRelayEvent(event: NostrEvent, relayUrl: String, subscriptionId: String) {
         if (event.kind == Nip88.KIND_POLL_RESPONSE) {
             Log.d("POLL", "[EventRouter] received kind 1018 id=${event.id.take(12)} sub=$subscriptionId relay=$relayUrl")
@@ -145,7 +157,7 @@ class EventRouter(
                     }
                     1 -> {
                         eventRepo.cacheEvent(event)
-                        if (!Nip10.isStandaloneQuote(event)) {
+                        if (!Nip10.isStandaloneQuote(event) && !isStrayKind1OnComment(event)) {
                             val parentId = Nip10.getReplyTarget(event)
                             if (parentId != null) eventRepo.addReplyCount(parentId, event.id)
                         }
@@ -168,7 +180,7 @@ class EventRouter(
             val myPubkey = getUserPubkey()
             if (myPubkey != null && event.kind == 1) {
                 eventRepo.cacheEvent(event)
-                val parentId = if (!Nip10.isStandaloneQuote(event)) {
+                val parentId = if (!Nip10.isStandaloneQuote(event) && !isStrayKind1OnComment(event)) {
                     Nip10.getReplyTarget(event)
                 } else null
                 if (parentId != null) eventRepo.addReplyCount(parentId, event.id)
@@ -194,7 +206,7 @@ class EventRouter(
             }
         } else if (subscriptionId == "self-notes") {
             eventRepo.cacheEvent(event)
-            if (event.kind == 1) {
+            if (event.kind == 1 && !isStrayKind1OnComment(event)) {
                 val parentId = Nip10.getReplyTarget(event)
                 if (parentId != null) eventRepo.addReplyCount(parentId, event.id)
             }
@@ -216,8 +228,10 @@ class EventRouter(
         } else if (subscriptionId.startsWith("reply-count-")) {
             if (event.kind == 1) {
                 eventRepo.cacheEvent(event)
-                val parentId = Nip10.getReplyTarget(event)
-                if (parentId != null) eventRepo.addReplyCount(parentId, event.id)
+                if (!isStrayKind1OnComment(event)) {
+                    val parentId = Nip10.getReplyTarget(event)
+                    if (parentId != null) eventRepo.addReplyCount(parentId, event.id)
+                }
             }
         } else if (subscriptionId.startsWith("zap-count-") || subscriptionId.startsWith("zap-rcpt-")) {
             if (event.kind == 9735) {
@@ -263,8 +277,10 @@ class EventRouter(
                 }
                 1 -> {
                     eventRepo.cacheEvent(event)
-                    val parentId = Nip10.getReplyTarget(event)
-                    if (parentId != null) eventRepo.addReplyCount(parentId, event.id)
+                    if (!isStrayKind1OnComment(event)) {
+                        val parentId = Nip10.getReplyTarget(event)
+                        if (parentId != null) eventRepo.addReplyCount(parentId, event.id)
+                    }
                 }
             }
             // Engagement events win the dedup race against "notif" subscription,
