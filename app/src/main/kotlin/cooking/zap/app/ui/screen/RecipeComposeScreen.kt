@@ -61,7 +61,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import cooking.zap.app.R
-import cooking.zap.app.ui.component.AltTextEditorDialog
+import cooking.zap.app.ui.component.AltTextEditorSheet
 import cooking.zap.app.viewmodel.RecipeComposeViewModel
 import cooking.zap.app.viewmodel.RecipeComposeViewModel.ImageItem
 
@@ -105,7 +105,7 @@ fun RecipeComposeScreen(
     var altEditorUrl by remember { mutableStateOf<String?>(null) }
 
     altEditorUrl?.let { url ->
-        AltTextEditorDialog(
+        AltTextEditorSheet(
             url = url,
             initialAlt = altTexts[url] ?: "",
             generation = altGeneration,
