@@ -91,10 +91,14 @@ android {
         }
 
         val breezApiKey = localProps.getProperty("breez.api.key", "")
-        val giphyApiKey = localProps.getProperty("giphy.api.key", "")
+        // gifs.nostr.build API key for the composer's GIF picker — a native
+        // client key, sent as a Bearer header (the integration guide allows
+        // Authorization headers for native clients; the web app proxies for
+        // this reason). Blank = the picker opens but reports search unavailable.
+        val gifsApiKey = secret("gifs.api.key", "GIFS_NOSTR_BUILD_API_KEY") ?: ""
         buildConfigField("String", "BREEZ_API_KEY", "\"$breezApiKey\"")
         buildConfigField("String", "BREEZ_SDK_VERSION", "\"${libs.versions.breez.sdk.spark.get()}\"")
-        buildConfigField("String", "GIPHY_API_KEY", "\"$giphyApiKey\"")
+        buildConfigField("String", "GIFS_NOSTR_BUILD_API_KEY", "\"$gifsApiKey\"")
     }
 
     signingConfigs {

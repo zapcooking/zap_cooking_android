@@ -4,20 +4,25 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.foundation.lazy.staggeredgrid.items
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -28,38 +33,192 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withLink
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import cooking.zap.app.R
-import cooking.zap.app.repo.GiphyGif
-import cooking.zap.app.repo.GiphyRepository
+import cooking.zap.app.repo.Gif
+import cooking.zap.app.repo.GifErrorKind
+import cooking.zap.app.repo.GifSearchException
+import cooking.zap.app.repo.GIF_COL_WIDTH_DP
+import cooking.zap.app.repo.gifSearchRepository
+import cooking.zap.app.repo.gifTopicsFor
+import cooking.zap.app.repo.pageAdvanced
+import cooking.zap.app.repo.shouldLoadMore
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import java.time.LocalTime
+import kotlin.math.roundToInt
 
-@OptIn(ExperimentalMaterial3Api::class)
+/** What the picker says below the grid. */
+private sealed interface GifPickerStatus {
+    /** Nothing is asked for yet. */
+    data object Hint : GifPickerStatus
+
+    /** A search answered with nothing to show. */
+    data class NoResults(val query: String) : GifPickerStatus
+
+    /** A request failed — the kind picks the message. */
+    data class Failed(val kind: GifErrorKind) : GifPickerStatus
+
+    /** Nothing to say. */
+    data object Quiet : GifPickerStatus
+}
+
+/**
+ * GIF picker on gifs.nostr.build, ported from the web client's GifPicker.svelte
+ * (frontend PR #827, Sidecar parity): opens on clock-ordered topic chips — the
+ * API has no trending endpoint, and NOTHING loads until a chip is tapped or
+ * text is entered. Suggestions replace the chips while typing (failures
+ * silently ignored), pages of 24 load near the bottom until the API's
+ * offset-199 ceiling, and every result is attached by URL — already hosted on
+ * a Nostr media host, nothing is uploaded.
+ */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun GifPickerSheet(
-    onSelect: (GiphyGif) -> Unit,
+    onSelect: (Gif) -> Unit,
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    var query by remember { mutableStateOf("") }
-    var gifs by remember { mutableStateOf<List<GiphyGif>>(emptyList()) }
-    var loading by remember { mutableStateOf(true) }
+    val scope = rememberCoroutineScope()
+    val repo = gifSearchRepository
 
-    // Debounced search — mirrors the web client's GifPicker.svelte (300ms).
-    LaunchedEffect(query) {
+    var query by remember { mutableStateOf("") }
+    var gifs by remember { mutableStateOf<List<Gif>>(emptyList()) }
+    val seen = remember { mutableSetOf<String>() }
+    var nextOffset by remember { mutableStateOf<Int?>(null) }
+    var loading by remember { mutableStateOf(false) }
+    var status by remember { mutableStateOf<GifPickerStatus>(GifPickerStatus.Hint) }
+    var chips by remember { mutableStateOf(gifTopicsFor(LocalTime.now().hour)) }
+
+    // Generation token: a search cut short by a newer one writes nothing —
+    // the AbortController-and-pageCtrl-guard of the web picker.
+    var generation by remember { mutableIntStateOf(0) }
+    var searchJob by remember { mutableStateOf<Job?>(null) }
+    var suggestJob by remember { mutableStateOf<Job?>(null) }
+    var typingJob by remember { mutableStateOf<Job?>(null) }
+
+    val gridState = rememberLazyStaggeredGridState()
+
+    suspend fun load(q: String, offset: Int, gen: Int) {
         loading = true
-        delay(300)
-        gifs = GiphyRepository.search(query)
-        loading = false
+        var advanced = false
+        try {
+            val page = repo.search(q, offset)
+            if (gen != generation) return
+            val fresh = page.gifs.filter { seen.add(it.url) }
+            gifs = gifs + fresh
+            nextOffset = page.next
+            status = if (offset == 0 && page.gifs.isEmpty()) {
+                GifPickerStatus.NoResults(q)
+            } else {
+                GifPickerStatus.Quiet
+            }
+            advanced = pageAdvanced(offset, page.next)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: GifSearchException) {
+            if (gen == generation) status = GifPickerStatus.Failed(e.kind)
+        } finally {
+            if (gen == generation) loading = false
+        }
+        // A page of duplicates or rejected items doesn't grow the grid, so no
+        // scroll event follows: check the bottom again once it has the items.
+        if (advanced && gen == generation && nextOffset != null) {
+            withFrameNanos { }
+            val info = gridState.layoutInfo
+            val last = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+            if (shouldLoadMore(false, nextOffset, last, info.totalItemsCount)) {
+                load(q, nextOffset!!, gen)
+            }
+        }
+    }
+
+    fun submitSearch(q: String) {
+        generation++
+        val gen = generation
+        searchJob?.cancel()
+        seen.clear()
+        gifs = emptyList()
+        nextOffset = null
+        scope.launch { gridState.scrollToItem(0) }
+        if (q.isEmpty()) {
+            status = GifPickerStatus.Hint
+            searchJob = null
+            return
+        }
+        status = GifPickerStatus.Quiet
+        searchJob = scope.launch { load(q, 0, gen) }
+    }
+
+    fun requestSuggest(q: String) {
+        suggestJob?.cancel()
+        suggestJob = scope.launch {
+            try {
+                val terms = repo.suggest(q)
+                // Stale answers (typing moved on) leave the chips alone.
+                if (q == query.trim()) chips = terms
+            } catch (_: GifSearchException) {
+                // Suggestions are a nicety: a failure leaves the chips as they were.
+            }
+        }
+    }
+
+    fun onQueryChange(value: String) {
+        query = value
+        typingJob?.cancel()
+        val q = value.trim()
+        if (q.isEmpty()) chips = gifTopicsFor(LocalTime.now().hour)
+        // Searched once typing pauses, not per keystroke: each search is a
+        // direct gifs.nostr.build request and each one replaces the grid.
+        typingJob = scope.launch {
+            delay(350)
+            submitSearch(q)
+            if (q.isNotEmpty()) requestSuggest(q)
+        }
+    }
+
+    // Chip taps and the search key skip the debounce; Enter searches now.
+    fun searchNow(q: String) {
+        typingJob?.cancel()
+        if (q.isEmpty()) chips = gifTopicsFor(LocalTime.now().hour)
+        submitSearch(q)
+    }
+
+    // Load the next page near the bottom of the grid.
+    val nearBottom by remember(gridState) {
+        derivedStateOf {
+            val info = gridState.layoutInfo
+            val last = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+            shouldLoadMore(loading, nextOffset, last, info.totalItemsCount)
+        }
+    }
+    LaunchedEffect(nearBottom) {
+        if (nearBottom && !loading) {
+            val offset = nextOffset
+            if (offset != null) load(query.trim(), offset, generation)
+        }
     }
 
     ModalBottomSheet(
@@ -76,64 +235,119 @@ fun GifPickerSheet(
                 stringResource(R.string.gif_picker_title),
                 style = MaterialTheme.typography.titleMedium
             )
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(4.dp))
+            // Attribution the gifs.nostr.build registration asks for — one
+            // line, with nostr.build an inline link.
+            val creditCaption = stringResource(R.string.gif_credit)
+            val creditLink = stringResource(R.string.gif_credit_link)
+            Text(
+                buildAnnotatedString {
+                    append(creditCaption)
+                    append(" ")
+                    withLink(
+                        LinkAnnotation.Url(
+                            url = "https://nostr.build",
+                            styles = TextLinkStyles(
+                                style = SpanStyle(textDecoration = TextDecoration.Underline)
+                            )
+                        )
+                    ) {
+                        append(creditLink)
+                    }
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+            )
+            Spacer(Modifier.height(8.dp))
             OutlinedTextField(
                 value = query,
-                onValueChange = { query = it },
+                onValueChange = ::onQueryChange,
                 placeholder = { Text(stringResource(R.string.gif_search_placeholder)) },
                 leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
                 singleLine = true,
                 shape = RoundedCornerShape(50),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { searchNow(query.trim()) }),
                 modifier = Modifier.fillMaxWidth()
             )
-            Spacer(Modifier.height(12.dp))
-            Box(
+            Spacer(Modifier.height(8.dp))
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                chips.forEach { term ->
+                    AssistChip(
+                        onClick = {
+                            query = term
+                            chips = gifTopicsFor(LocalTime.now().hour)
+                            searchNow(term)
+                        },
+                        label = { Text(term) }
+                    )
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 200.dp, max = 400.dp)
+                    .heightIn(min = 240.dp)
             ) {
-                when {
-                    loading && gifs.isEmpty() -> {
-                        CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
-                    }
-                    gifs.isEmpty() -> {
-                        Text(
-                            stringResource(R.string.gif_no_results),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.align(Alignment.Center)
-                        )
-                    }
-                    else -> {
-                        LazyVerticalGrid(
-                            columns = GridCells.Fixed(3),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp),
-                            modifier = Modifier.fillMaxSize()
-                        ) {
-                            items(gifs, key = { it.id }) { gif ->
-                                AsyncImage(
-                                    model = gif.previewUrl,
-                                    contentDescription = gif.title,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .aspectRatio(1f)
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .clickable { onSelect(gif) }
-                                )
-                            }
+                if (loading && gifs.isEmpty()) {
+                    CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                } else if (gifs.isNotEmpty()) {
+                    // Columns packed shortest-first, so GIFs of every shape fit
+                    // without cropping (the web picker's flex-column masonry;
+                    // LazyVerticalStaggeredGrid packs the same way natively).
+                    // Content-height up to the cap, like the web's max-height:
+                    // 50vh — a short result doesn't leave a tall empty box.
+                    val columns = (maxWidth / GIF_COL_WIDTH_DP.dp).roundToInt().coerceIn(2, 5)
+                    LazyVerticalStaggeredGrid(
+                        columns = StaggeredGridCells.Fixed(columns),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalItemSpacing = 6.dp,
+                        state = gridState,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 440.dp)
+                    ) {
+                        items(gifs, key = { it.url }) { gif ->
+                            AsyncImage(
+                                model = gif.preview,
+                                // The real aspect ratio, set before load so the grid never jumps.
+                                contentDescription = gif.title.ifBlank {
+                                    stringResource(R.string.gif_fallback_label)
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .aspectRatio((gif.width / gif.height).toFloat())
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { onSelect(gif) }
+                            )
                         }
                     }
                 }
             }
-            Spacer(Modifier.height(8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center
-            ) {
+            val statusText = when (val s = status) {
+                GifPickerStatus.Hint -> stringResource(R.string.gif_hint)
+                is GifPickerStatus.NoResults -> stringResource(R.string.gif_no_results_for, s.query)
+                is GifPickerStatus.Failed -> when (s.kind) {
+                    GifErrorKind.UNAVAILABLE -> stringResource(R.string.gif_error_unavailable)
+                    GifErrorKind.RATE_LIMITED -> stringResource(R.string.gif_error_rate_limited)
+                    GifErrorKind.CONNECTION -> stringResource(R.string.gif_error_connection)
+                }
+                GifPickerStatus.Quiet -> null
+            }
+            if (statusText != null) {
+                Spacer(Modifier.height(4.dp))
                 Text(
-                    stringResource(R.string.gif_powered_by_giphy),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    statusText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (status is GifPickerStatus.Failed) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.fillMaxWidth()
                 )
             }
         }

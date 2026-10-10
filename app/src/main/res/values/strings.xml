@@ -152,8 +152,14 @@
     <string name="cd_add_gif">Add GIF</string>
     <string name="gif_picker_title">GIFs</string>
     <string name="gif_search_placeholder">Search GIFs…</string>
-    <string name="gif_no_results">No GIFs found</string>
-    <string name="gif_powered_by_giphy">Powered by GIPHY</string>
+    <string name="gif_credit">GIFs from</string>
+    <string name="gif_credit_link">nostr.build</string>
+    <string name="gif_fallback_label">GIF</string>
+    <string name="gif_hint">Search or pick a topic.</string>
+    <string name="gif_no_results_for">No GIFs found for \u201c%1$s\u201d.</string>
+    <string name="gif_error_unavailable">GIF search isn\'t available right now.</string>
+    <string name="gif_error_rate_limited">Too many searches. Try again in a minute.</string>
+    <string name="gif_error_connection">Couldn\'t load GIFs. Check your connection and try again.</string>
     <string name="compose_publish">Publish</string>
     <string name="compose_publishing">Publishing…</string>
     <string name="compose_uploading">Uploading…</string>
