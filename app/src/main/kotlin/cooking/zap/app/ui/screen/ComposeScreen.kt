@@ -151,7 +151,7 @@ import cooking.zap.app.repo.MentionCandidate
 import cooking.zap.app.repo.ProfileRepository
 import cooking.zap.app.repo.PowPreferences
 import cooking.zap.app.R
-import cooking.zap.app.ui.component.AltTextEditorDialog
+import cooking.zap.app.ui.component.AltTextEditorSheet
 import cooking.zap.app.ui.component.EmojiShortcodePopup
 import cooking.zap.app.ui.component.EmojiVisualTransformation
 import cooking.zap.app.ui.component.MentionOutputTransformation
@@ -266,7 +266,7 @@ fun ComposeScreen(
     var altEditorUrl by remember { mutableStateOf<String?>(null) }
 
     altEditorUrl?.let { url ->
-        AltTextEditorDialog(
+        AltTextEditorSheet(
             url = url,
             initialAlt = altTexts[url] ?: "",
             generation = altGeneration,
@@ -1016,8 +1016,9 @@ fun ComposeScreen(
                             Icon(Icons.Outlined.Image, contentDescription = "Attach media")
                         }
 
-                        // GIF search (Giphy) — not offered in gallery mode, which has its
-                        // own mixing/video-count constraints the GIF pipeline doesn't check.
+                        // GIF search (gifs.nostr.build) — not offered in gallery mode,
+                        // which has its own video-count constraints that a URL-attached
+                        // GIF doesn't participate in.
                         // Wrapped in a 48dp box so it occupies the same slot as the sibling
                         // IconButtons and the row stays evenly spaced.
                         if (!galleryMode) {
@@ -1688,7 +1689,9 @@ fun ComposeScreen(
         if (showGifPicker) {
             cooking.zap.app.ui.component.GifPickerSheet(
                 onSelect = { gif ->
-                    viewModel.uploadGif(gif.downloadUrl, signer)
+                    // Already hosted on a Nostr media host: attach by URL, with the
+                    // GIF's own title seeded as its alt text. Nothing is uploaded.
+                    viewModel.attachGif(gif.url, gif.width, gif.height, gif.title)
                     showGifPicker = false
                 },
                 onDismiss = { showGifPicker = false }

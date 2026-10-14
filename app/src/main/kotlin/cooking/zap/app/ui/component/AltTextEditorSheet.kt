@@ -6,17 +6,21 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -54,8 +58,9 @@ data class AltTextGeneration(
  * action (§4). The generated description is written into the field as an
  * editable draft; nothing publishes sight-unseen.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AltTextEditorDialog(
+fun AltTextEditorSheet(
     url: String,
     initialAlt: String,
     generation: AltTextGeneration?,
@@ -68,9 +73,9 @@ fun AltTextEditorDialog(
     var seenGeneration by remember(url) { mutableStateOf(false) }
 
     // Place a freshly generated description into the field as an editable
-    // draft (never auto-save, never auto-publish). Re-opening the dialog with
+    // draft (never auto-save, never auto-publish). Re-opening the editor with
     // a stale result in flight doesn't re-apply it: [seenGeneration] tracks
-    // the request this dialog instance dispatched.
+    // the request this editor instance dispatched.
     LaunchedEffect(generation?.url, generation?.result) {
         val gen = generation ?: return@LaunchedEffect
         if (gen.url != url) return@LaunchedEffect
@@ -97,73 +102,88 @@ fun AltTextEditorDialog(
         return TextFieldValue(cut, TextRange(cut.length))
     }
 
-    AlertDialog(
+    // A bottom sheet rather than a dialog: the field gets the full width and
+    // the keyboard pushes the sheet up instead of cramping a centered box.
+    ModalBottomSheet(
         onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.cd_add_alt_text)) },
-        text = {
-            Column {
-                AsyncImage(
-                    model = url,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(160.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                )
-                Spacer(Modifier.height(10.dp))
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 16.dp)
+                .imePadding()
+        ) {
+            Text(
+                stringResource(R.string.cd_add_alt_text),
+                style = MaterialTheme.typography.titleMedium
+            )
+            Spacer(Modifier.height(12.dp))
+            AsyncImage(
+                model = url,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(220.dp)
+                    .clip(RoundedCornerShape(12.dp))
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = stringResource(R.string.alt_editor_explainer),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(10.dp))
+            OutlinedTextField(
+                value = field,
+                onValueChange = { field = applyInput(it) },
+                placeholder = { Text(stringResource(R.string.alt_editor_hint)) },
+                minLines = 5,
+                maxLines = 10,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
                 Text(
-                    text = stringResource(R.string.alt_editor_explainer),
-                    style = MaterialTheme.typography.bodySmall,
+                    text = stringResource(
+                        R.string.alt_editor_chars_remaining,
+                        ALT_TEXT_MAX_CHARS - field.text.codePointCount(0, field.text.length)
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
-                    value = field,
-                    onValueChange = { field = applyInput(it) },
-                    placeholder = { Text(stringResource(R.string.alt_editor_hint)) },
-                    minLines = 3,
-                    maxLines = 6,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        text = stringResource(
-                            R.string.alt_editor_chars_remaining,
-                            ALT_TEXT_MAX_CHARS - field.text.codePointCount(0, field.text.length)
-                        ),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.weight(1f))
-                    if (initialAlt.isNotEmpty()) {
-                        TextButton(onClick = { onSave("") }) {
-                            Text(stringResource(R.string.alt_editor_clear))
-                        }
+                Spacer(Modifier.weight(1f))
+                if (initialAlt.isNotEmpty()) {
+                    TextButton(onClick = { onSave("") }) {
+                        Text(stringResource(R.string.alt_editor_clear))
                     }
                 }
-                GenerationRow(
-                    url = url,
-                    generation = generation,
-                    canGenerate = FeatureFlags.ALT_TEXT_AI_ENABLED && url.startsWith("http"),
-                    onGenerate = onGenerate
-                )
             }
-        },
-        confirmButton = {
-            TextButton(onClick = { onSave(field.text) }) {
-                Text(stringResource(R.string.btn_save), fontWeight = FontWeight.SemiBold)
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.btn_cancel))
+            GenerationRow(
+                url = url,
+                generation = generation,
+                canGenerate = FeatureFlags.ALT_TEXT_AI_ENABLED && url.startsWith("http"),
+                onGenerate = onGenerate
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                TextButton(onClick = onDismiss) {
+                    Text(stringResource(R.string.btn_cancel))
+                }
+                TextButton(onClick = { onSave(field.text) }) {
+                    Text(stringResource(R.string.btn_save), fontWeight = FontWeight.SemiBold)
+                }
             }
         }
-    )
+    }
 }
 
 @Composable
@@ -200,7 +220,7 @@ private fun GenerationRow(
             }
         }
         // Generation progress on its own line — inline with the button it
-        // gets crunched inside the dialog's width.
+        // gets crunched inside the editor's width.
         if (running) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,

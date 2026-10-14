@@ -941,34 +941,25 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         }
     }
 
-    /** Downloads a GIF from [url] (e.g. a Giphy search result) and runs it through the
-     * same transcode/upload/insert pipeline as a picked GIF file. */
-    fun uploadGif(url: String, signer: NostrSigner? = null) {
-        viewModelScope.launch {
-            try {
-                _uploadProgress.value = "Uploading..."
-                val (rawBytes, rawMime) = withContext(Dispatchers.IO) {
-                    val request = okhttp3.Request.Builder().url(url).build()
-                    cooking.zap.app.relay.HttpClientFactory.createHttpClient(readTimeoutSeconds = 30)
-                        .newCall(request).execute().use { response ->
-                            if (!response.isSuccessful) throw java.io.IOException("HTTP ${response.code}")
-                            val body = response.body ?: throw java.io.IOException("Empty response")
-                            // Providers may serve WebP/PNG/etc. — trust Content-Type,
-                            // falling back to the URL extension for generic/absent types.
-                            val headerMime = body.contentType()?.let { "${it.type}/${it.subtype}" }
-                            val mime = if (headerMime == null || headerMime == "application/octet-stream") {
-                                mimeFromMediaUrl(url)
-                            } else headerMime
-                            body.bytes() to mime
-                        }
-                }
-                val rawExt = MimeTypeMap.getSingleton().getExtensionFromMimeType(rawMime) ?: "gif"
-                processAndUploadBytes(rawBytes, rawMime, rawExt, signer)
-            } catch (e: Exception) {
-                _error.value = "GIF upload failed: ${e.message}"
-            }
-            _uploadProgress.value = null
+    /**
+     * Attach a picked GIF (a gifs.nostr.build result) by URL — the GIF's
+     * media host is the publisher, so nothing is downloaded, transcoded, or
+     * re-uploaded (frontend PR #827 / Sidecar parity; the old Giphy pipeline
+     * fetched and re-hosted every pick). The GIF's own title seeds the slot's
+     * alt text and its API-reported dimensions seed `dim`; both flow into the
+     * NIP-92 imeta at publish through the shared slot machinery keyed by URL.
+     */
+    fun attachGif(url: String, width: Double, height: Double, title: String) {
+        val sanitized = cooking.zap.app.ui.component.sanitizeAltText(title)
+        if (sanitized != null) {
+            _altTexts.value = _altTexts.value + (url to sanitized)
         }
+        _uploadedMediaMeta[url] = UploadedMediaMeta(
+            mimeType = mimeFromMediaUrl(url),
+            dimensions = if (width > 0 && height > 0) width.toInt() to height.toInt() else null
+        )
+        _uploadedUrls.value = _uploadedUrls.value + url
+        persistUploadsToState()
     }
 
     private fun mimeFromMediaUrl(url: String): String {

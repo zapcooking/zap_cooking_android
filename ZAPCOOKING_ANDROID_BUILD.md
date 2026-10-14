@@ -745,7 +745,7 @@ so every `credentialManager.getCredential()` on this fork failed with
 ### Release signing
 Release builds are signed by Gradle from credentials that live outside
 the repo. Put all four in `local.properties` (already gitignored, and
-already where the Breez and Giphy keys live):
+already where the Breez and gifs.nostr.build keys live):
 
 ```properties
 zapcooking.keystore.path=~/.zapcooking-keys/zap-cooking-release.jks
