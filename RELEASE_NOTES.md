@@ -8,6 +8,8 @@
 
 🏠 Choose your start tab — A new Startup setting under Interface lets you open the app on Feed or Recipes. Feed is now the default.
 
+🎞️ GIFs from nostr.build — The GIF picker now searches gifs.nostr.build, with topic chips to start from, suggestions as you type, and a grid that keeps each GIF's shape. Picked GIFs post as GIFs (no longer converted to video), with their title filled in as alt text. The alt-text editor is also roomier, now opening as a full-width sheet.
+
 🔗 Smarter links — Bare web addresses like zap.cooking are now tappable, including international domains, without swallowing trailing punctuation or mangling email addresses.
 
 🎬 Plus: the screen stays awake while a video plays in your feed, and note details now show what kind of event you're looking at.
