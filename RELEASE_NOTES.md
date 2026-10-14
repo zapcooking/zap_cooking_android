@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.7.0]
+
+🛟 Data recovery — Lost follows, mutes, bookmarks, relay lists or profile details to another app overwriting them? Data recovery finds earlier versions of your lists on relays, shows you exactly what a restore would change, and puts them back with one confirmation.
+
+💬 Complete comment threads — Replies to comments now show up in full, however deep the conversation goes, and replying to a comment keeps it in the same thread. Stray notes that only look like replies no longer clutter threads or inflate reply counts.
+
+🏠 Choose your start tab — A new Startup setting under Interface lets you open the app on Feed or Recipes. Feed is now the default.
+
+🔗 Smarter links — Bare web addresses like zap.cooking are now tappable, including international domains, without swallowing trailing punctuation or mangling email addresses.
+
+🎬 Plus: the screen stays awake while a video plays in your feed, and note details now show what kind of event you're looking at.
+
+
 ## [1.6.0]
 
 📝 Drafts you can trust — Posts you've published no longer come back as drafts, and "Draft saved" only appears when something was actually saved. A restored draft now shows "Continuing your last draft" with a Discard option to start fresh.
