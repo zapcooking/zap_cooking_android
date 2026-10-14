@@ -116,6 +116,24 @@ class GifSearchRepositoryTest {
     }
 
     @Test
+    fun `a malformed or truncated 2xx body reads as a connection problem`() = runBlocking {
+        server.enqueue(MockResponse().setBody("<html>not json</html>"))
+        server.enqueue(
+            MockResponse()
+                .setBody("""{"count": 100, "items": [""")
+                .setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.DISCONNECT_DURING_RESPONSE_BODY)
+        )
+        repeat(2) {
+            try {
+                repo.search("pie")
+                throw AssertionError("expected GifSearchException")
+            } catch (e: GifSearchException) {
+                assertEquals(GifErrorKind.CONNECTION, e.kind)
+            }
+        }
+    }
+
+    @Test
     fun `a missing key reports search unavailable without calling upstream`() = runBlocking {
         val keyless = GifSearchRepository(baseUrl = baseUrl, apiKey = "", client = OkHttpClient())
         try {

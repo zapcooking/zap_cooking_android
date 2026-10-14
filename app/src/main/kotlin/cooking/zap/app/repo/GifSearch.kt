@@ -105,9 +105,13 @@ fun gifFromItem(item: JsonElement?): Gif? {
     val url = obj.string("url")
     val format = obj.string("format")
     if (url == null || !isHttps(url) || format == null || format !in GIF_FORMATS) return null
+    // animated → still, w240 before medium: each candidate URL is checked in
+    // turn, so a w240 without a usable link still falls through to medium.
     val previews = obj["previews"] as? JsonObject
-    val pv = previews?.get("w240") as? JsonObject ?: previews?.get("medium") as? JsonObject
-    val preview = pv?.let { p -> listOfNotNull(p.string("animated"), p.string("still")).firstOrNull(::isHttps) }
+    val preview = listOf("w240", "medium")
+        .mapNotNull { previews?.get(it) as? JsonObject }
+        .flatMap { listOf(it.string("animated"), it.string("still")) }
+        .firstOrNull(::isHttps)
     val width = obj.positiveNumber("width")
     val height = obj.positiveNumber("height")
     if (preview == null || width == null || height == null) return null
@@ -176,9 +180,7 @@ fun shouldLoadMore(loading: Boolean, nextOffset: Int?, lastVisibleIndex: Int, to
 }
 
 /**
- * Whether a page moved the cursor forward. The picker re-checks the bottom
- * only then, so a page of duplicates (which doesn't grow the grid and so
- * fires no scroll event) can't stall paging, and a cursor that doesn't move
- * can't loop.
+ * Whether a page moved the cursor forward. The picker keeps paging only then,
+ * so a cursor that doesn't move can't loop on the same page.
  */
 fun pageAdvanced(offset: Int, next: Int?): Boolean = next != null && next > offset

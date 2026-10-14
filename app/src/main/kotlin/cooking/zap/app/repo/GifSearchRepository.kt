@@ -4,6 +4,7 @@ import cooking.zap.app.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import okhttp3.Call
@@ -80,8 +81,16 @@ class GifSearchRepository(
         }
         response.use {
             if (!it.isSuccessful) throw GifSearchException(gifErrorKind(it.code))
-            val text = it.body?.string() ?: return@withContext null
-            json.parseToJsonElement(text)
+            // A body cut off mid-read or a 2xx that isn't JSON fails the same
+            // way a dropped connection does — never as a raw exception.
+            try {
+                val text = it.body?.string() ?: return@withContext null
+                json.parseToJsonElement(text)
+            } catch (e: IOException) {
+                throw GifSearchException(GifErrorKind.CONNECTION, e)
+            } catch (e: SerializationException) {
+                throw GifSearchException(GifErrorKind.CONNECTION, e)
+            }
         }
     }
 

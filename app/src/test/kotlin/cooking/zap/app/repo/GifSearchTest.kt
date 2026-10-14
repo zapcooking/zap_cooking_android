@@ -123,6 +123,18 @@ class GifSearchTest {
     }
 
     @Test
+    fun `falls back to the medium preview when the w240 has no usable link`() {
+        val medium = gifFromItem(
+            itemWith(
+                "previews" to json(
+                    """{"w240": {"animated": "http://p/x.webp"}, "medium": {"animated": "https://p/m.webp"}}"""
+                )
+            )
+        )
+        assertEquals("https://p/m.webp", medium?.preview)
+    }
+
+    @Test
     fun `rejects anything that cannot go into a note as it is`() {
         val bad = listOf(
             itemWith("url" to str("http://image.nostr.build/aa.gif")),

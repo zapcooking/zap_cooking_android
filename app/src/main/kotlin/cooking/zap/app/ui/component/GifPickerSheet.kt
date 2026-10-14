@@ -40,7 +40,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -118,47 +118,55 @@ fun GifPickerSheet(
     var searchJob by remember { mutableStateOf<Job?>(null) }
     var suggestJob by remember { mutableStateOf<Job?>(null) }
     var typingJob by remember { mutableStateOf<Job?>(null) }
+    var pageJob by remember { mutableStateOf<Job?>(null) }
 
     val gridState = rememberLazyStaggeredGridState()
 
     suspend fun load(q: String, offset: Int, gen: Int) {
         loading = true
-        var advanced = false
         try {
             val page = repo.search(q, offset)
             if (gen != generation) return
             val fresh = page.gifs.filter { seen.add(it.url) }
             gifs = gifs + fresh
-            nextOffset = page.next
+            // A cursor that doesn't move would ask for the same page forever.
+            nextOffset = page.next?.takeIf { pageAdvanced(offset, it) }
             status = if (offset == 0 && page.gifs.isEmpty()) {
                 GifPickerStatus.NoResults(q)
             } else {
                 GifPickerStatus.Quiet
             }
-            advanced = pageAdvanced(offset, page.next)
         } catch (e: CancellationException) {
             throw e
         } catch (e: GifSearchException) {
-            if (gen == generation) status = GifPickerStatus.Failed(e.kind)
+            if (gen == generation) {
+                status = GifPickerStatus.Failed(e.kind)
+                // Stop paging: the bottom check would otherwise retry the
+                // failed page in a loop. A new search starts over.
+                nextOffset = null
+            }
         } finally {
             if (gen == generation) loading = false
         }
-        // A page of duplicates or rejected items doesn't grow the grid, so no
-        // scroll event follows: check the bottom again once it has the items.
-        if (advanced && gen == generation && nextOffset != null) {
-            withFrameNanos { }
-            val info = gridState.layoutInfo
-            val last = info.visibleItemsInfo.lastOrNull()?.index ?: -1
-            if (shouldLoadMore(false, nextOffset, last, info.totalItemsCount)) {
-                load(q, nextOffset!!, gen)
-            }
-        }
+    }
+
+    // The one way a next page loads — scroll and the post-load recheck both
+    // come through here, so page requests never run in parallel. It runs in
+    // the sheet's scope, not the effect's, so a recomposition can't cancel it.
+    fun loadNextPage() {
+        if (loading || pageJob?.isActive == true || searchJob?.isActive == true) return
+        val offset = nextOffset ?: return
+        val gen = generation
+        val q = query.trim()
+        pageJob = scope.launch { load(q, offset, gen) }
     }
 
     fun submitSearch(q: String) {
         generation++
         val gen = generation
         searchJob?.cancel()
+        pageJob?.cancel()
+        pageJob = null
         seen.clear()
         gifs = emptyList()
         nextOffset = null
@@ -206,19 +214,20 @@ fun GifPickerSheet(
         submitSearch(q)
     }
 
-    // Load the next page near the bottom of the grid.
+    // Load the next page near the bottom of the grid. The bottom check doesn't
+    // read `loading`, so starting a load never restarts this effect; `loading`
+    // is in the flow only so the check runs again when a page lands — a page of
+    // duplicates or rejected items doesn't grow the grid or fire a scroll event.
     val nearBottom by remember(gridState) {
         derivedStateOf {
             val info = gridState.layoutInfo
             val last = info.visibleItemsInfo.lastOrNull()?.index ?: -1
-            shouldLoadMore(loading, nextOffset, last, info.totalItemsCount)
+            shouldLoadMore(false, nextOffset, last, info.totalItemsCount)
         }
     }
-    LaunchedEffect(nearBottom) {
-        if (nearBottom && !loading) {
-            val offset = nextOffset
-            if (offset != null) load(query.trim(), offset, generation)
-        }
+    LaunchedEffect(gridState) {
+        snapshotFlow { nearBottom to loading }
+            .collect { (near, busy) -> if (near && !busy) loadNextPage() }
     }
 
     ModalBottomSheet(
