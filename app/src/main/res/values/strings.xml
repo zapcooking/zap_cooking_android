@@ -495,6 +495,7 @@
 
     <!-- Poll -->
     <string name="poll_option">Option %d</string>
+    <string name="poll_compat_note">On clients that don\'t display polls, this post won\'t be visible.</string>
     <string name="poll_add_option">+ Add option</string>
     <string name="poll_single_choice">Single choice</string>
     <string name="poll_multiple_choice">Multiple choice</string>
@@ -1485,7 +1486,7 @@
     <string name="alt_chip_saved">✓ALT</string>
     <string name="cd_add_alt_text">Add alt text</string>
     <string name="cd_edit_alt_text">Edit image description</string>
-    <string name="alt_editor_explainer">A short description makes your photo accessible to screen reader users — and gives everyone context if the image doesn\'t load.</string>
+    <string name="alt_editor_explainer">A short description helps screen reader users and gives context to everyone.</string>
     <string name="alt_editor_hint">Describe this image…</string>
     <string name="alt_editor_chars_remaining">%1$d remaining</string>
     <string name="alt_editor_clear">Clear description</string>
