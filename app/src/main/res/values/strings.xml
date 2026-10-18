@@ -160,6 +160,16 @@
     <string name="gif_error_rate_limited">Too many searches. Try again in a minute.</string>
     <string name="gif_error_connection">Couldn\'t load GIFs. Check your connection and try again.</string>
     <string name="compose_publish">Publish</string>
+    <!-- Composer secondary panel ("More options"): everything nonessential -->
+    <string name="compose_more_options">More options</string>
+    <string name="compose_more_nsfw">Mark as NSFW</string>
+    <string name="compose_more_pow">Proof of Work</string>
+    <string name="compose_more_schedule">Schedule post</string>
+    <string name="compose_more_private_reply">Private reply</string>
+    <string name="compose_more_save_draft">Save draft</string>
+    <string name="compose_more_on">On</string>
+    <string name="compose_scheduled_for">Scheduled for %1$s</string>
+    <string name="cd_add_poll">Add poll</string>
     <string name="compose_publishing">Publishing…</string>
     <string name="compose_uploading">Uploading…</string>
     <string name="compose_mining">Mining in progress…</string>
