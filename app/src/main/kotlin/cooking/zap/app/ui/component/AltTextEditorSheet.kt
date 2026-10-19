@@ -145,8 +145,12 @@ fun AltTextEditorSheet(
                 maxLines = 10,
                 modifier = Modifier.fillMaxWidth()
             )
+            // The outlined field carries its own bottom padding; a small gap
+            // here keeps the visual rhythm even with the 10dp gaps above.
+            Spacer(Modifier.height(2.dp))
             Row(
                 verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(
@@ -158,23 +162,38 @@ fun AltTextEditorSheet(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.weight(1f))
+                if (FeatureFlags.ALT_TEXT_AI_ENABLED && url.startsWith("http")) {
+                    val running = generation?.url == url && generation.running
+                    TextButton(onClick = onGenerate, enabled = !running) {
+                        Text(stringResource(R.string.alt_generate_with_ai))
+                    }
+                    // Cook+ badge — the action is membership-gated server-side (fails closed).
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer
+                    ) {
+                        Text(
+                            text = stringResource(R.string.alt_cookplus_badge),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                        )
+                    }
+                }
+            }
+            GenerationStatus(url = url, generation = generation)
+            Spacer(Modifier.height(8.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
                 if (initialAlt.isNotEmpty()) {
                     TextButton(onClick = { onSave("") }) {
                         Text(stringResource(R.string.alt_editor_clear))
                     }
                 }
-            }
-            GenerationRow(
-                url = url,
-                generation = generation,
-                canGenerate = FeatureFlags.ALT_TEXT_AI_ENABLED && url.startsWith("http"),
-                onGenerate = onGenerate
-            )
-            Spacer(Modifier.height(8.dp))
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
-                modifier = Modifier.fillMaxWidth()
-            ) {
+                Spacer(Modifier.weight(1f))
                 TextButton(onClick = onDismiss) {
                     Text(stringResource(R.string.btn_cancel))
                 }
@@ -187,58 +206,27 @@ fun AltTextEditorSheet(
 }
 
 @Composable
-private fun GenerationRow(
-    url: String,
-    generation: AltTextGeneration?,
-    canGenerate: Boolean,
-    onGenerate: () -> Unit
-) {
-    if (!canGenerate) return
-    val running = generation?.url == url && generation.running
-    val result = generation?.takeIf { it.url == url && !it.running }?.result
-
-    Column {
+private fun GenerationStatus(url: String, generation: AltTextGeneration?) {
+    // Generation progress on its own line — inline with the row above it gets
+    // crunched inside the editor's width.
+    if (generation?.url == url && generation.running) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 4.dp, top = 2.dp)
         ) {
-            TextButton(onClick = onGenerate, enabled = !running) {
-                Text(stringResource(R.string.alt_generate_with_ai))
-            }
-            // Cook+ badge — the action is membership-gated server-side (fails closed).
-            Surface(
-                shape = RoundedCornerShape(4.dp),
-                color = MaterialTheme.colorScheme.primaryContainer
-            ) {
-                Text(
-                    text = stringResource(R.string.alt_cookplus_badge),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
-                )
-            }
-        }
-        // Generation progress on its own line — inline with the button it
-        // gets crunched inside the editor's width.
-        if (running) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 4.dp, top = 2.dp)
-            ) {
-                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-                Text(
-                    text = stringResource(R.string.alt_generating),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+            Text(
+                text = stringResource(R.string.alt_generating),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 
+    val result = generation?.takeIf { it.url == url && !it.running }?.result
     val errorMessage = when (result) {
         is AltTextResult.NotMember -> stringResource(R.string.alt_error_upsell)
         is AltTextResult.RateLimited -> stringResource(R.string.alt_error_rate_limited)
