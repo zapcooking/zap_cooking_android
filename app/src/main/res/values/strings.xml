@@ -495,6 +495,17 @@
 
     <!-- Poll -->
     <string name="poll_option">Option %d</string>
+    <string name="tag_row_hint">Tap a tag so this shows up in OnlyFood.</string>
+    <string name="tag_count_label">%1$d/%2$d tags</string>
+    <string name="tag_picker_hint">Any of these puts the note in OnlyFood.</string>
+    <string name="tag_picker_search_hint">Search food tags</string>
+    <string name="tag_picker_popular">Popular</string>
+    <string name="tag_picker_all">All food tags</string>
+    <string name="tag_picker_more">+</string>
+    <string name="tag_picker_empty">No food tag matches \"%1$s\". You can still type it in the note, but it won\'t reach OnlyFood.</string>
+    <string name="tag_confirm_title">No food tag yet</string>
+    <string name="tag_confirm_add_default">Add #foodstr</string>
+    <string name="tag_confirm_post_anyway">Post anyway</string>
     <string name="poll_compat_note">On clients that don\'t display polls, this post won\'t be visible.</string>
     <string name="poll_add_option">+ Add option</string>
     <string name="poll_single_choice">Single choice</string>

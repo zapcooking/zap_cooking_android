@@ -75,6 +75,7 @@ import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Tag
 import androidx.compose.material.icons.outlined.Videocam
 import androidx.compose.material.icons.outlined.Warning
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -146,6 +147,7 @@ import cooking.zap.app.nostr.Nip19
 import cooking.zap.app.nostr.toNpub
 import cooking.zap.app.nostr.Nip88
 import cooking.zap.app.nostr.NostrEvent
+import cooking.zap.app.nostr.OnlyFoodCompose
 import cooking.zap.app.relay.RelayPool
 import cooking.zap.app.repo.EventRepository
 import cooking.zap.app.repo.MentionCandidate
@@ -153,6 +155,7 @@ import cooking.zap.app.repo.ProfileRepository
 import cooking.zap.app.repo.PowPreferences
 import cooking.zap.app.R
 import cooking.zap.app.ui.component.AltTextEditorSheet
+import cooking.zap.app.ui.component.FoodTagPickerSheet
 import cooking.zap.app.ui.component.ComposerMoreSheet
 import cooking.zap.app.ui.component.EmojiShortcodePopup
 import cooking.zap.app.ui.component.EmojiVisualTransformation
@@ -233,6 +236,9 @@ fun ComposeScreen(
 ) {
     val content by viewModel.content.collectAsState()
     val publishing by viewModel.publishing.collectAsState()
+    val foodTagSuggestions by viewModel.foodTagSuggestions.collectAsState()
+    var showFoodTagPicker by remember { mutableStateOf(false) }
+    var showFoodTagConfirm by remember { mutableStateOf(false) }
     val restoredDraft by viewModel.restoredDraft.collectAsState()
     val error by viewModel.error.collectAsState()
     val uploadedUrls by viewModel.uploadedUrls.collectAsState()
@@ -282,6 +288,70 @@ fun ComposeScreen(
             onDismiss = {
                 altEditorUrl = null
                 viewModel.consumeAltGeneration()
+            }
+        )
+    }
+
+    if (showFoodTagPicker) {
+        FoodTagPickerSheet(
+            tagCount = viewModel.foodTagCount,
+            overCap = viewModel.foodTagsOverCap,
+            isSelected = viewModel::isFoodTagSelected,
+            atCap = viewModel.foodTagsAtCap,
+            onToggle = { viewModel.toggleFoodTag(it) },
+            onDismiss = { showFoodTagPicker = false }
+        )
+    }
+
+    // OnlyFood publish confirm: "Add #foodstr" is a tap, so nothing is
+    // added on its own. At the cap the tag can't be added (the toggle is a
+    // no-op), so the one-tap fix is not offered; the user has to free a slot.
+    if (showFoodTagConfirm) {
+        AlertDialog(
+            onDismissRequest = { showFoodTagConfirm = false },
+            title = { Text(stringResource(R.string.tag_confirm_title)) },
+            text = { Text(OnlyFoodCompose.noFoodTagMessage(content.text, hashtags)) },
+            dismissButton = {
+                if (!viewModel.foodTagsAtCap) {
+                    TextButton(onClick = {
+                        showFoodTagConfirm = false
+                        if (viewModel.toggleFoodTag(OnlyFoodCompose.DEFAULT_TAG)) {
+                            viewModel.publish(
+                                relayPool = relayPool,
+                                replyTo = replyTo,
+                                quoteTo = quoteTo,
+                                onSuccess = { onBack() },
+                                outboxRouter = outboxRouter,
+                                signer = signer,
+                                onNotePublished = onNotePublished,
+                                powManager = powManager,
+                                powPrefs = powPrefs,
+                                resolvedEmojis = resolvedEmojis
+                            )
+                        }
+                    }) {
+                        Text(stringResource(R.string.tag_confirm_add_default))
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showFoodTagConfirm = false
+                    viewModel.publish(
+                        relayPool = relayPool,
+                        replyTo = replyTo,
+                        quoteTo = quoteTo,
+                        onSuccess = { onBack() },
+                        outboxRouter = outboxRouter,
+                        signer = signer,
+                        onNotePublished = onNotePublished,
+                        powManager = powManager,
+                        powPrefs = powPrefs,
+                        resolvedEmojis = resolvedEmojis
+                    )
+                }) {
+                    Text(stringResource(R.string.tag_confirm_post_anyway))
+                }
             }
         )
     }
@@ -853,6 +923,23 @@ fun ComposeScreen(
                             }
                         }
                     )
+
+                    // OnlyFood tag pills (iOS parity, wisp #83/#92/#98): shown
+                    // when the composer was opened from the OnlyFood feed, so
+                    // the author can tag the note into the feed they're
+                    // writing from. The body text stays the source of truth —
+                    // a pill toggle appends/removes the `#tag` token.
+                    if (!galleryMode && foodTagSuggestions) {
+                        FoodTagSuggestionRow(
+                            hashtags = hashtags,
+                            count = viewModel.foodTagCount,
+                            atCap = viewModel.foodTagsAtCap,
+                            overCap = viewModel.foodTagsOverCap,
+                            isSelected = viewModel::isFoodTagSelected,
+                            onToggle = { viewModel.toggleFoodTag(it) },
+                            onOpenPicker = { showFoodTagPicker = true }
+                        )
+                    }
 
                     // Pasted-link offers, above the attachments section: every
                     // URL on a URL-only line becomes an attachment slot on tap
@@ -1532,18 +1619,25 @@ fun ComposeScreen(
                 } else {
                     Button(
                         onClick = {
-                            viewModel.publish(
-                                relayPool = relayPool,
-                                replyTo = replyTo,
-                                quoteTo = quoteTo,
-                                onSuccess = { onBack() },
-                                outboxRouter = outboxRouter,
-                                signer = signer,
-                                onNotePublished = onNotePublished,
-                                powManager = powManager,
-                                powPrefs = powPrefs,
-                                resolvedEmojis = resolvedEmojis
-                            )
+                            // OnlyFood parity: composing from that feed with
+                            // no food tag would post a note that never shows
+                            // up there — ask first (one tap adds #foodstr).
+                            if (viewModel.needsFoodTagConfirm) {
+                                showFoodTagConfirm = true
+                            } else {
+                                viewModel.publish(
+                                    relayPool = relayPool,
+                                    replyTo = replyTo,
+                                    quoteTo = quoteTo,
+                                    onSuccess = { onBack() },
+                                    outboxRouter = outboxRouter,
+                                    signer = signer,
+                                    onNotePublished = onNotePublished,
+                                    powManager = powManager,
+                                    powPrefs = powPrefs,
+                                    resolvedEmojis = resolvedEmojis
+                                )
+                            }
                         },
                         // Publish gating (iOS parity, wisp #567): mirrors publish()'s
                         // validation — gallery posts need an upload (caption optional),
@@ -2252,6 +2346,71 @@ private fun AttachmentSummaryDrawer(urls: List<String>) {
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * The OnlyFood composer's tag pills (iOS parity, wisp #83/#92/#98): a hint
+ * line with the structural tag count, then one scrollable row of chips —
+ * selected food tags pinned first (so a tag from the picker or the keyboard
+ * is never hidden), then the fixed suggested set, then a trailing "+" that
+ * opens the full food-tag picker. Selected chips read filled; at the cap
+ * the unselected chips disable.
+ */
+@Composable
+private fun FoodTagSuggestionRow(
+    hashtags: List<String>,
+    count: Int,
+    atCap: Boolean,
+    overCap: Boolean,
+    isSelected: (String) -> Boolean,
+    onToggle: (String) -> Unit,
+    onOpenPicker: () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = stringResource(R.string.tag_row_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = stringResource(R.string.tag_count_label, count, OnlyFoodCompose.MAX_TAGS),
+                style = MaterialTheme.typography.labelSmall,
+                color = if (overCap) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 6.dp)
+                .horizontalScroll(rememberScrollState())
+        ) {
+            OnlyFoodCompose.rowOrder(hashtags).forEach { tag ->
+                val selected = isSelected(tag)
+                FilterChip(
+                    selected = selected,
+                    onClick = { onToggle(tag) },
+                    enabled = selected || !atCap,
+                    label = { Text("#$tag") }
+                )
+            }
+            // The trailing "+": outlined like an unselected chip, so it reads
+            // as one more thing to tap.
+            FilterChip(
+                selected = false,
+                onClick = onOpenPicker,
+                label = { Text(stringResource(R.string.tag_picker_more)) }
+            )
         }
     }
 }
