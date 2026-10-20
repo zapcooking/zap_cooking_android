@@ -4205,6 +4205,7 @@ fun WispNavHost(
             val liveZapVersion by feedViewModel.eventRepo.zapVersion.collectAsState()
             val liveZapInProgress by feedViewModel.zapInProgress.collectAsState()
             val liveStreamZapTotal by liveStreamViewModel.streamZapTotal.collectAsState()
+            val liveStreamZapTotalUncertain by liveStreamViewModel.streamZapTotalUncertain.collectAsState()
             var liveZapAnimatingIds by remember { mutableStateOf(emptySet<String>()) }
             var liveZapTarget by remember { mutableStateOf<NostrEvent?>(null) }
             var liveZapRecipientOverride by remember { mutableStateOf<String?>(null) }
@@ -4318,6 +4319,7 @@ fun WispNavHost(
                     }
                 },
                 streamZapTotal = liveStreamZapTotal,
+                streamZapTotalUncertain = liveStreamZapTotalUncertain,
                 streamActivityEventId = streamActivityEventId,
                 zapVersion = liveZapVersion,
                 zapAnimatingIds = liveZapAnimatingIds,
