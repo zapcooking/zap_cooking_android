@@ -3,6 +3,8 @@ package cooking.zap.app
 import android.content.Intent
 import android.os.SystemClock
 import androidx.activity.compose.BackHandler
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
@@ -1130,6 +1132,11 @@ fun WispNavHost(
         }
     }
 
+    // Feed chrome auto-hide: the bottom bar collapses while scrolling the feed
+    // down; every other route always shows it.
+    val barsVisible by feedViewModel.barsVisible.collectAsState()
+    val bottomBarVisible = currentRoute != Routes.FEED || barsVisible
+
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         bottomBar = {
@@ -1141,6 +1148,10 @@ fun WispNavHost(
                 )
                 FloatingAudioPlayer()
                 if (showBottomBar) {
+                    HorizontalDivider(
+                        thickness = 0.5.dp,
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                    )
                     WispBottomBar(
                         currentRoute = currentRoute,
                         hasUnreadHome = newNoteCount > 0,
@@ -1151,6 +1162,7 @@ fun WispNavHost(
                         isReplyAnimating = isReplyAnimating,
                         notifSoundEnabled = notifSoundEnabled,
                         isReadOnly = signingMode == SigningMode.READ_ONLY,
+                        barVisible = bottomBarVisible,
                         onTabSelected = { tab ->
                             if (currentRoute == tab.route) {
                                 scrollToTopTrigger++
