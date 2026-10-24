@@ -1393,6 +1393,12 @@ fun WispNavHost(
                         replyTarget = null
                         quoteTarget = null
                         composeViewModel.clear()
+                        // OnlyFood compose context (iOS parity): the composer
+                        // offers food-tag pills so the note reaches the feed
+                        // it was written from. Other feeds: plain composer.
+                        composeViewModel.setFoodTagSuggestions(
+                            feedViewModel.feedType.value == FeedType.ONLY_FOOD
+                        )
                         navController.navigate(Routes.COMPOSE)
                     }
                 },

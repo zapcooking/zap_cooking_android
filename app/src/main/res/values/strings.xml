@@ -160,6 +160,16 @@
     <string name="gif_error_rate_limited">Too many searches. Try again in a minute.</string>
     <string name="gif_error_connection">Couldn\'t load GIFs. Check your connection and try again.</string>
     <string name="compose_publish">Publish</string>
+    <!-- Composer secondary panel ("More options"): everything nonessential -->
+    <string name="compose_more_options">More options</string>
+    <string name="compose_more_nsfw">Mark as NSFW</string>
+    <string name="compose_more_pow">Proof of Work</string>
+    <string name="compose_more_schedule">Schedule post</string>
+    <string name="compose_more_private_reply">Private reply</string>
+    <string name="compose_more_save_draft">Save draft</string>
+    <string name="compose_more_on">On</string>
+    <string name="compose_scheduled_for">Scheduled for %1$s</string>
+    <string name="cd_add_poll">Add poll</string>
     <string name="compose_publishing">Publishing…</string>
     <string name="compose_uploading">Uploading…</string>
     <string name="compose_mining">Mining in progress…</string>
@@ -485,6 +495,18 @@
 
     <!-- Poll -->
     <string name="poll_option">Option %d</string>
+    <string name="tag_row_hint">Tap a tag so this shows up in OnlyFood.</string>
+    <string name="tag_count_label">%1$d/%2$d tags</string>
+    <string name="tag_picker_hint">Any of these puts the note in OnlyFood.</string>
+    <string name="tag_picker_search_hint">Search food tags</string>
+    <string name="tag_picker_popular">Popular</string>
+    <string name="tag_picker_all">All food tags</string>
+    <string name="tag_picker_more">+</string>
+    <string name="tag_picker_empty">No food tag matches \"%1$s\". You can still type it in the note, but it won\'t reach OnlyFood.</string>
+    <string name="tag_confirm_title">No food tag yet</string>
+    <string name="tag_confirm_add_default">Add #foodstr</string>
+    <string name="tag_confirm_post_anyway">Post anyway</string>
+    <string name="poll_compat_note">On clients that don\'t display polls, this post won\'t be visible.</string>
     <string name="poll_add_option">+ Add option</string>
     <string name="poll_single_choice">Single choice</string>
     <string name="poll_multiple_choice">Multiple choice</string>
@@ -1475,7 +1497,7 @@
     <string name="alt_chip_saved">✓ALT</string>
     <string name="cd_add_alt_text">Add alt text</string>
     <string name="cd_edit_alt_text">Edit image description</string>
-    <string name="alt_editor_explainer">A short description makes your photo accessible to screen reader users — and gives everyone context if the image doesn\'t load.</string>
+    <string name="alt_editor_explainer">A short description helps screen reader users and gives context to everyone.</string>
     <string name="alt_editor_hint">Describe this image…</string>
     <string name="alt_editor_chars_remaining">%1$d remaining</string>
     <string name="alt_editor_clear">Clear description</string>

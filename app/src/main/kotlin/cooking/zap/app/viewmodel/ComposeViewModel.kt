@@ -27,6 +27,7 @@ import cooking.zap.app.nostr.Nip68
 import cooking.zap.app.nostr.Nip71
 import cooking.zap.app.nostr.Nip69
 import cooking.zap.app.nostr.Nip88
+import cooking.zap.app.nostr.OnlyFoodCompose
 import cooking.zap.app.nostr.NostrEvent
 import cooking.zap.app.nostr.NostrSigner
 import cooking.zap.app.nostr.toHex
@@ -342,6 +343,55 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
 
     private val _hashtags = MutableStateFlow<List<String>>(emptyList())
     val hashtags: StateFlow<List<String>> = _hashtags
+
+    /** OnlyFood compose context: the food-tag suggestion row shows when the
+     *  composer was opened from the OnlyFood feed (parity with iOS's
+     *  `suggestedHashtags`). The note text stays the single source of truth
+     *  for which tags are selected. */
+    private val _foodTagSuggestions = MutableStateFlow(false)
+    val foodTagSuggestions: StateFlow<Boolean> = _foodTagSuggestions
+
+    fun setFoodTagSuggestions(enabled: Boolean) {
+        _foodTagSuggestions.value = enabled
+    }
+
+    /** Selected → remove every `#tag` token from the body. Unselected →
+     *  append it, unless the note is already at the filter's tag cap (no-op;
+     *  the pill is disabled in the row, this is the guard behind it). Goes
+     *  through [updateContent] so the derived hashtags and `t` tags
+     *  re-derive. Returns false only for that no-op, so a caller that then
+     *  publishes can tell. */
+    fun toggleFoodTag(tag: String): Boolean {
+        val current = _content.value
+        val next = if (isFoodTagSelected(tag)) {
+            OnlyFoodCompose.removing(tag, content = current.text)
+        } else {
+            if (foodTagsAtCap) return false
+            OnlyFoodCompose.appending(tag, content = current.text)
+        }
+        updateContent(TextFieldValue(next, TextRange(next.length)))
+        return true
+    }
+
+    fun isFoodTagSelected(tag: String): Boolean =
+        _hashtags.value.any { it.equals(tag, ignoreCase = true) }
+
+    /** The structural count the OnlyFood filter applies to this body. */
+    val foodTagCount: Int
+        get() = OnlyFoodCompose.tagCount(_content.value.text, _hashtags.value)
+
+    val foodTagsAtCap: Boolean
+        get() = OnlyFoodCompose.atCap(_content.value.text, _hashtags.value)
+
+    val foodTagsOverCap: Boolean
+        get() = OnlyFoodCompose.overCap(_content.value.text, _hashtags.value)
+
+    /** Composed from OnlyFood (suggestions shown) and nothing in the body is
+     *  a food tag: the note would not appear in the feed it was written
+     *  from. The composer asks before publishing; "Add #foodstr" is a tap,
+     *  so nothing is added on its own. */
+    val needsFoodTagConfirm: Boolean
+        get() = _foodTagSuggestions.value && !OnlyFoodCompose.reachesOnlyFood(_hashtags.value)
 
     private val _explicit = MutableStateFlow(false)
     val explicit: StateFlow<Boolean> = _explicit
@@ -1812,6 +1862,9 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
     /** Open [draft] from the Drafts list — a new editor session. */
     fun loadDraft(draft: Nip37.Draft) {
         composeSession++
+        // Drafts are opened from the Drafts screen, not the OnlyFood feed —
+        // drop any compose-context flag a previous composer session left.
+        _foodTagSuggestions.value = false
         applyLoadedDraft(draft)
     }
 
@@ -2354,6 +2407,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         _uploadProgress.value = null
         _explicit.value = false
         _hashtags.value = emptyList()
+        _foodTagSuggestions.value = false
         _powEnabled.value = false
         _privateReply.value = false
         _privateReplyLocked.value = false

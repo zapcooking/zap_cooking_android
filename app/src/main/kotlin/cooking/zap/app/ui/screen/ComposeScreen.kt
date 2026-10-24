@@ -65,7 +65,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.BarChart
-import androidx.compose.material.icons.outlined.VisibilityOff
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.PhotoLibrary
@@ -74,6 +75,7 @@ import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Tag
 import androidx.compose.material.icons.outlined.Videocam
 import androidx.compose.material.icons.outlined.Warning
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -145,6 +147,7 @@ import cooking.zap.app.nostr.Nip19
 import cooking.zap.app.nostr.toNpub
 import cooking.zap.app.nostr.Nip88
 import cooking.zap.app.nostr.NostrEvent
+import cooking.zap.app.nostr.OnlyFoodCompose
 import cooking.zap.app.relay.RelayPool
 import cooking.zap.app.repo.EventRepository
 import cooking.zap.app.repo.MentionCandidate
@@ -152,6 +155,8 @@ import cooking.zap.app.repo.ProfileRepository
 import cooking.zap.app.repo.PowPreferences
 import cooking.zap.app.R
 import cooking.zap.app.ui.component.AltTextEditorSheet
+import cooking.zap.app.ui.component.FoodTagPickerSheet
+import cooking.zap.app.ui.component.ComposerMoreSheet
 import cooking.zap.app.ui.component.EmojiShortcodePopup
 import cooking.zap.app.ui.component.EmojiVisualTransformation
 import cooking.zap.app.ui.component.MentionOutputTransformation
@@ -231,6 +236,9 @@ fun ComposeScreen(
 ) {
     val content by viewModel.content.collectAsState()
     val publishing by viewModel.publishing.collectAsState()
+    val foodTagSuggestions by viewModel.foodTagSuggestions.collectAsState()
+    var showFoodTagPicker by remember { mutableStateOf(false) }
+    var showFoodTagConfirm by remember { mutableStateOf(false) }
     val restoredDraft by viewModel.restoredDraft.collectAsState()
     val error by viewModel.error.collectAsState()
     val uploadedUrls by viewModel.uploadedUrls.collectAsState()
@@ -284,6 +292,70 @@ fun ComposeScreen(
         )
     }
 
+    if (showFoodTagPicker) {
+        FoodTagPickerSheet(
+            tagCount = viewModel.foodTagCount,
+            overCap = viewModel.foodTagsOverCap,
+            isSelected = viewModel::isFoodTagSelected,
+            atCap = viewModel.foodTagsAtCap,
+            onToggle = { viewModel.toggleFoodTag(it) },
+            onDismiss = { showFoodTagPicker = false }
+        )
+    }
+
+    // OnlyFood publish confirm: "Add #foodstr" is a tap, so nothing is
+    // added on its own. At the cap the tag can't be added (the toggle is a
+    // no-op), so the one-tap fix is not offered; the user has to free a slot.
+    if (showFoodTagConfirm) {
+        AlertDialog(
+            onDismissRequest = { showFoodTagConfirm = false },
+            title = { Text(stringResource(R.string.tag_confirm_title)) },
+            text = { Text(OnlyFoodCompose.noFoodTagMessage(content.text, hashtags)) },
+            dismissButton = {
+                if (!viewModel.foodTagsAtCap) {
+                    TextButton(onClick = {
+                        showFoodTagConfirm = false
+                        if (viewModel.toggleFoodTag(OnlyFoodCompose.DEFAULT_TAG)) {
+                            viewModel.publish(
+                                relayPool = relayPool,
+                                replyTo = replyTo,
+                                quoteTo = quoteTo,
+                                onSuccess = { onBack() },
+                                outboxRouter = outboxRouter,
+                                signer = signer,
+                                onNotePublished = onNotePublished,
+                                powManager = powManager,
+                                powPrefs = powPrefs,
+                                resolvedEmojis = resolvedEmojis
+                            )
+                        }
+                    }) {
+                        Text(stringResource(R.string.tag_confirm_add_default))
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showFoodTagConfirm = false
+                    viewModel.publish(
+                        relayPool = relayPool,
+                        replyTo = replyTo,
+                        quoteTo = quoteTo,
+                        onSuccess = { onBack() },
+                        outboxRouter = outboxRouter,
+                        signer = signer,
+                        onNotePublished = onNotePublished,
+                        powManager = powManager,
+                        powPrefs = powPrefs,
+                        resolvedEmojis = resolvedEmojis
+                    )
+                }) {
+                    Text(stringResource(R.string.tag_confirm_post_anyway))
+                }
+            }
+        )
+    }
+
     LaunchedEffect(replyTo) {
         viewModel.configureForReply(replyTo)
     }
@@ -295,6 +367,9 @@ fun ComposeScreen(
     var showTimePicker by remember { mutableStateOf(false) }
     var pendingDateMillis by remember { mutableStateOf<Long?>(null) }
     var showGifPicker by remember { mutableStateOf(false) }
+    // Secondary panel: NSFW / PoW / schedule / private reply / draft live here
+    // instead of crowding the attach row (composer redesign, Oct 2026).
+    var showMoreSheet by remember { mutableStateOf(false) }
 
     val density = LocalDensity.current
     val imeVisible = WindowInsets.ime.getBottom(density) > 0
@@ -479,58 +554,43 @@ fun ComposeScreen(
                         maxLines = 8
                     )
 
-                    // Toolbar row: NSFW, PoW, Schedule only
+                    // Toolbar row, redesigned: photo picker + secondary panel
+                    // (gallery redesign, Oct 2026). NSFW/PoW/schedule live in the
+                    // sheet now.
                     Spacer(Modifier.height(4.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconButton(onClick = {
-                            val nextState = !explicit
-                            viewModel.toggleExplicit()
-                            android.widget.Toast.makeText(context, "NSFW ${if (nextState) "ON" else "OFF"}", android.widget.Toast.LENGTH_SHORT).show()
-                        }) {
-                            Icon(
-                                Icons.Outlined.Warning,
-                                contentDescription = "Mark as explicit",
-                                tint = if (explicit) MaterialTheme.colorScheme.error
-                                       else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-
-                        IconButton(onClick = {
-                            val prefs = powPrefs
-                            if (prefs != null) {
-                                val nextState = !powEnabled
-                                viewModel.togglePow(prefs)
-                                android.widget.Toast.makeText(context, "Mining ${if (nextState) "ON" else "OFF"}", android.widget.Toast.LENGTH_SHORT).show()
-                            }
-                        }) {
-                            Icon(
-                                Icons.Outlined.Shield,
-                                contentDescription = "Proof of Work",
-                                tint = if (powEnabled) WispThemeColors.zapColor
-                                       else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-
-                        IconButton(onClick = {
-                            if (scheduleEnabled) {
-                                viewModel.toggleSchedule()
-                            } else {
-                                viewModel.toggleSchedule()
-                                showDatePicker = true
-                            }
-                        }) {
-                            Icon(
-                                Icons.Outlined.Schedule,
-                                contentDescription = "Schedule post",
-                                tint = if (scheduleEnabled) MaterialTheme.colorScheme.primary
-                                       else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                        IconButton(
+                            onClick = {
+                                photoPickerLauncher.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
+                                )
+                            },
+                            enabled = uploadProgress == null && countdownSeconds == null
+                        ) {
+                            Icon(Icons.Outlined.Image, contentDescription = stringResource(R.string.cd_attach_media))
                         }
 
                         Spacer(Modifier.weight(1f))
+
+                        Box(contentAlignment = Alignment.TopEnd) {
+                            IconButton(onClick = { showMoreSheet = true }) {
+                                Icon(
+                                    Icons.Outlined.MoreHoriz,
+                                    contentDescription = stringResource(R.string.cd_more_options)
+                                )
+                            }
+                            if (explicit || powEnabled || scheduleEnabled) {
+                                Box(
+                                    modifier = Modifier
+                                        .padding(top = 10.dp, end = 10.dp)
+                                        .size(8.dp)
+                                        .background(MaterialTheme.colorScheme.primary, CircleShape)
+                                )
+                            }
+                        }
                     }
 
                     // NSFW feedback banner
@@ -864,6 +924,23 @@ fun ComposeScreen(
                         }
                     )
 
+                    // OnlyFood tag pills (iOS parity, wisp #83/#92/#98): shown
+                    // when the composer was opened from the OnlyFood feed, so
+                    // the author can tag the note into the feed they're
+                    // writing from. The body text stays the source of truth —
+                    // a pill toggle appends/removes the `#tag` token.
+                    if (!galleryMode && foodTagSuggestions) {
+                        FoodTagSuggestionRow(
+                            hashtags = hashtags,
+                            count = viewModel.foodTagCount,
+                            atCap = viewModel.foodTagsAtCap,
+                            overCap = viewModel.foodTagsOverCap,
+                            isSelected = viewModel::isFoodTagSelected,
+                            onToggle = { viewModel.toggleFoodTag(it) },
+                            onOpenPicker = { showFoodTagPicker = true }
+                        )
+                    }
+
                     // Pasted-link offers, above the attachments section: every
                     // URL on a URL-only line becomes an attachment slot on tap
                     // (paste several and each gets its own offer). Offered,
@@ -999,7 +1076,10 @@ fun ComposeScreen(
                         }
                     }
 
-                    // Attach row with preview toggle
+                    // Attach row, redesigned (composer redesign, Oct 2026):
+                    // only what a standard social client offers inline. Media,
+                    // GIF, poll, then an overflow into the secondary panel
+                    // (NSFW / PoW / schedule / private reply / draft).
                     Spacer(Modifier.height(4.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -1013,7 +1093,7 @@ fun ComposeScreen(
                             },
                             enabled = uploadProgress == null && countdownSeconds == null
                         ) {
-                            Icon(Icons.Outlined.Image, contentDescription = "Attach media")
+                            Icon(Icons.Outlined.Image, contentDescription = stringResource(R.string.cd_attach_media))
                         }
 
                         // GIF search (gifs.nostr.build) — not offered in gallery mode,
@@ -1045,86 +1125,32 @@ fun ComposeScreen(
                             }
                         }
 
-                        IconButton(onClick = {
-                            val nextState = !explicit
-                            viewModel.toggleExplicit()
-                            android.widget.Toast.makeText(context, "NSFW ${if (nextState) "ON" else "OFF"}", android.widget.Toast.LENGTH_SHORT).show()
-                        }) {
-                            Icon(
-                                Icons.Outlined.Warning,
-                                contentDescription = "Mark as explicit",
-                                tint = if (explicit) MaterialTheme.colorScheme.error
-                                       else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-
-                        IconButton(onClick = {
-                            val prefs = powPrefs
-                            if (prefs != null) {
-                                val nextState = !powEnabled
-                                viewModel.togglePow(prefs)
-                                android.widget.Toast.makeText(context, "Mining ${if (nextState) "ON" else "OFF"}", android.widget.Toast.LENGTH_SHORT).show()
-                            }
-                        }) {
-                            Icon(
-                                Icons.Outlined.Shield,
-                                contentDescription = "Proof of Work",
-                                tint = if (powEnabled) WispThemeColors.zapColor
-                                       else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-
                         IconButton(onClick = { viewModel.togglePoll() }) {
                             Icon(
                                 Icons.Outlined.BarChart,
-                                contentDescription = "Add poll",
+                                contentDescription = stringResource(R.string.cd_add_poll),
                                 tint = if (pollEnabled) MaterialTheme.colorScheme.primary
-                                       else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-
-                        // Private reply toggle: only meaningful for replies in plain text mode
-                        // (private replies don't carry gallery/poll/schedule/quote payloads in v1).
-                        if (replyTo != null && quoteTo == null && !galleryMode && !pollEnabled && !scheduleEnabled) {
-                            IconButton(onClick = {
-                                // Locked toggles short-circuit in the VM, so the state stays ON.
-                                val nextState = if (privateReplyLocked) true else !privateReply
-                                viewModel.togglePrivateReply()
-                                android.widget.Toast.makeText(context, "Private Reply ${if (nextState) "ON" else "OFF"}", android.widget.Toast.LENGTH_SHORT).show()
-                            }) {
-                                Icon(
-                                    imageVector = Icons.Outlined.VisibilityOff,
-                                    contentDescription = "Private reply",
-                                    tint = if (privateReply) androidx.compose.ui.graphics.Color(0xFFFF8C00)
-                                           else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-
-                        IconButton(onClick = {
-                            if (scheduleEnabled) {
-                                viewModel.toggleSchedule()
-                            } else {
-                                viewModel.toggleSchedule()
-                                showDatePicker = true
-                            }
-                        }) {
-                            Icon(
-                                Icons.Outlined.Schedule,
-                                contentDescription = "Schedule post",
-                                tint = if (scheduleEnabled) MaterialTheme.colorScheme.primary
                                        else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
 
                         Spacer(Modifier.weight(1f))
 
-                        if (content.text.isNotBlank()) {
-                            IconButton(onClick = onSaveDraft) {
+                        // Secondary panel trigger. Active toggles surface a dot so
+                        // state set in the sheet stays visible after it closes.
+                        Box(contentAlignment = Alignment.TopEnd) {
+                            IconButton(onClick = { showMoreSheet = true }) {
                                 Icon(
-                                    painter = painterResource(R.drawable.ic_save_to_folder),
-                                    contentDescription = stringResource(R.string.btn_save_draft),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    Icons.Outlined.MoreHoriz,
+                                    contentDescription = stringResource(R.string.cd_more_options)
+                                )
+                            }
+                            if (explicit || powEnabled || scheduleEnabled || privateReply) {
+                                Box(
+                                    modifier = Modifier
+                                        .padding(top = 10.dp, end = 10.dp)
+                                        .size(8.dp)
+                                        .background(MaterialTheme.colorScheme.primary, CircleShape)
                                 )
                             }
                         }
@@ -1247,6 +1273,25 @@ fun ComposeScreen(
                                         )
                                     }
                                 }
+                            }
+                            // Polls publish as a dedicated kind (1068 / zap
+                            // poll), which clients without poll support hide.
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.padding(bottom = 4.dp)
+                            ) {
+                                Icon(
+                                    Icons.Outlined.Info,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    text = stringResource(R.string.poll_compat_note),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
                             pollOptions.forEachIndexed { index, option ->
                                 Row(
@@ -1574,18 +1619,25 @@ fun ComposeScreen(
                 } else {
                     Button(
                         onClick = {
-                            viewModel.publish(
-                                relayPool = relayPool,
-                                replyTo = replyTo,
-                                quoteTo = quoteTo,
-                                onSuccess = { onBack() },
-                                outboxRouter = outboxRouter,
-                                signer = signer,
-                                onNotePublished = onNotePublished,
-                                powManager = powManager,
-                                powPrefs = powPrefs,
-                                resolvedEmojis = resolvedEmojis
-                            )
+                            // OnlyFood parity: composing from that feed with
+                            // no food tag would post a note that never shows
+                            // up there — ask first (one tap adds #foodstr).
+                            if (viewModel.needsFoodTagConfirm) {
+                                showFoodTagConfirm = true
+                            } else {
+                                viewModel.publish(
+                                    relayPool = relayPool,
+                                    replyTo = replyTo,
+                                    quoteTo = quoteTo,
+                                    onSuccess = { onBack() },
+                                    outboxRouter = outboxRouter,
+                                    signer = signer,
+                                    onNotePublished = onNotePublished,
+                                    powManager = powManager,
+                                    powPrefs = powPrefs,
+                                    resolvedEmojis = resolvedEmojis
+                                )
+                            }
                         },
                         // Publish gating (iOS parity, wisp #567): mirrors publish()'s
                         // validation — gallery posts need an upload (caption optional),
@@ -1695,6 +1747,42 @@ fun ComposeScreen(
                     showGifPicker = false
                 },
                 onDismiss = { showGifPicker = false }
+            )
+        }
+
+        if (showMoreSheet) {
+            ComposerMoreSheet(
+                explicit = explicit,
+                onToggleExplicit = { viewModel.toggleExplicit() },
+                powEnabled = powEnabled,
+                powAvailable = powPrefs != null,
+                onTogglePow = { powPrefs?.let { viewModel.togglePow(it) } },
+                scheduleEnabled = scheduleEnabled,
+                scheduleSummary = scheduleTimestamp?.let {
+                    context.getString(
+                        R.string.compose_scheduled_for,
+                        SimpleDateFormat("MMM d, yyyy 'at' h:mm a", Locale.getDefault()).format(Date(it * 1000))
+                    )
+                },
+                onToggleSchedule = {
+                    if (scheduleEnabled) {
+                        viewModel.toggleSchedule()
+                    } else {
+                        viewModel.toggleSchedule()
+                        showMoreSheet = false
+                        showDatePicker = true
+                    }
+                },
+                privateReplyVisible = replyTo != null && quoteTo == null && !galleryMode && !pollEnabled && !scheduleEnabled,
+                privateReplyEnabled = privateReply,
+                privateReplyLocked = privateReplyLocked,
+                onTogglePrivateReply = { viewModel.togglePrivateReply() },
+                saveDraftVisible = content.text.isNotBlank(),
+                onSaveDraft = {
+                    onSaveDraft()
+                    showMoreSheet = false
+                },
+                onDismiss = { showMoreSheet = false }
             )
         }
     }
@@ -2258,6 +2346,71 @@ private fun AttachmentSummaryDrawer(urls: List<String>) {
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * The OnlyFood composer's tag pills (iOS parity, wisp #83/#92/#98): a hint
+ * line with the structural tag count, then one scrollable row of chips —
+ * selected food tags pinned first (so a tag from the picker or the keyboard
+ * is never hidden), then the fixed suggested set, then a trailing "+" that
+ * opens the full food-tag picker. Selected chips read filled; at the cap
+ * the unselected chips disable.
+ */
+@Composable
+private fun FoodTagSuggestionRow(
+    hashtags: List<String>,
+    count: Int,
+    atCap: Boolean,
+    overCap: Boolean,
+    isSelected: (String) -> Boolean,
+    onToggle: (String) -> Unit,
+    onOpenPicker: () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = stringResource(R.string.tag_row_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = stringResource(R.string.tag_count_label, count, OnlyFoodCompose.MAX_TAGS),
+                style = MaterialTheme.typography.labelSmall,
+                color = if (overCap) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 6.dp)
+                .horizontalScroll(rememberScrollState())
+        ) {
+            OnlyFoodCompose.rowOrder(hashtags).forEach { tag ->
+                val selected = isSelected(tag)
+                FilterChip(
+                    selected = selected,
+                    onClick = { onToggle(tag) },
+                    enabled = selected || !atCap,
+                    label = { Text("#$tag") }
+                )
+            }
+            // The trailing "+": outlined like an unselected chip, so it reads
+            // as one more thing to tap.
+            FilterChip(
+                selected = false,
+                onClick = onOpenPicker,
+                label = { Text(stringResource(R.string.tag_picker_more)) }
+            )
         }
     }
 }
