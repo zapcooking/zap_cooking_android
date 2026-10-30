@@ -41,7 +41,10 @@ class WispApp : Application(), SingletonImageLoader.Factory {
         val resolver = BlossomUriResolver(
             httpClient = OkHttpClient.Builder()
                 .connectTimeout(6, TimeUnit.SECONDS)
-                .callTimeout(10, TimeUnit.SECONDS)
+                // GET-and-verify downloads whole blobs (hash-checked before
+                // use), so the per-attempt budget has room for a multi-MB
+                // image on a slow server.
+                .callTimeout(20, TimeUnit.SECONDS)
                 .build(),
             accountServers = {
                 BlossomRepository.readServersFromPrefs(context, keyRepo.getPubkeyHex())

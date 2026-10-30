@@ -1,24 +1,26 @@
 package cooking.zap.app.repo
 
 import android.util.LruCache
+import cooking.zap.app.nostr.Blossom
 import cooking.zap.app.nostr.BlossomUri
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
 /**
- * Turns a BUD-10 `blossom:` URI into a concrete https URL by probing the
- * servers that might hold the blob — the URI's own `xs` hints first, then the
- * signed-in account's configured Blossom servers — with HEAD requests on the
- * BUD-01 route (`https://<server>/<sha256>`); the first 200 wins. Mirrors
- * amethyst's coil-path resolver. Resolutions are cached per URI — Coil, the
+ * Turns a BUD-10 `blossom:` URI into a concrete https URL by fetching the
+ * blob from the servers that might hold it — the URI's own `xs` hints first,
+ * then the signed-in account's configured Blossom servers — on the BUD-01
+ * route (`https://<server>/<sha256>`), and verifying each download's SHA-256
+ * against the URI's hash before trusting it: the URI is content-addressed,
+ * so a server answering 200 with the wrong bytes (a "404 image", or a
+ * planted blob) is rejected and the next candidate is tried. Amethyst
+ * verifies the same way. Candidates are tried sequentially so a bad server
+ * costs one download, not N. Resolutions are cached per URI — Coil, the
  * media pager, and the full-screen viewer can each ask for the same URI in
  * one render — and misses for five minutes, so an unreachable blob doesn't
- * re-probe on every scroll.
+ * re-fetch on every scroll.
  */
 class BlossomUriResolver(
     private val httpClient: OkHttpClient,
@@ -34,11 +36,10 @@ class BlossomUriResolver(
 
         val servers = (uri.serverHints + accountServers()).distinct()
         val hit = withContext(Dispatchers.IO) {
-            coroutineScope {
-                servers.map { server -> async { probe(uri.candidateUrls(server)) } }
-                    .awaitAll()
-                    .firstOrNull { it != null }
+            for (server in servers) {
+                fetchVerified(uri.candidateUrls(server), uri.sha256)?.let { return@withContext it }
             }
+            null
         }
         if (hit != null) {
             resolved.put(rawUri, hit)
@@ -48,9 +49,12 @@ class BlossomUriResolver(
         return hit
     }
 
-    private fun probe(url: String): String? = runCatching {
-        httpClient.newCall(Request.Builder().url(url).head().build()).execute().use { response ->
-            if (response.isSuccessful) url else null
+    /** GETs the blob and returns the URL only when the bytes hash to [sha256]. */
+    private fun fetchVerified(url: String, sha256: String): String? = runCatching {
+        httpClient.newCall(Request.Builder().url(url).get().build()).execute().use { response ->
+            if (!response.isSuccessful) return null
+            val bytes = response.body?.bytes() ?: return null
+            if (Blossom.sha256Hex(bytes).equals(sha256, ignoreCase = true)) url else null
         }
     }.getOrNull()
 
