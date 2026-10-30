@@ -11,7 +11,6 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.layout.Arrangement
@@ -181,36 +180,26 @@ fun WispDrawerContent(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                var crashTapCount by remember { mutableIntStateOf(0) }
-                LaunchedEffect(crashTapCount) {
-                    if (crashTapCount > 0) {
-                        delay(2000)
-                        crashTapCount = 0
-                    }
-                }
-                Box(modifier = Modifier.clickable {
-                    crashTapCount++
-                    if (crashTapCount >= 7) {
-                        throw RuntimeException("Test crash")
-                    }
-                    onProfile()
-                }) {
-                    ProfilePicture(url = profile?.picture, size = 64)
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-                // Icon-only affordance that opens the account switcher modal.
-                // Same action (switch or add an account) regardless of how many
-                // accounts are signed in; shows a "+N" badge counting the other
-                // accounts when more than one is signed in.
+                // Avatar + account count in one capsule: the whole pill is a
+                // single tap target that opens the account switcher (switch
+                // or add an account), with a "+N" badge counting the other
+                // accounts when more than one is signed in. The avatar runs
+                // the full height of the capsule and sits flush with the
+                // leading edge — its circle IS the capsule's left cap. Dark
+                // mode sinks the pill a step below the drawer surface so the
+                // avatar reads as a punch-out; light keeps surfaceVariant.
                 val otherAccountCount = (accounts.size - 1).coerceAtLeast(0)
+                val pillBackground = if (isDarkTheme) Color(0xFF030712)
+                    else MaterialTheme.colorScheme.surfaceVariant
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .clip(CircleShape)
+                        .background(pillBackground)
                         .clickable { showAccountSwitcher = true }
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
                 ) {
+                    ProfilePicture(url = profile?.picture, size = 56)
+                    Spacer(modifier = Modifier.width(8.dp))
                     Icon(
                         Icons.Outlined.People,
                         contentDescription = stringResource(R.string.cd_switch_account),
@@ -218,7 +207,7 @@ fun WispDrawerContent(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     if (otherAccountCount > 0) {
-                        Spacer(modifier = Modifier.width(4.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = "+$otherAccountCount",
                             style = MaterialTheme.typography.labelSmall,
@@ -226,6 +215,7 @@ fun WispDrawerContent(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+                    Spacer(modifier = Modifier.width(14.dp))
                 }
                 Spacer(modifier = Modifier.weight(1f))
                 IconButton(onClick = onToggleTheme) {
@@ -759,9 +749,27 @@ fun WispDrawerContent(
                 versionContext.packageManager.getPackageInfo(versionContext.packageName, 0).versionName ?: "?"
             } catch (_: Exception) { "?" }
         }
+        // Crash-reporting QA hook: 7 taps within 2s of each other crash the
+        // app on purpose ("Test crash"). The version label is the
+        // conventional multi-tap spot and has no competing action — the
+        // hook's previous home was the drawer avatar, which is now the
+        // account-switch pill's leading cap.
+        var crashTapCount by remember { mutableIntStateOf(0) }
+        LaunchedEffect(crashTapCount) {
+            if (crashTapCount > 0) {
+                delay(2000)
+                crashTapCount = 0
+            }
+        }
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .clickable {
+                    crashTapCount++
+                    if (crashTapCount >= 7) {
+                        throw RuntimeException("Test crash")
+                    }
+                }
                 .padding(horizontal = 16.dp, vertical = 16.dp),
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically
