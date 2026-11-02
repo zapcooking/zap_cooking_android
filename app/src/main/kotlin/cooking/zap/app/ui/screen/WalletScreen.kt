@@ -371,6 +371,9 @@ fun WalletScreen(
             }
             is WalletState.Connected -> {
                 val balanceMsats = (walletState as WalletState.Connected).balanceMsats
+                LaunchedEffect(walletState) {
+                    viewModel.loadTransactions()
+                }
                 when (currentPage) {
                     is WalletPage.SparkBackup -> {
                         val page = currentPage as WalletPage.SparkBackup
@@ -389,10 +392,6 @@ fun WalletScreen(
                         }
                     }
                     is WalletPage.Home -> {
-                        // Preload recent transactions for the inline footer.
-                        LaunchedEffect(walletState) {
-                            if (walletState is WalletState.Connected) viewModel.loadTransactions()
-                        }
                         val profileKey = viewModel.profileRefreshKey.collectAsState().value
                         WalletHomeContent(
                             balanceMsats = balanceMsats,
@@ -1523,70 +1522,66 @@ private fun WalletHomeContent(
         Spacer(Modifier.weight(1f))
 
         // ── Recent transactions inline footer ──────────────────────
-        if (recentTransactions.isNotEmpty()) {
-            Column(
-                modifier = Modifier.fillMaxWidth()
-                    .pointerInput(onTransactions) {
-                        var totalDrag = 0f
-                        detectVerticalDragGestures(
-                            onDragStart = { totalDrag = 0f },
-                            onDragEnd = { totalDrag = 0f },
-                            onDragCancel = { totalDrag = 0f }
-                        ) { change, delta ->
-                            totalDrag += delta
-                            if (totalDrag < -40f) {
-                                totalDrag = 0f
-                                change.consume()
-                                onTransactions()
-                            }
+        Column(
+            modifier = Modifier.fillMaxWidth()
+                .pointerInput(onTransactions) {
+                    var totalDrag = 0f
+                    detectVerticalDragGestures(
+                        onDragStart = { totalDrag = 0f },
+                        onDragEnd = { totalDrag = 0f },
+                        onDragCancel = { totalDrag = 0f }
+                    ) { change, delta ->
+                        totalDrag += delta
+                        if (totalDrag < -40f) {
+                            totalDrag = 0f
+                            change.consume()
+                            onTransactions()
                         }
                     }
+                }
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onTransactions)
+                    .padding(vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(onClick = onTransactions)
-                        .padding(vertical = 6.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+                Text(
+                    stringResource(R.string.wallet_recent).uppercase(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        stringResource(R.string.wallet_recent).uppercase(),
-                        style = MaterialTheme.typography.labelSmall,
+                        stringResource(R.string.wallet_view_all),
+                        style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            stringResource(R.string.wallet_view_all),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Icon(
-                            Icons.Default.KeyboardArrowUp,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
-                }
-                HorizontalDivider(
-                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
-                )
-                // Scale the inline history to the device height (Dark Wisp parity).
-                val screenHeightDp = LocalConfiguration.current.screenHeightDp
-                val txCount = when {
-                    screenHeightDp >= 800 -> 5
-                    screenHeightDp >= 720 -> 4
-                    screenHeightDp >= 640 -> 3
-                    else -> 2
-                }
-                recentTransactions.take(txCount).forEach { tx ->
-                    TransactionRow(tx, profileLookup, balanceDisplay)
+                    Spacer(Modifier.width(4.dp))
+                    Icon(
+                        Icons.Default.KeyboardArrowUp,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp)
+                    )
                 }
             }
-        } else {
-            Spacer(Modifier.height(12.dp))
+            HorizontalDivider(
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
+            )
+            // Scale the inline history to the device height (Dark Wisp parity).
+            val screenHeightDp = LocalConfiguration.current.screenHeightDp
+            val txCount = when {
+                screenHeightDp >= 800 -> 5
+                screenHeightDp >= 720 -> 4
+                screenHeightDp >= 640 -> 3
+                else -> 2
+            }
+            recentTransactions.take(txCount).forEach { tx ->
+                TransactionRow(tx, profileLookup, balanceDisplay)
+            }
         }
     }
 }
