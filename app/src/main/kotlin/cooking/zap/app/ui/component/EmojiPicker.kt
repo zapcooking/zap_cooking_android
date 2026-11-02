@@ -34,13 +34,16 @@ import coil3.compose.AsyncImage
  * neutral/yellow base for the hand/person emoji (no skin-tone modifier).
  * Overridden by a user's configured unicodeEmojis when set.
  *
- * \u2764\uFE0F \uD83D\uDD25 \uD83D\uDC4D \uD83E\uDD19 \uD83D\uDE0B \uD83E\uDD24 \uD83E\uDD29 \uD83D\uDCAF \uD83D\uDE4F \uD83C\uDF73 \uD83E\uDD0C \uD83E\uDDD1\u200D\uD83C\uDF73 \uD83D\uDE0D \uD83C\uDF36\uFE0F \uD83E\uDD57 \uD83C\uDF7D\uFE0F
+ * Canonical 24 (parity with iOS EmojiData.defaultQuickReactions and web QUICK_EMOJIS). Reactions first, then the culinary block in sequence. Seasonal emoji stay in the catalog, not the defaults.
  */
 private val DEFAULT_UNICODE_EMOJIS = listOf(
-    "\u2764\uFE0F", "\uD83D\uDD25", "\uD83D\uDC4D", "\uD83E\uDD19",
-    "\uD83D\uDE0B", "\uD83E\uDD24", "\uD83E\uDD29", "\uD83D\uDCAF",
-    "\uD83D\uDE4F", "\uD83C\uDF73", "\uD83E\uDD0C", "\uD83E\uDDD1\u200D\uD83C\uDF73",
-    "\uD83D\uDE0D", "\uD83C\uDF36\uFE0F", "\uD83E\uDD57", "\uD83C\uDF7D\uFE0F",
+
+    "\u2764\uFE0F", "\uD83D\uDD25", "\uD83D\uDC4D", "\uD83D\uDE02",
+    "\uD83D\uDE4F", "\uD83E\uDD19", "\uD83D\uDCAF", "\u2728",
+    "\uD83C\uDF89", "\uD83E\uDD42", "\uD83D\uDE0B", "\uD83E\uDD24",
+    "\uD83E\uDD0C", "\uD83E\uDDD1\u200D\uD83C\uDF73", "\uD83C\uDF73", "\uD83E\uDD69",
+    "\uD83C\uDF57", "\uD83D\uDC1F", "\uD83E\uDD66", "\uD83C\uDF36\uFE0F",
+    "\uD83C\uDF2E", "\uD83C\uDF5C", "\uD83C\uDF5D", "\uD83C\uDF54",
 )
 
 /**
