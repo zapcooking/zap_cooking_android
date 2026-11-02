@@ -563,6 +563,16 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
     /** Rejected cold-cache bookmark writes (relay check inconclusive — nothing published). */
     val recipeBookmarkWriteErrors: SharedFlow<String> = recipeBookmarkRepo.writeErrors
 
+    // Feed chrome auto-hide: the feed screen's scroll-direction detector
+    // hides the top/bottom bars on scroll-down; WispNavHost always shows the
+    // bottom bar on non-feed routes.
+    private val _barsVisible = MutableStateFlow(true)
+    val barsVisible: StateFlow<Boolean> = _barsVisible
+
+    fun setBarsVisible(visible: Boolean) {
+        _barsVisible.value = visible
+    }
+
     suspend fun payInvoice(bolt11: String): Boolean =
         activeWalletProvider.payInvoice(bolt11).isSuccess
     val pendingFirstFollow: StateFlow<String?> = socialActions.pendingFirstFollow

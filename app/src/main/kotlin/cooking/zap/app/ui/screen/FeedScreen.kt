@@ -1,8 +1,10 @@
 package cooking.zap.app.ui.screen
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -18,7 +20,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.windowInsetsTopHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -69,6 +71,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.Stable
@@ -398,6 +401,43 @@ fun FeedScreen(
         }
     }
 
+    // Scroll direction detection — hide the top/bottom bars on scroll down,
+    // show them again on scroll up or at top. Accumulate scroll delta and only
+    // toggle after a threshold to avoid stutter on tiny wiggles.
+    var scrollDelta by remember { mutableIntStateOf(0) }
+    var prevFirstVisibleIndex by remember { mutableIntStateOf(0) }
+    var prevFirstVisibleOffset by remember { mutableIntStateOf(0) }
+    val barsScrollThreshold = 50 // pixels of cumulative scroll before toggling
+    LaunchedEffect(listState) {
+        viewModel.setBarsVisible(true)
+        snapshotFlow {
+            listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+        }.collect { (index, offset) ->
+            if (isAtTop) {
+                viewModel.setBarsVisible(true)
+                scrollDelta = 0
+            } else if (listState.isScrollInProgress) {
+                val delta = when {
+                    index > prevFirstVisibleIndex -> barsScrollThreshold // item jumped, treat as big scroll down
+                    index < prevFirstVisibleIndex -> -barsScrollThreshold
+                    else -> offset - prevFirstVisibleOffset
+                }
+                scrollDelta = (scrollDelta + delta).coerceIn(-barsScrollThreshold * 2, barsScrollThreshold * 2)
+                if (scrollDelta > barsScrollThreshold) {
+                    viewModel.setBarsVisible(false)
+                } else if (scrollDelta < -barsScrollThreshold) {
+                    viewModel.setBarsVisible(true)
+                }
+            } else {
+                scrollDelta = 0
+            }
+            prevFirstVisibleIndex = index
+            prevFirstVisibleOffset = offset
+        }
+    }
+
+    val barsVisible by viewModel.barsVisible.collectAsState()
+
 
     val initialLoadDone by viewModel.initialLoadDone.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
@@ -622,26 +662,30 @@ fun FeedScreen(
         Scaffold(
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             topBar = {
-                // The transparent background needs to paint the status-bar strip
-                // too, not just the 48dp bar below it — otherwise the bar's own
-                // windowInsetsPadding carves out an opaque gap above it and the
-                // translucency stops short of the top of the screen. Paint it on
-                // this outer Box (sized to bar + status-bar inset) and make the
-                // bar itself fully transparent so there's only one alpha layer.
-                Box(
+                // The translucent background needs to paint the status-bar strip
+                // too, not just the 48dp bar below it — so the paint lives on
+                // this outer Column, and the bar itself stays fully transparent
+                // (single alpha layer). The status-bar spacer is persistent so
+                // that when the bar shrinks away on scroll-down, content still
+                // doesn't bleed behind the system status bar.
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(MaterialTheme.colorScheme.background.copy(alpha = 0.85f))
                 ) {
+                Spacer(Modifier.windowInsetsTopHeight(WindowInsets.statusBars))
+                Spacer(Modifier.height(10.dp))
+                AnimatedVisibility(
+                    visible = barsVisible,
+                    enter = expandVertically(animationSpec = tween(200), expandFrom = Alignment.Bottom) + fadeIn(animationSpec = tween(200)),
+                    exit = shrinkVertically(animationSpec = tween(200), shrinkTowards = Alignment.Bottom) + fadeOut(animationSpec = tween(200))
+                ) {
                 CenterAlignedTopAppBar(
-                    // Compact: reserve the status-bar inset via
-                    // `windowInsetsPadding` (layout-time, no first-frame
-                    // snap) and clamp the content area to 48dp (was
-                    // Material's default 64dp). Disable the bar's
-                    // internal inset handling to avoid double-padding.
-                    modifier = Modifier
-                        .windowInsetsPadding(WindowInsets.statusBars)
-                        .height(48.dp),
+                    // Compact: the status-bar inset is reserved by the outer
+                    // Column's spacer, so clamp the content area to 48dp (was
+                    // Material's default 64dp) and disable the bar's internal
+                    // inset handling to avoid double-padding.
+                    modifier = Modifier.height(48.dp),
                     windowInsets = WindowInsets(0),
                     title = {
                                 Box {
@@ -850,7 +894,12 @@ fun FeedScreen(
                         }
                     }
                 )
-                }
+                } // AnimatedVisibility
+                HorizontalDivider(
+                    thickness = 0.5.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                )
+                } // Column
             },
             floatingActionButton = {
                 if (onCompose != null) {

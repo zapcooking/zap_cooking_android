@@ -1,5 +1,11 @@
 package cooking.zap.app.ui.component
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -15,14 +21,12 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsBottomHeight
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarDefaults
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.runtime.Composable
@@ -97,6 +101,7 @@ fun WispBottomBar(
     isReplyAnimating: Boolean = false,
     notifSoundEnabled: Boolean = true,
     isReadOnly: Boolean = false,
+    barVisible: Boolean = true,
     onTabSelected: (BottomTab) -> Unit
 ) {
     val navBarColor = if (isDarkTheme) NavBarDark else MaterialTheme.colorScheme.surface
@@ -110,6 +115,7 @@ fun WispBottomBar(
             isZapAnimating = isZapAnimating,
             isReplyAnimating = isReplyAnimating,
             notifSoundEnabled = notifSoundEnabled,
+            barVisible = barVisible,
             onTabSelected = onTabSelected
         )
         return
@@ -122,6 +128,13 @@ fun WispBottomBar(
     val visibleTabs = BottomTab.bottomBarTabs
 
     Column {
+        // Only the tab row collapses on feed scroll-down; the nav-inset spacer
+        // below stays so content never bleeds behind the gesture area.
+        AnimatedVisibility(
+            visible = barVisible,
+            enter = expandVertically(animationSpec = tween(200), expandFrom = Alignment.Top) + fadeIn(animationSpec = tween(200)),
+            exit = shrinkVertically(animationSpec = tween(200), shrinkTowards = Alignment.Top) + fadeOut(animationSpec = tween(200))
+        ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -150,6 +163,7 @@ fun WispBottomBar(
                     )
                 }
             }
+        }
         }
         // Colored spacer reserving the system nav-bar inset so the bar reads
         // as one surface down to the gesture area.
@@ -272,17 +286,21 @@ private fun ReadOnlyBottomBar(
     isZapAnimating: Boolean,
     isReplyAnimating: Boolean,
     notifSoundEnabled: Boolean,
+    barVisible: Boolean = true,
     onTabSelected: (BottomTab) -> Unit
 ) {
     val navBarColor = if (isDarkTheme) NavBarDark else MaterialTheme.colorScheme.surface
     val visibleTabs = BottomTab.bottomBarTabs(readOnly = true)
 
     Column {
+        AnimatedVisibility(
+            visible = barVisible,
+            enter = expandVertically(animationSpec = tween(200), expandFrom = Alignment.Top) + fadeIn(animationSpec = tween(200)),
+            exit = shrinkVertically(animationSpec = tween(200), shrinkTowards = Alignment.Top) + fadeOut(animationSpec = tween(200))
+        ) {
         NavigationBar(
             containerColor = navBarColor,
-            modifier = Modifier
-                .windowInsetsPadding(NavigationBarDefaults.windowInsets)
-                .height(NAV_HEIGHT),
+            modifier = Modifier.height(NAV_HEIGHT),
             windowInsets = WindowInsets(0)
         ) {
             visibleTabs.forEach { tab ->
@@ -360,5 +378,14 @@ private fun ReadOnlyBottomBar(
                 )
             }
         }
+        }
+        // Persistent inset spacer — same as the full bar, stays put while the
+        // tab row collapses so content never bleeds into the gesture area.
+        Spacer(
+            Modifier
+                .fillMaxWidth()
+                .windowInsetsBottomHeight(WindowInsets.navigationBars)
+                .background(navBarColor)
+        )
     }
 }
