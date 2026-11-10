@@ -113,6 +113,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.DropdownMenu
@@ -4627,7 +4628,7 @@ private fun WalletSettingsContent(
                     contentColor = Color.White
                 )
             ) {
-                Text("Delete Wallet")
+                Text("Remove Wallet")
             }
         }
 
@@ -4752,7 +4753,7 @@ private fun LightningAddressSetupContent(
             )
             Spacer(Modifier.width(8.dp))
             Text(
-                "@breez.tips",
+                "@sats.zap.cooking",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -4995,7 +4996,7 @@ private fun DeleteWalletConfirmContent(
             when {
                 isDefault -> stringResource(R.string.wallet_switch_wallet)
                 isNwc -> "Disconnect NWC"
-                else -> "Delete Wallet"
+                else -> "Remove Wallet"
             },
             style = MaterialTheme.typography.headlineMedium,
             color = if (isDefault) MaterialTheme.colorScheme.onSurface else Color(0xFFD32F2F)
@@ -5007,32 +5008,31 @@ private fun DeleteWalletConfirmContent(
             when {
                 isDefault -> stringResource(R.string.wallet_switch_wallet_body)
                 isNwc -> "This will remove the NWC connection string from this device. You can reconnect anytime with a new connection string."
-                else -> "This will permanently delete your wallet from this device. Your funds cannot be recovered without your recovery phrase."
+                else -> "This wallet will be removed from this device. Your funds stay safe, and you can restore it anytime with its recovery phrase."
             },
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
         )
 
+        var acknowledgedBackup by remember { mutableStateOf(false) }
+
         if (!isNwc && !isDefault) {
             Spacer(Modifier.height(8.dp))
 
-            Text(
-                "Make sure you have backed up your recovery phrase before proceeding.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = Color(0xFFD32F2F),
-                textAlign = TextAlign.Center
-            )
-
-            Spacer(Modifier.height(24.dp))
-
-            OutlinedTextField(
-                value = confirmText,
-                onValueChange = { new -> if (!NsecPasteGuard.blockIfNsec(confirmText, new)) onConfirmTextChange(new) },
-                label = { Text("Type DELETE to confirm") },
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                singleLine = true
-            )
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Checkbox(
+                    checked = acknowledgedBackup,
+                    onCheckedChange = { acknowledgedBackup = it }
+                )
+                Text(
+                    "I've written down my recovery phrase or confirmed a relay backup",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
         }
 
         Spacer(Modifier.height(24.dp))
@@ -5040,7 +5040,7 @@ private fun DeleteWalletConfirmContent(
         Button(
             onClick = onDelete,
             modifier = Modifier.fillMaxWidth(),
-            enabled = isNwc || isDefault || confirmText == "DELETE",
+            enabled = isNwc || isDefault || acknowledgedBackup,
             colors = if (isDefault) ButtonDefaults.buttonColors()
                 else ButtonDefaults.buttonColors(
                     containerColor = Color(0xFFD32F2F),
@@ -5051,7 +5051,7 @@ private fun DeleteWalletConfirmContent(
                 when {
                     isDefault -> stringResource(R.string.wallet_switch_wallet)
                     isNwc -> "Disconnect"
-                    else -> "Delete Wallet"
+                    else -> "Remove"
                 }
             )
         }

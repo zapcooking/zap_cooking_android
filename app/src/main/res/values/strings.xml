@@ -608,7 +608,7 @@
     <string name="wallet_recommended">Recommended wallets</string>
     <string name="wallet_connecting">Connecting…</string>
     <string name="wallet_lightning_address_setup">Set up your Lightning Address</string>
-    <string name="wallet_get_username">Get a username@breez.tips address</string>
+    <string name="wallet_get_username">Get a username@sats.zap.cooking address</string>
     <string name="wallet_tap_to_reveal">Tap to reveal</string>
     <string name="dm_decrypting">Decrypting messages…</string>
     <string name="dm_mining">Mining…</string>
