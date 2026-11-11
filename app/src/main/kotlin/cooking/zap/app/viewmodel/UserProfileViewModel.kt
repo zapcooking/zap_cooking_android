@@ -525,7 +525,7 @@ class UserProfileViewModel(app: Application) : AndroidViewModel(app) {
                     Filter(kinds = listOf(7), eTags = batch),
                     Filter(kinds = listOf(6), eTags = batch),
                     Filter(kinds = listOf(9735), eTags = batch),
-                    Filter(kinds = listOf(1), eTags = batch)
+                    Filter(kinds = listOf(1, Nip22.KIND_COMMENT), eTags = batch)
                 )
                 relayPool.sendToReadRelays(ClientMessage.req(subId, filters))
             }
@@ -538,7 +538,7 @@ class UserProfileViewModel(app: Application) : AndroidViewModel(app) {
                 Filter(kinds = listOf(7), eTags = batch),
                 Filter(kinds = listOf(6), eTags = batch),
                 Filter(kinds = listOf(9735), eTags = batch),
-                Filter(kinds = listOf(1), eTags = batch)
+                Filter(kinds = listOf(1, Nip22.KIND_COMMENT), eTags = batch)
             )
             for (url in topRelayUrls) {
                 relayPool.sendToRelayOrEphemeral(url, ClientMessage.req(subId, filters))
