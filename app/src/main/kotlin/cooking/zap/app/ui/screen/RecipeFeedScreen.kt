@@ -153,6 +153,7 @@ fun RecipeFeedScreen(
     onOpenDrawer: () -> Unit = {},
     onSearch: () -> Unit = {},
     onGadgets: () -> Unit = {},
+    gadgetsActive: Boolean = false,
     onSousChef: () -> Unit = {},
     onCheffy: () -> Unit = {},
     onNourish: () -> Unit = {},
@@ -252,11 +253,13 @@ fun RecipeFeedScreen(
                         }
                         IconButton(onClick = onGadgets, modifier = Modifier.size(38.dp)) {
                             Icon(
-                                painter = painterResource(R.drawable.ic_kitchen_gadgets),
+                                painter = painterResource(
+                                    if (gadgetsActive) R.drawable.ic_kitchen_gadgets_fill else R.drawable.ic_kitchen_gadgets
+                                ),
                                 contentDescription = stringResource(R.string.drawer_gadgets),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 // Match the adjacent AI (Intelligence) atom button's height.
-                                modifier = Modifier.size(20.dp)
+                                modifier = Modifier.size(22.dp)
                             )
                         }
                         IntelligenceMenu(

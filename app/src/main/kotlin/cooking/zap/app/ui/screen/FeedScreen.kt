@@ -179,6 +179,7 @@ fun FeedScreen(
     onQuotedNoteClick: ((String) -> Unit)? = null,
     onSearch: () -> Unit = {},
     onGadgets: () -> Unit = {},
+    gadgetsActive: Boolean = false,
     onSousChef: () -> Unit = {},
     onCheffy: () -> Unit = {},
     onNourish: () -> Unit = {},
@@ -870,13 +871,15 @@ fun FeedScreen(
                             }
                             IconButton(onClick = onGadgets, modifier = Modifier.size(38.dp)) {
                                 Icon(
-                                    painter = painterResource(R.drawable.ic_kitchen_gadgets),
+                                    painter = painterResource(
+                                        if (gadgetsActive) R.drawable.ic_kitchen_gadgets_fill else R.drawable.ic_kitchen_gadgets
+                                    ),
                                     contentDescription = stringResource(R.string.drawer_gadgets),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    // Slightly smaller than the default 24.dp so the egg
-                                    // timer's full-bleed artwork matches the visual height of
-                                    // the adjacent AI (Intelligence) atom button.
-                                    modifier = Modifier.size(20.dp)
+                                    // A touch under the default 24.dp so the egg timer's
+                                    // full-bleed artwork reads clearly next to the adjacent
+                                    // AI (Intelligence) atom button.
+                                    modifier = Modifier.size(22.dp)
                                 )
                             }
                             // Intelligence menu — mirrors the web's IntelligenceMenu
