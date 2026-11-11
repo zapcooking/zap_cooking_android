@@ -843,7 +843,7 @@ fun FeedScreen(
                                 val (icon, tint) = when (contentFilter) {
                                     // Apps = 3x3 dot grid — reads as "everything" and stands
                                     // apart from the more literal Article/PhotoLibrary/CheckCircle
-                                    // glyphs, plus the nearby Gadgets icon's rectangular shape.
+                                    // glyphs, plus the nearby Gadgets icon's round egg shape.
                                     FeedContentFilter.ALL -> Icons.Outlined.Apps to MaterialTheme.colorScheme.onSurfaceVariant
                                     FeedContentFilter.TEXT_ONLY -> Icons.AutoMirrored.Outlined.Article to MaterialTheme.colorScheme.primary
                                     // PhotoLibrary (stacked photos) reads as "gallery" more
@@ -873,9 +873,9 @@ fun FeedScreen(
                                     painter = painterResource(R.drawable.ic_kitchen_gadgets),
                                     contentDescription = stringResource(R.string.drawer_gadgets),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    // Slightly smaller than the default 24.dp so the cup's
-                                    // full-bleed artwork matches the visual height of the
-                                    // adjacent AI (Intelligence) atom button.
+                                    // Slightly smaller than the default 24.dp so the egg
+                                    // timer's full-bleed artwork matches the visual height of
+                                    // the adjacent AI (Intelligence) atom button.
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
