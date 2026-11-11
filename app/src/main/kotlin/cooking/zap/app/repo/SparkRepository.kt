@@ -55,6 +55,12 @@ class SparkRepository(
     companion object {
         private val BREEZ_API_KEY: String get() = BuildConfig.BREEZ_API_KEY
 
+        // Domain Lightning addresses are registered under. `sats.zap.cooking`
+        // is a CNAME to Breez's hosted LNURL server (breez.tips), registered
+        // with Breez against this API key — the same setup the web and iOS
+        // apps use. Passed to the SDK as `config.lnurlDomain` at connect time.
+        private const val LNURL_DOMAIN = "sats.zap.cooking"
+
         // BIP39 English wordlist subset is large; for mnemonic generation we use
         // the SDK's Seed.Mnemonic which validates the mnemonic on connect.
         // We generate a 16-byte entropy and convert to mnemonic externally.
@@ -300,6 +306,7 @@ class SparkRepository(
 
                 val config = defaultConfig(Network.MAINNET)
                 config.apiKey = BREEZ_API_KEY
+                config.lnurlDomain = LNURL_DOMAIN
 
                 val seed = Seed.Mnemonic(mnemonic, null)
                 val request = ConnectRequest(
@@ -508,7 +515,8 @@ class SparkRepository(
                     amountSats = amountSats,
                     expirySecs = expirySecs.toUInt(),
                     paymentHash = null,
-                    receiverIdentityPublicKey = null
+                    receiverIdentityPublicKey = null,
+                    preimage = null
                 )
                 val response = instance.receivePayment(ReceivePaymentRequest(method))
                 emitStatus("Invoice created")
