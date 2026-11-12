@@ -57,6 +57,7 @@ import cooking.zap.app.repo.ZapSender
 import kotlinx.coroutines.Dispatchers
 import cooking.zap.app.nostr.ClientMessage
 import cooking.zap.app.nostr.Nip51
+import cooking.zap.app.nostr.Nip53
 import cooking.zap.app.nostr.RelaySet
 import android.content.Context
 import cooking.zap.app.nostr.Filter
@@ -460,7 +461,8 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
         registerAuthSigner = { registerAuthSigner() },
         fetchEmojiSets = { listCrud.fetchEmojiSets() },
         getSigner = { signer },
-        migrateRecipeBookmarks = { migrateRecipeBookmarksIfNeeded() }
+        migrateRecipeBookmarks = { migrateRecipeBookmarksIfNeeded() },
+        isLiveContentHidden = { interfacePrefs.isLiveStreamsHidden() }
     )
 
     // -- Global online count from nostrarchives live-metrics --
@@ -512,8 +514,14 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
 
     val liveNowStreams: StateFlow<List<cooking.zap.app.repo.LiveStream>> = liveStreamRepo.liveStreams
         .map { streams ->
+            // Show every discovered fresh live stream — requiring a recent
+            // chatter hid streams whose kind-1311 chat lives on relays this
+            // account doesn't read. Staleness is handled by the sidecar
+            // freshness rule (event republished within the last hour), not by
+            // chat activity; ingest applies the same rule.
+            val now = System.currentTimeMillis() / 1000
             streams.values
-                .filter { it.chatters.isNotEmpty() }
+                .filter { Nip53.isLiveNow(it.activity, now) }
                 .sortedByDescending { it.chatters.size }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -537,6 +545,20 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
     fun showNewNotesButton() {
         _newNotesButtonHidden.value = false
         settingsPrefs.edit().putBoolean("new_notes_button_hidden", false).apply()
+    }
+
+    // Apply the "Hide live streams" switch immediately: start or tear down
+    // NIP-53 discovery without waiting for the next app launch.
+    private val liveContentPrefListener =
+        android.content.SharedPreferences.OnSharedPreferenceChangeListener { prefs, key ->
+            if (key == InterfacePreferences.KEY_LIVE_STREAMS_HIDDEN) {
+                if (prefs.getBoolean(key, false)) startup.stopLiveDiscovery()
+                else startup.startLiveDiscovery()
+            }
+        }
+
+    init {
+        settingsPrefs.registerOnSharedPreferenceChangeListener(liveContentPrefListener)
     }
 
     val initialLoadDone: StateFlow<Boolean> = feedSub.initialLoadDone
