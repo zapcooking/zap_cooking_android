@@ -1452,6 +1452,7 @@ fun WispNavHost(
                     }
                 },
                 onGadgets = { showCookingUtilitiesSheet = true },
+                gadgetsActive = showCookingUtilitiesSheet,
                 onSousChef = { navController.navigate(Routes.SOUS_CHEF) { launchSingleTop = true } },
                 onCheffy = { navController.navigate(Routes.CHEFFY) { launchSingleTop = true } },
                 onNourish = { navController.navigate(Routes.NOURISH) { launchSingleTop = true } },
@@ -3661,6 +3662,7 @@ fun WispNavHost(
                     }
                 },
                 onGadgets = { showCookingUtilitiesSheet = true },
+                gadgetsActive = showCookingUtilitiesSheet,
                 onSousChef = { navController.navigate(Routes.SOUS_CHEF) { launchSingleTop = true } },
                 onCheffy = { navController.navigate(Routes.CHEFFY) { launchSingleTop = true } },
                 onNourish = { navController.navigate(Routes.NOURISH) { launchSingleTop = true } },
