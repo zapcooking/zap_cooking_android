@@ -158,8 +158,9 @@ class InterfacePreferences(context: Context) {
     fun getLanguage(): String = prefs.getString("language", "system") ?: "system"
     fun setLanguage(language: String) = prefs.edit().putString("language", language).apply()
 
-    fun isLiveStreamsHidden(): Boolean = prefs.getBoolean("live_streams_hidden", false)
-    fun setLiveStreamsHidden(hidden: Boolean) = prefs.edit().putBoolean("live_streams_hidden", hidden).apply()
+    fun isLiveStreamsHidden(): Boolean = prefs.getBoolean(KEY_LIVE_STREAMS_HIDDEN, false)
+    fun setLiveStreamsHidden(hidden: Boolean) =
+        prefs.edit().putBoolean(KEY_LIVE_STREAMS_HIDDEN, hidden).apply()
 
     fun isAutoTranslate(): Boolean = prefs.getBoolean("auto_translate", false)
     fun setAutoTranslate(enabled: Boolean) = prefs.edit().putBoolean("auto_translate", enabled).apply()
@@ -275,6 +276,9 @@ class InterfacePreferences(context: Context) {
             upgradedInstall -> AppearanceMode.DARK
             else -> AppearanceMode.SYSTEM
         }
+
+        /** Pref key for hiding live-stream content; observed by FeedViewModel. */
+        const val KEY_LIVE_STREAMS_HIDDEN = "live_streams_hidden"
     }
 
     /** Reset all interface preferences to defaults (called on full logout). */
