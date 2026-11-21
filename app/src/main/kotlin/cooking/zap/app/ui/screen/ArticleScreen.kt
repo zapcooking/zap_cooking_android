@@ -67,6 +67,7 @@ import cooking.zap.app.ui.component.RichContent
 import cooking.zap.app.ui.component.CollapsedRepliesRow
 import cooking.zap.app.ui.component.threadConnector
 import cooking.zap.app.ui.component.threadIndentDp
+import cooking.zap.app.ui.util.noteZapOfferable
 import cooking.zap.app.viewmodel.ArticleViewModel
 import cooking.zap.app.viewmodel.thread.ThreadItem
 
@@ -299,6 +300,7 @@ fun ArticleScreen(
                                 resolvedEmojis = resolvedEmojis,
                                 unicodeEmojis = unicodeEmojis,
                                 onOpenEmojiLibrary = onOpenEmojiLibrary,
+                                showZap = noteZapOfferable(profile),
                                 modifier = Modifier.padding(horizontal = 8.dp)
                             )
                         }
