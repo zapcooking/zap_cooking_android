@@ -298,6 +298,7 @@
     <string name="tab_connected">Connected</string>
     <string name="tab_bad">Bad</string>
     <string name="tab_recipes">Recipes</string>
+    <string name="search_hashtags_header">Hashtags</string>
     <string name="tab_packs">Packs</string>
     <string name="tab_cookbook">My Kitchen</string>
     <string name="cookbook_tab_my_recipes">Published</string>
@@ -308,7 +309,7 @@
     <string name="tab_mine">Mine</string>
     <string name="tab_saved">Saved</string>
     <string name="tab_tags">Tags</string>
-    <string name="tab_people">Profiles</string>
+    <string name="tab_people">People</string>
     <string name="tab_notes">Notes</string>
     <string name="tab_for_you">For You</string>
     <string name="tab_follows">Follows</string>

@@ -5,20 +5,20 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import cooking.zap.app.nostr.BrainstormSearch
 import cooking.zap.app.nostr.ClientMessage
+import cooking.zap.app.nostr.FoodHashtags
 import cooking.zap.app.nostr.Filter
 import cooking.zap.app.nostr.NostrEvent
 import cooking.zap.app.nostr.Nip22
 import cooking.zap.app.nostr.ProfileData
 import cooking.zap.app.nostr.RecipeFormats
 import cooking.zap.app.nostr.RecipeParser
-import cooking.zap.app.nostr.RecipeTag
-import cooking.zap.app.nostr.RecipeTagCatalog
 import cooking.zap.app.relay.RelayConfig
 import cooking.zap.app.relay.RelayPool
 import cooking.zap.app.repo.EventRepository
 import cooking.zap.app.repo.KeyRepository
 import cooking.zap.app.repo.MuteRepository
 import cooking.zap.app.repo.RecipeRepository
+import java.util.Locale
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,7 +26,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 // Recipes first — recipe-first, mirroring the web's submit priority.
-enum class SearchFilter { RECIPES, TAGS, PEOPLE, NOTES }
+enum class SearchFilter { RECIPES, PEOPLE, NOTES }
 
 enum class RelayOption {
     DEFAULT,
@@ -74,8 +74,8 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
     private val _recipeResults = MutableStateFlow<List<RecipeParser.Recipe>>(emptyList())
     val recipeResults: StateFlow<List<RecipeParser.Recipe>> = _recipeResults
 
-    private val _tagResults = MutableStateFlow<List<RecipeTag>>(emptyList())
-    val tagResults: StateFlow<List<RecipeTag>> = _tagResults
+    private val _tagResults = MutableStateFlow<List<String>>(emptyList())
+    val tagResults: StateFlow<List<String>> = _tagResults
 
     private val _isSearching = MutableStateFlow(false)
     val isSearching: StateFlow<Boolean> = _isSearching
@@ -97,10 +97,6 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
 
     fun selectFilter(filter: SearchFilter) {
         _filter.value = filter
-        if (filter == SearchFilter.TAGS) {
-            stopNetworkSearchForTags()
-            _tagResults.value = RecipeTagCatalog.search(_query.value)
-        }
     }
 
     fun selectDefaultRelay() {
@@ -152,11 +148,10 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
     fun updateQuery(newQuery: String) {
         _query.value = newQuery
         val normalized = newQuery.trim().removePrefix("nostr:")
-        _tagResults.value = RecipeTagCatalog.search(normalized)
-        if (_filter.value == SearchFilter.TAGS) {
-            stopNetworkSearchForTags()
-            return
-        }
+        // Tag matches stay populated in every mode — the UI renders them as
+        // hashtag suggestion chips above the results (iOS parity), never as
+        // a separate search mode.
+        _tagResults.value = matchingTags(normalized)
         // Debounced auto-search: trigger after 500ms of no typing
         autoSearchJob?.cancel()
         val pool = relayPool ?: return
@@ -282,14 +277,10 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
         _users.value = emptyList()
         _notes.value = emptyList()
         _recipeResults.value = emptyList()
-        _tagResults.value = emptyList()
+        // _tagResults intentionally survives: the suggestion chips are a
+        // property of the typed text (set in updateQuery), not of the search.
 
         val activeFilter = _filter.value
-        if (activeFilter == SearchFilter.TAGS) {
-            _tagResults.value = RecipeTagCatalog.search(trimmed)
-            _isSearching.value = false
-            return
-        }
         val relaysToQuery = when (_selectedRelayOption.value) {
             RelayOption.DEFAULT -> DEFAULT_SEARCH_RELAYS
             RelayOption.ALL_RELAYS -> _searchRelays.value
@@ -353,7 +344,6 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 noteSubId
             }
-            SearchFilter.TAGS -> return
         }
 
         val seenUserPubkeys = mutableSetOf<String>()
@@ -406,7 +396,6 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
                                 eventRepo.cacheEvent(event)
                             }
                         }
-                        SearchFilter.TAGS -> return@collect
                     }
                 }
             }
@@ -514,6 +503,22 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
             recipe.summary?.lowercase()?.contains(q) == true
     }
 
+    /** Keyword / hashtag completions from the static food taxonomy — the
+     *  counterpart of web's `recipeTags` suggestion rows and iOS
+     *  `matchingTags`. Prefix matches first, then substring, capped at 8. */
+    private fun matchingTags(query: String, limit: Int = 8): List<String> {
+        val q = query.trim().lowercase(Locale.ROOT)
+        if (q.length < 2) return emptyList()
+        val prefix = mutableListOf<String>()
+        val contains = mutableListOf<String>()
+        for (tag in FoodHashtags.ALL) {
+            val t = tag.lowercase(Locale.ROOT)
+            if (t.startsWith(q)) prefix.add(tag)
+            else if (t.contains(q)) contains.add(tag)
+        }
+        return (prefix + contains).take(limit)
+    }
+
     fun clear() {
         searchJob?.cancel()
         authorSearchJob?.cancel()
@@ -522,7 +527,8 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
         _users.value = emptyList()
         _notes.value = emptyList()
         _recipeResults.value = emptyList()
-        _tagResults.value = emptyList()
+        // _tagResults intentionally survives: the suggestion chips are a
+        // property of the typed text (set in updateQuery), not of the search.
         _isSearching.value = false
         _authorFilter.value = null
         _authorSearchResults.value = emptyList()
@@ -548,10 +554,4 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
         relayPool.closeOnAllRelays(metricsSubId)
     }
 
-    private fun stopNetworkSearchForTags() {
-        autoSearchJob?.cancel()
-        searchJob?.cancel()
-        relayPool?.let { closeSubscriptions(it) }
-        _isSearching.value = false
-    }
 }
