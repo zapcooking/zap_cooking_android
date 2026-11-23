@@ -160,6 +160,7 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.launch
 import cooking.zap.app.nostr.RecipeParser
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.foundation.gestures.stopScroll
 import cooking.zap.app.ui.component.FEED_BARS_RESTORE_SIZE
 import cooking.zap.app.ui.component.FeedBarsRestoreButton
@@ -442,11 +443,17 @@ fun FeedScreen(
             restoreCircleSettled = true
         }
     }
-    // The compose FAB's scroll fade, shared by the restore circle.
-    val chromeScrolling = listState.isScrollInProgress
+    // The compose FAB's scroll fade, shared by the restore circle — the
+    // same three steps as iOS: 35% under the finger, 75% while a fling
+    // coasts, full at rest, 200ms each way.
+    val chromeDragged by listState.interactionSource.collectIsDraggedAsState()
     val chromeAlpha by animateFloatAsState(
-        targetValue = if (chromeScrolling) 0.3f else 1f,
-        animationSpec = tween(durationMillis = if (chromeScrolling) 150 else 400),
+        targetValue = when {
+            chromeDragged -> 0.35f
+            listState.isScrollInProgress -> 0.75f
+            else -> 1f
+        },
+        animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
         label = "fabAlpha"
     )
 
