@@ -2,6 +2,7 @@ package cooking.zap.app.ui.screen
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,6 +18,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -85,7 +88,6 @@ import cooking.zap.app.ui.component.NsecPasteGuard
 import cooking.zap.app.ui.component.PostCard
 import cooking.zap.app.ui.component.ProfilePicture
 import cooking.zap.app.nostr.RecipeParser
-import cooking.zap.app.nostr.RecipeTag
 import coil3.compose.AsyncImage
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.draw.clip
@@ -192,27 +194,15 @@ fun SearchScreen(
                         .padding(horizontal = 16.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // Segmented tab: Recipes | Tags | People | Notes (recipe-first)
+                    // Segmented tab: Recipes | People | Notes — hashtag matches render as
+                    // suggestion chips above the results in every mode (iOS parity),
+                    // never as a separate search mode.
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(50))
                             .padding(4.dp)
                     ) {
-                        SearchTab(
-                            label = stringResource(R.string.tab_recipes),
-                            icon = Icons.Default.Restaurant,
-                            selected = filter == SearchFilter.RECIPES,
-                            onClick = { viewModel.selectFilter(SearchFilter.RECIPES) },
-                            modifier = Modifier.weight(1f)
-                        )
-                        SearchTab(
-                            label = stringResource(R.string.tab_tags),
-                            icon = Icons.Outlined.Tag,
-                            selected = filter == SearchFilter.TAGS,
-                            onClick = { viewModel.selectFilter(SearchFilter.TAGS) },
-                            modifier = Modifier.weight(1f)
-                        )
                         SearchTab(
                             label = stringResource(R.string.tab_people),
                             icon = Icons.Default.AccountCircle,
@@ -225,6 +215,13 @@ fun SearchScreen(
                             icon = Icons.Default.Forum,
                             selected = filter == SearchFilter.NOTES,
                             onClick = { viewModel.selectFilter(SearchFilter.NOTES) },
+                            modifier = Modifier.weight(1f)
+                        )
+                        SearchTab(
+                            label = stringResource(R.string.tab_recipes),
+                            icon = Icons.Default.Restaurant,
+                            selected = filter == SearchFilter.RECIPES,
+                            onClick = { viewModel.selectFilter(SearchFilter.RECIPES) },
                             modifier = Modifier.weight(1f)
                         )
                     }
@@ -315,12 +312,12 @@ fun SearchScreen(
             // hidden by the global people/notes check.
             val activeResultsEmpty = when (filter) {
                 SearchFilter.RECIPES -> recipeResults.isEmpty()
-                SearchFilter.TAGS -> tagResults.isEmpty()
                 SearchFilter.PEOPLE -> users.isEmpty()
                 SearchFilter.NOTES -> notes.isEmpty()
             }
+            val suggestionsVisible = tagResults.isNotEmpty()
             when {
-                isSearching && activeResultsEmpty -> {
+                isSearching && activeResultsEmpty && !suggestionsVisible -> {
                     Box(
                         modifier = Modifier.fillMaxSize(),
                         contentAlignment = Alignment.Center
@@ -329,7 +326,7 @@ fun SearchScreen(
                     }
                 }
 
-                activeResultsEmpty && query.isNotEmpty() && !isSearching -> {
+                activeResultsEmpty && query.isNotEmpty() && !isSearching && !suggestionsVisible -> {
                     Box(
                         modifier = Modifier.fillMaxSize(),
                         contentAlignment = Alignment.Center
@@ -361,6 +358,14 @@ fun SearchScreen(
                         users.sortedByDescending { contactRepo?.isFollowing(it.pubkey) == true }
                     }
                     LazyColumn(modifier = Modifier.fillMaxSize()) {
+                        if (tagResults.isNotEmpty()) {
+                            item(key = "hashtag-suggestions", contentType = "hashtag-row") {
+                                HashtagSuggestionRow(
+                                    tags = tagResults,
+                                    onTagClick = { onTagClick(it) },
+                                )
+                            }
+                        }
                         when (filter) {
                             SearchFilter.RECIPES -> {
                                 items(recipeResults, key = { "${it.author}:${it.dTag}" }, contentType = { "recipe" }) { recipe ->
@@ -370,14 +375,6 @@ fun SearchScreen(
                                         authorName = profile?.displayString,
                                         authorPicture = profile?.picture,
                                         onClick = { onRecipeClick(recipe.author, recipe.dTag) },
-                                    )
-                                }
-                            }
-                            SearchFilter.TAGS -> {
-                                items(tagResults, key = { it.tag }, contentType = { "tag" }) { tag ->
-                                    TagResultItem(
-                                        tag = tag,
-                                        onClick = { onTagClick(tag.tag) },
                                     )
                                 }
                             }
@@ -526,35 +523,41 @@ private fun RecipeResultItem(
     }
 }
 
+/**
+ * Hashtag / keyword suggestion chips from the static tag taxonomy, rendered
+ * above the results in every search mode (iOS `tagSuggestions` parity) —
+ * never a separate search mode. A tap opens the hashtag feed.
+ */
 @Composable
-private fun TagResultItem(
-    tag: RecipeTag,
-    onClick: () -> Unit,
+private fun HashtagSuggestionRow(
+    tags: List<String>,
+    onTagClick: (String) -> Unit,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick() }
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    Column(modifier = Modifier.fillMaxWidth()) {
         Text(
-            text = tag.emoji,
-            style = MaterialTheme.typography.headlineSmall,
+            text = stringResource(R.string.search_hashtags_header),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
         )
-        Spacer(Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = tag.label,
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-                text = "#${tag.tag}",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(horizontal = 16.dp),
+        ) {
+            items(tags, key = { it }, contentType = { "tag-chip" }) { tag ->
+                Text(
+                    text = "#$tag",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(50))
+                        .clickable { onTagClick(tag) }
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                )
+            }
         }
+        HorizontalDivider(modifier = Modifier.padding(top = 12.dp))
     }
 }
 
