@@ -95,6 +95,7 @@ import cooking.zap.app.repo.EventRepository
 import cooking.zap.app.repo.Nip05Repository
 import cooking.zap.app.repo.Nip05Status
 import cooking.zap.app.repo.ZapDetail
+import cooking.zap.app.ui.util.noteZapOfferable
 import cooking.zap.app.util.MediaDownloader
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -662,6 +663,7 @@ fun GalleryCard(
                 resolvedEmojis = resolvedEmojis,
                 unicodeEmojis = unicodeEmojis,
                 onOpenEmojiLibrary = onOpenEmojiLibrary,
+                showZap = noteZapOfferable(profile ?: eventRepo?.getProfileData(event.pubkey)),
                 modifier = Modifier.weight(1f)
             )
             Icon(

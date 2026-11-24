@@ -95,6 +95,13 @@ fun ActionBar(
     onOpenEmojiLibrary: (() -> Unit)? = null,
     isPrivate: Boolean = false,
     zapEnabled: Boolean = true,
+    /**
+     * False removes the zap slot from the layout entirely (bolt, burst and
+     * sats count) instead of greying it out — used when zapping can never
+     * succeed, e.g. the author advertises no lightning address. Distinct
+     * from [zapEnabled], which keeps the bolt visible but inert.
+     */
+    showZap: Boolean = true,
     onZapDisabledTap: () -> Unit = {},
     /**
      * Adaptive right-aligned Cheffy Note Review trigger (issue #150,
@@ -237,74 +244,76 @@ fun ActionBar(
                 )
             }
         }
-        Spacer(Modifier.width(slotGap))
-        Box {
-            val zapClickable = !isZapInProgress
-            val longPressFired = remember { mutableStateOf(false) }
-            val view = LocalView.current
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier
-                    .size(48.dp)
-                    .combinedClickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = androidx.compose.material3.ripple(bounded = false, radius = 24.dp),
-                        enabled = zapClickable,
-                        onClick = {
-                            if (longPressFired.value) {
-                                longPressFired.value = false
-                            } else if (zapEnabled) {
-                                onZap()
-                            } else {
-                                onZapDisabledTap()
-                            }
-                        },
-                        onLongClick = if (zapEnabled && onZapLongPress != null) {
-                            {
-                                longPressFired.value = true
-                                zapInstantHaptic(view.context)
-                                onZapLongPress()
-                            }
-                        } else null
-                    )
-            ) {
-                val zapTint = when {
-                    !zapEnabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
-                    hasUserZapped -> WispThemeColors.zapColor
-                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+        if (showZap) {
+            Spacer(Modifier.width(slotGap))
+            Box {
+                val zapClickable = !isZapInProgress
+                val longPressFired = remember { mutableStateOf(false) }
+                val view = LocalView.current
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .combinedClickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = androidx.compose.material3.ripple(bounded = false, radius = 24.dp),
+                            enabled = zapClickable,
+                            onClick = {
+                                if (longPressFired.value) {
+                                    longPressFired.value = false
+                                } else if (zapEnabled) {
+                                    onZap()
+                                } else {
+                                    onZapDisabledTap()
+                                }
+                            },
+                            onLongClick = if (zapEnabled && onZapLongPress != null) {
+                                {
+                                    longPressFired.value = true
+                                    zapInstantHaptic(view.context)
+                                    onZapLongPress()
+                                }
+                            } else null
+                        )
+                ) {
+                    val zapTint = when {
+                        !zapEnabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+                        hasUserZapped -> WispThemeColors.zapColor
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                    if (isZapInProgress) {
+                        LightningAnimation(modifier = Modifier.size(width = 14.dp, height = 22.dp))
+                    } else {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_bolt),
+                            contentDescription = stringResource(R.string.cd_zaps),
+                            tint = zapTint,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
-                if (isZapInProgress) {
-                    LightningAnimation(modifier = Modifier.size(width = 14.dp, height = 22.dp))
-                } else {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_bolt),
-                        contentDescription = stringResource(R.string.cd_zaps),
-                        tint = zapTint,
-                        modifier = Modifier.size(18.dp)
+                // Lightning burst — zero layout footprint, draws above the icon
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .wrapContentSize(unbounded = true, align = Alignment.Center)
+                ) {
+                    ZapBurstEffect(
+                        isActive = isZapAnimating,
+                        modifier = Modifier.size(160.dp)
                     )
                 }
             }
-            // Lightning burst — zero layout footprint, draws above the icon
-            Box(
-                modifier = Modifier
-                    .matchParentSize()
-                    .wrapContentSize(unbounded = true, align = Alignment.Center)
-            ) {
-                ZapBurstEffect(
-                    isActive = isZapAnimating,
-                    modifier = Modifier.size(160.dp)
+            if (!isZapInProgress && zapSats > 0) {
+                val context = LocalContext.current
+                Text(
+                    text = AmountFormatter.formatShort(zapSats, context),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (hasUserZapped) WispThemeColors.zapColor else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
-        }
-        if (!isZapInProgress && zapSats > 0) {
-            val context = LocalContext.current
-            Text(
-                text = AmountFormatter.formatShort(zapSats, context),
-                style = MaterialTheme.typography.labelSmall,
-                color = if (hasUserZapped) WispThemeColors.zapColor else MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
         }
         Spacer(Modifier.width(slotGap))
         // Single tap → default Saved toggle; long-press → list chooser (when wired).

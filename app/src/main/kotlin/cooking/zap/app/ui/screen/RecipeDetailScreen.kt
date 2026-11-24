@@ -58,6 +58,7 @@ import cooking.zap.app.ui.component.NourishComputePanel
 import cooking.zap.app.ui.component.NourishMessagePanel
 import cooking.zap.app.ui.component.ProfilePicture
 import cooking.zap.app.ui.component.recipeBody
+import cooking.zap.app.ui.util.noteZapOfferable
 
 /**
  * Recipe reading view — branched from [ArticleScreen] (a recipe IS a kind
@@ -341,6 +342,7 @@ fun RecipeDetailScreen(
                                 resolvedEmojis = resolvedEmojis,
                                 unicodeEmojis = unicodeEmojis,
                                 onOpenEmojiLibrary = onOpenEmojiLibrary,
+                                showZap = noteZapOfferable(profile),
                                 modifier = Modifier.padding(horizontal = 8.dp),
                             )
                         }

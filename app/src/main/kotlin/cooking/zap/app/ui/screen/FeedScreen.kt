@@ -102,6 +102,7 @@ import cooking.zap.app.ui.component.EmojiLibrarySheet
 import cooking.zap.app.ui.component.pendingEmojiReactCallback
 import cooking.zap.app.ui.component.GalleryCard
 import cooking.zap.app.ui.component.isGalleryEvent
+import cooking.zap.app.ui.util.noteZapOfferable
 import cooking.zap.app.ui.component.PostCard
 import cooking.zap.app.ui.component.ProfilePicture
 import cooking.zap.app.ui.component.RelayIcon
@@ -1656,6 +1657,7 @@ private fun FeedArticleItem(
                 resolvedEmojis = resolvedEmojis,
                 unicodeEmojis = unicodeEmojis,
                 onOpenEmojiLibrary = onOpenEmojiLibrary,
+                showZap = noteZapOfferable(profileData),
                 modifier = Modifier.padding(horizontal = 4.dp)
             )
         }

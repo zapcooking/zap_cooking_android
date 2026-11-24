@@ -110,6 +110,7 @@ import cooking.zap.app.repo.TranslationState
 import cooking.zap.app.repo.TranslationStatus
 import cooking.zap.app.ui.theme.WispThemeColors
 import cooking.zap.app.ui.util.LocalCanSign
+import cooking.zap.app.ui.util.noteZapOfferable
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -222,6 +223,13 @@ fun PostCard(
             eventRepo?.getProfileData(pk)?.displayString ?: pk.toNpub().let { "${it.take(12)}...${it.takeLast(4)}" }
         }
     }
+
+    // Zap affordances (bolt tap, long-press quick zap, zap-poll vote) are
+    // hidden — not greyed — when the author advertises no lightning address:
+    // SocialActionManager would reject the zap at send time anyway.
+    // Re-derived un-remembered so a profile loading later reveals the slot
+    // via the profileVersion recomposition above.
+    val authorZapOfferable = noteZapOfferable(profile ?: eventRepo?.getProfileData(event.pubkey))
 
     // NIP-22 comment scoped to an external item (web page, podcast…): name the
     // source the comment is about. A comment carries no p-tags naming a recipient,
@@ -844,7 +852,8 @@ fun PostCard(
                     totalSats = zapPollTotalSats,
                     userVote = userZapPollVote,
                     isAuthor = isOwnEvent,
-                    onVote = onZapPollVote
+                    onVote = onZapPollVote,
+                    votingEnabled = authorZapOfferable
                 )
             }
 
@@ -898,6 +907,7 @@ fun PostCard(
                     onOpenEmojiLibrary = onOpenEmojiLibrary,
                     isPrivate = isPrivate,
                     zapEnabled = zapEnabled && !isOwnEvent,
+                    showZap = authorZapOfferable,
                     onZapDisabledTap = onZapDisabledTap,
                     // Inline placement (issue #150, option 1): offered only
                     // for eligible top-level cards — quoted renders are
@@ -1176,12 +1186,16 @@ private fun ZapPollSection(
     totalSats: Long,
     userVote: Int?,
     isAuthor: Boolean,
-    onVote: (Int) -> Unit
+    onVote: (Int) -> Unit,
+    votingEnabled: Boolean = true
 ) {
     val options = remember(event.id) { Nip69.parseZapPollOptions(event) }
     val isClosed = remember(event.id) { Nip69.isZapPollClosed(event) }
     val hasVoted = userVote != null
-    val showResults = hasVoted || isClosed || isAuthor
+    // Zap-poll votes are zaps (SocialActionManager.sendZapPollVote), so a
+    // poll author without a lightning address can never receive one — the
+    // vote affordance is hidden and the poll renders as results-only.
+    val showResults = hasVoted || isClosed || isAuthor || !votingEnabled
 
     Column(
         modifier = Modifier
