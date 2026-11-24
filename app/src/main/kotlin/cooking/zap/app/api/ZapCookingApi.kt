@@ -3,6 +3,7 @@ package cooking.zap.app.api
 import cooking.zap.app.mealplan.MealPlanGeneration
 import cooking.zap.app.nostr.Nip98
 import cooking.zap.app.nostr.Nip98HeaderCache
+import cooking.zap.app.nostr.NostrEvent
 import cooking.zap.app.nostr.NostrSigner
 import cooking.zap.app.nostr.SignerCancelledException
 import cooking.zap.app.nostr.SignerRejectedException
@@ -39,6 +40,14 @@ class ZapCookingApi(
     private val baseUrl: String = DEFAULT_BASE_URL,
     private val client: OkHttpClient = HttpClientFactory.getGeneralClient(),
     private val nip98Cache: Nip98HeaderCache = Nip98HeaderCache(),
+    /** Unix seconds. Injected so the schedule lead-time check is testable. */
+    private val nowSeconds: () -> Long = { System.currentTimeMillis() / 1000 },
+    /**
+     * Schnorr check for an event a signer handed back. Injected because the
+     * hermetic JVM suite has no native secp256k1; production always uses
+     * [NostrEvent.verifySignature].
+     */
+    private val verifyEventSignature: (NostrEvent) -> Boolean = { it.verifySignature() },
 ) {
     private val json = Json { ignoreUnknownKeys = true }
     private val jsonMediaType = "application/json".toMediaType()
@@ -623,6 +632,188 @@ class ZapCookingApi(
             httpClient.newCall(builder.build()).execute().use { resp ->
                 RawResponse(resp.code, resp.body?.string().orEmpty())
             }
+        }
+    }
+
+    // --- Scheduled posts (contract: docs/schedule-contract.md in zapcooking/frontend) ---
+
+    /**
+     * Sign an event that will publish at [publishAt] (unix seconds):
+     * `created_at` is that time, signed once. The result is checked before
+     * it is returned — id, pubkey, kind, content, tags and `created_at`
+     * must be exactly what was asked for and the signature must verify. A
+     * signer that re-dates or alters what it signs (an external signer may
+     * return a whole event of its own) comes back as
+     * [ScheduleFailure.SignerChangedEvent] and is never sent.
+     *
+     * The lead-time check runs here, at the point of signing: 3 minutes or
+     * less away, or 90 days or more, is [ScheduleFailure.BadPublishTime]
+     * with no signer prompt.
+     *
+     * Never mine proof-of-work on an event headed here, and sign once: a
+     * retry of [scheduleEvent] reuses this exact event.
+     */
+    suspend fun signForSchedule(
+        signer: NostrSigner?,
+        kind: Int,
+        content: String,
+        tags: List<List<String>>,
+        publishAt: Long,
+    ): ScheduleSignResult {
+        if (signer == null) return ScheduleSignResult.Failed(ScheduleFailure.SignedOut)
+        val now = nowSeconds()
+        if (publishAt <= now + ScheduleWire.MIN_LEAD_SECONDS || publishAt >= now + ScheduleWire.MAX_LEAD_SECONDS) {
+            return ScheduleSignResult.Failed(ScheduleFailure.BadPublishTime)
+        }
+        val expected = NostrEvent.createUnsigned(signer.pubkeyHex, kind, content, tags, createdAt = publishAt)
+        val signed = try {
+            signer.signEvent(kind = kind, content = content, tags = tags, createdAt = publishAt)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            return ScheduleSignResult.Failed(ScheduleFailure.SignFailed)
+        }
+        val unchanged = signed.id == expected.id &&
+            signed.pubkey == expected.pubkey &&
+            signed.created_at == publishAt &&
+            signed.kind == kind &&
+            signed.content == content &&
+            signed.tags == tags
+        if (!unchanged || !verifyEventSignature(signed)) {
+            return ScheduleSignResult.Failed(ScheduleFailure.SignerChangedEvent)
+        }
+        return ScheduleSignResult.Signed(signed)
+    }
+
+    /**
+     * `POST /api/schedule` — schedule a signed event from [signForSchedule]
+     * to the public relays (`relay_mode: "all"`). [relays] is the author's
+     * own write relays, already filtered and capped by the caller; the
+     * field is omitted when empty.
+     *
+     * Safe to call again with the SAME event after [ScheduleFailure.Network]
+     * or [ScheduleFailure.Internal]: a 409 `already_scheduled` whose row is
+     * pending, publishing or sent comes back as success. If the server
+     * refuses the relay list (`bad_relays`), the request is sent once more
+     * without it so the post still reaches the scheduler's fixed relays.
+     */
+    suspend fun scheduleEvent(
+        signer: NostrSigner?,
+        event: NostrEvent,
+        relays: List<String> = emptyList(),
+    ): ScheduleEventResult {
+        if (signer == null) return ScheduleEventResult.Failed(ScheduleFailure.SignedOut)
+        // The auth header's key is the caller's identity; an account switch
+        // between signing and sending would be refused by the server anyway.
+        if (event.pubkey != signer.pubkeyHex) return ScheduleEventResult.Failed(ScheduleFailure.PubkeyMismatch)
+
+        val url = "$baseUrl/api/schedule"
+        var sentRelays = relays
+        var sent = scheduleSend(signer, "POST", url, ScheduleWire.buildScheduleBody(event, sentRelays))
+        if (sent is ScheduleSent.Response && sentRelays.isNotEmpty() &&
+            ScheduleWire.errorCode(sent.data) == "bad_relays"
+        ) {
+            sentRelays = emptyList()
+            sent = scheduleSend(signer, "POST", url, ScheduleWire.buildScheduleBody(event, sentRelays))
+        }
+        return when (sent) {
+            is ScheduleSent.Failure -> ScheduleEventResult.Failed(sent.failure)
+            is ScheduleSent.Response -> ScheduleWire.mapScheduleResponse(sent.code, sent.data, event, sentRelays)
+        }
+    }
+
+    /**
+     * `GET /api/schedule[?status=…]` — the account's scheduled events,
+     * newest publish time first (the server's order), at most 100. Rows
+     * this client cannot read are skipped rather than failing the list.
+     */
+    suspend fun listScheduled(
+        signer: NostrSigner?,
+        status: ScheduleStatus? = null,
+    ): ScheduleListResult {
+        if (signer == null) return ScheduleListResult.Failed(ScheduleFailure.SignedOut)
+        val url = baseUrl.toHttpUrl().newBuilder()
+            .addPathSegments("api/schedule")
+            .apply { if (status != null) addQueryParameter("status", status.wire) }
+            .build()
+        return when (val sent = scheduleSend(signer, "GET", url.toString(), bodyString = null)) {
+            is ScheduleSent.Failure -> ScheduleListResult.Failed(sent.failure)
+            is ScheduleSent.Response -> ScheduleWire.mapListResponse(sent.code, sent.data)
+        }
+    }
+
+    /**
+     * `DELETE /api/schedule/{id}` — cancel a pending scheduled event. A row
+     * that was already cancelled counts as done;
+     * [ScheduleFailure.NotCancellable] carries what happened instead
+     * (publishing / sent / failed).
+     */
+    suspend fun cancelScheduled(signer: NostrSigner?, id: String): ScheduleCancelResult {
+        if (signer == null) return ScheduleCancelResult.Failed(ScheduleFailure.SignedOut)
+        // The id becomes a path segment; anything but an event id is not a row.
+        if (!ScheduleWire.isEventId(id)) return ScheduleCancelResult.Failed(ScheduleFailure.NotFound)
+        return when (val sent = scheduleSend(signer, "DELETE", "$baseUrl/api/schedule/$id", bodyString = null)) {
+            is ScheduleSent.Failure -> ScheduleCancelResult.Failed(sent.failure)
+            is ScheduleSent.Response -> ScheduleWire.mapCancelResponse(sent.code, sent.data, id)
+        }
+    }
+
+    private sealed interface ScheduleSent {
+        data class Response(val code: Int, val data: kotlinx.serialization.json.JsonObject) : ScheduleSent
+        data class Failure(val failure: ScheduleFailure) : ScheduleSent
+    }
+
+    /**
+     * One authenticated schedule request. Deliberately NOT routed through
+     * [nip98Cache]: the schedule contract requires a freshly signed header
+     * for every request, never a reused one. On 401 the request is sent
+     * exactly once more with a newly signed header (the usual cause is a
+     * header that aged past the verifier's 60 s behind a signer prompt).
+     *
+     * [url] may carry a query string; the signed `u` tag never does
+     * ([Nip98.normalizeUrl]). A non-null [bodyString] is hashed into the
+     * `payload` tag and sent byte for byte; GET and DELETE carry neither.
+     */
+    private suspend fun scheduleSend(
+        signer: NostrSigner,
+        method: String,
+        url: String,
+        bodyString: String?,
+    ): ScheduleSent = withContext(Dispatchers.IO) {
+        val first = scheduleSendOnce(signer, method, url, bodyString)
+        if (first is ScheduleSent.Response && first.code == 401) {
+            scheduleSendOnce(signer, method, url, bodyString)
+        } else {
+            first
+        }
+    }
+
+    /** Sign a fresh header and issue the request once. Call only from `Dispatchers.IO`. */
+    private suspend fun scheduleSendOnce(
+        signer: NostrSigner,
+        method: String,
+        url: String,
+        bodyString: String?,
+    ): ScheduleSent {
+        val authHeader = try {
+            Nip98.authHeader(signer, method = method, url = url, bodyString = bodyString)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            return ScheduleSent.Failure(ScheduleFailure.SignFailed)
+        }
+        val builder = Request.Builder().url(url).header("Authorization", authHeader)
+        when (method) {
+            "POST" -> builder.post(requireNotNull(bodyString).toRequestBody(jsonMediaType))
+            "DELETE" -> builder.delete()
+            else -> builder.get()
+        }
+        return try {
+            client.newCall(builder.build()).execute().use { resp ->
+                ScheduleSent.Response(resp.code, ScheduleWire.parseObject(resp.body?.string().orEmpty()))
+            }
+        } catch (_: java.io.IOException) {
+            ScheduleSent.Failure(ScheduleFailure.Network)
         }
     }
 
