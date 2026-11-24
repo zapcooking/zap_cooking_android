@@ -53,6 +53,25 @@ AI (OpenAI-backed, all server-side — the app only calls them):
 - `POST /api/cookbook-intro` — AI intro copy for recipe books (rides
   with the cookbook/recipe-books commerce feature; later phase).
 
+Scheduled posts (**all NIP-98**; contract is `docs/schedule-contract.md`
+in zapcooking/frontend and wins over this summary):
+- `POST /api/schedule` — body `{ event, relay_mode: "all", relays? }`.
+  The event is signed on the device with `created_at` = publish time;
+  the server holds no key and broadcasts it unchanged. `relays` is up to
+  4 of the author's own write relays (omitted when empty).
+- `GET /api/schedule?status=<status>` — the caller's rows, any client's
+  (a post scheduled on web lists here and the reverse). The query string
+  is NOT part of the signed `u` tag.
+- `DELETE /api/schedule/{id}` — cancel a `pending` row; `{id}` is the
+  event id.
+- Client: `ZapCookingApi.signForSchedule` / `scheduleEvent` /
+  `listScheduled` / `cancelScheduled`, results in `api/ScheduleApi.kt`.
+  These sign a **fresh header per request** and bypass
+  `Nip98HeaderCache` (the contract forbids reuse); one retry on 401, one
+  retry without `relays` on `bad_relays`, and a 409 `already_scheduled`
+  whose row is pending/publishing/sent is success. Never mine PoW on a
+  scheduled event, and never re-sign to retry.
+
 Membership:
 - `GET /api/membership?pubkey=<hex>` — **public batch read** of status
   (no auth). Use for displaying a user's own/others' member state.
