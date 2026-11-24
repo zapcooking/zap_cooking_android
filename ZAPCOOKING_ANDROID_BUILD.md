@@ -79,6 +79,13 @@ in zapcooking/frontend and wins over this summary):
   account's own NIP-65 write relays in list order through
   `ScheduleRelays.pick` — a port of web's `pickScheduleRelays`, sharing
   its test cases — and is omitted when empty.
+- Scheduled list (`DraftsViewModel`, rules in `viewmodel/ScheduledList.kt`):
+  two calls, `?status=pending` then `?status=failed`; pending is shown
+  as soon as it returns and survives a failed second call. Pending rows
+  sort soonest first. Reloads on every screen entry and on pull to
+  refresh. Cancel waits for the DELETE answer before removing the row.
+- The old `wss://scheduler.nostrarchives.com` relay is gone from the app;
+  posts parked on it were not migrated.
 
 Membership:
 - `GET /api/membership?pubkey=<hex>` — **public batch read** of status

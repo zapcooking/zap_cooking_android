@@ -1123,6 +1123,23 @@
     <string name="delete_draft">Delete draft</string>
     <string name="empty_content">(empty)</string>
     <string name="remove_from_schedule">Remove from schedule</string>
+    <string name="scheduled_kind_note">Note</string>
+    <string name="scheduled_kind_reply">Reply</string>
+    <string name="scheduled_kind_comment">Comment</string>
+    <string name="scheduled_kind_picture">Picture</string>
+    <string name="scheduled_kind_video">Video</string>
+    <string name="scheduled_kind_poll">Poll</string>
+    <string name="scheduled_kind_zap_poll">Zap poll</string>
+    <string name="scheduled_kind_article">Article</string>
+    <string name="scheduled_kind_other">Post</string>
+    <string name="scheduled_status_failed">Failed</string>
+    <string name="scheduled_failed_explanation">This post couldn\'t be published and won\'t be sent. Schedule it again if you still want it to go out.</string>
+    <string name="scheduled_failed_detail">Details: %1$s</string>
+    <string name="scheduled_no_caption">No caption</string>
+    <string name="scheduled_cancelled">Scheduled post cancelled.</string>
+    <string name="scheduled_cancel_failed">Couldn\'t cancel this post, so it is still scheduled. Please try again.</string>
+    <string name="scheduled_cancel_failed_network">Couldn\'t reach Zap Cooking, so this post is still scheduled. Check your connection and try again.</string>
+    <string name="scheduled_pull_to_retry">Pull down to try again.</string>
 
     <!-- Diagnostics -->
     <string name="diagnostics_title">Diagnostics</string>

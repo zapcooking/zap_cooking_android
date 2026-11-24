@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -20,6 +21,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -28,13 +30,18 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.annotation.StringRes
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -42,6 +49,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -49,13 +59,16 @@ import cooking.zap.app.nostr.Nip05
 import cooking.zap.app.nostr.toNpub
 import cooking.zap.app.nostr.Nip30
 import cooking.zap.app.nostr.Nip37
-import cooking.zap.app.nostr.NostrEvent
 import cooking.zap.app.nostr.ProfileData
 import cooking.zap.app.ui.component.ProfilePicture
 import cooking.zap.app.ui.component.RichContent
 import cooking.zap.app.ui.component.parseImetaTags
 import cooking.zap.app.R
+import cooking.zap.app.api.ScheduleStatus
+import cooking.zap.app.api.ScheduledItem
 import cooking.zap.app.viewmodel.DraftsViewModel
+import cooking.zap.app.viewmodel.scheduledPreview
+import coil3.compose.AsyncImage
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -67,18 +80,32 @@ fun DraftsScreen(
     onBack: () -> Unit,
     onDraftClick: (Nip37.Draft) -> Unit,
     onDeleteDraft: (String) -> Unit,
-    onDeleteScheduled: (String) -> Unit,
+    onCancelScheduled: (String) -> Unit,
+    onRefreshScheduled: () -> Unit,
     userProfile: ProfileData? = null,
     initialTab: Int = 0
 ) {
     val drafts by viewModel.drafts.collectAsState()
     val scheduledPosts by viewModel.scheduledPosts.collectAsState()
     val scheduledLoading by viewModel.scheduledLoading.collectAsState()
+    val scheduledRefreshing by viewModel.scheduledRefreshing.collectAsState()
+    val scheduledError by viewModel.scheduledError.collectAsState()
+    val cancellingIds by viewModel.cancellingIds.collectAsState()
+
+    // What happened to a cancel: cancelled, already published, still scheduled…
+    val snackbarHostState = remember { SnackbarHostState() }
+    val context = LocalContext.current
+    LaunchedEffect(Unit) {
+        viewModel.scheduledMessages.collect { message ->
+            snackbarHostState.showSnackbar(context.getString(message))
+        }
+    }
 
     var selectedTab by remember { mutableIntStateOf(initialTab) }
 
     Scaffold(
         contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.drafts_scheduled_title)) },
@@ -123,8 +150,12 @@ fun DraftsScreen(
                 1 -> ScheduledTab(
                     posts = scheduledPosts,
                     loading = scheduledLoading,
+                    refreshing = scheduledRefreshing,
+                    error = scheduledError,
+                    cancellingIds = cancellingIds,
                     userProfile = userProfile,
-                    onDelete = onDeleteScheduled
+                    onCancel = onCancelScheduled,
+                    onRefresh = onRefreshScheduled
                 )
             }
         }
@@ -158,36 +189,78 @@ private fun DraftsTab(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ScheduledTab(
-    posts: List<NostrEvent>,
+    posts: List<ScheduledItem>,
     loading: Boolean,
+    refreshing: Boolean,
+    @StringRes error: Int?,
+    cancellingIds: Set<String>,
     userProfile: ProfileData?,
-    onDelete: (String) -> Unit
+    onCancel: (String) -> Unit,
+    onRefresh: () -> Unit
 ) {
-    when {
-        loading && posts.isEmpty() -> {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
-            }
+    if (loading && posts.isEmpty()) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
         }
-        posts.isEmpty() -> {
-            EmptyState(
-                icon = { Icon(Icons.Outlined.Schedule, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)) },
-                message = stringResource(R.string.no_scheduled_posts)
-            )
-        }
-        else -> {
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
-                items(items = posts, key = { it.id }) { post ->
-                    ScheduledPostItem(
-                        post = post,
-                        userProfile = userProfile,
-                        onDelete = { onDelete(post.id) }
-                    )
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
+        return
+    }
+    // One scrollable list in every state, so pull to refresh works when it is
+    // empty or showing an error too.
+    PullToRefreshBox(
+        isRefreshing = refreshing,
+        onRefresh = onRefresh,
+        modifier = Modifier.fillMaxSize()
+    ) {
+        LazyColumn(modifier = Modifier.fillMaxSize()) {
+            if (error != null) {
+                item(key = "error") {
+                    ScheduledLoadError(message = stringResource(error))
                 }
             }
+            if (posts.isEmpty() && error == null) {
+                item(key = "empty") {
+                    Box(modifier = Modifier.fillParentMaxSize()) {
+                        EmptyState(
+                            icon = { Icon(Icons.Outlined.Schedule, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)) },
+                            message = stringResource(R.string.no_scheduled_posts)
+                        )
+                    }
+                }
+            }
+            items(items = posts, key = { it.id }) { post ->
+                ScheduledPostItem(
+                    item = post,
+                    userProfile = userProfile,
+                    cancelling = post.id in cancellingIds,
+                    onCancel = { onCancel(post.id) }
+                )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
+            }
+        }
+    }
+}
+
+/** The list would not load. Rows from an earlier load, if any, stay below it. */
+@Composable
+private fun ScheduledLoadError(message: String) {
+    Surface(
+        color = MaterialTheme.colorScheme.errorContainer,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onErrorContainer
+            )
+            Text(
+                text = stringResource(R.string.scheduled_pull_to_retry),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer
+            )
         }
     }
 }
@@ -277,17 +350,25 @@ private fun DraftItem(
     }
 }
 
+/**
+ * One scheduled row: what kind of post it is, when it publishes, its status,
+ * and a preview — text, first picture, poll options ([scheduledPreview]). A
+ * pending row can be cancelled; a failed row says plainly that it will not go
+ * out, with the server's own detail underneath.
+ */
 @Composable
 private fun ScheduledPostItem(
-    post: NostrEvent,
+    item: ScheduledItem,
     userProfile: ProfileData?,
-    onDelete: () -> Unit
+    cancelling: Boolean,
+    onCancel: () -> Unit
 ) {
+    val post = item.event
     val displayName = remember(post.pubkey, userProfile?.displayString) {
         userProfile?.displayString ?: post.pubkey.toNpub().let { "${it.take(12)}...${it.takeLast(4)}" }
     }
-    val publishTime = post.created_at
-    val isFuture = publishTime > System.currentTimeMillis() / 1000
+    val failed = item.status == ScheduleStatus.FAILED
+    val preview = remember(item.id) { scheduledPreview(post) }
     val emojiMap = remember(post.id) { Nip30.parseEmojiTags(post) }
     val imetaMap = remember(post.id) { parseImetaTags(post.tags) }
 
@@ -308,21 +389,19 @@ private fun ScheduledPostItem(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                if (!userProfile?.nip05.isNullOrBlank()) {
-                    Text(
-                        text = Nip05.formatForDisplay(userProfile!!.nip05!!),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
+                Text(
+                    text = stringResource(preview.kind.labelRes),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
             Spacer(Modifier.width(8.dp))
-            // Publish time badge in place of the timestamp
+            // Status + publish time badge in place of the timestamp
             Surface(
-                color = if (isFuture) MaterialTheme.colorScheme.primaryContainer
-                        else MaterialTheme.colorScheme.errorContainer,
+                color = if (failed) MaterialTheme.colorScheme.errorContainer
+                        else MaterialTheme.colorScheme.primaryContainer,
                 shape = RoundedCornerShape(4.dp)
             ) {
                 Row(
@@ -330,42 +409,114 @@ private fun ScheduledPostItem(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(3.dp)
                 ) {
+                    val badgeColor = if (failed) MaterialTheme.colorScheme.onErrorContainer
+                                     else MaterialTheme.colorScheme.onPrimaryContainer
                     Icon(
-                        Icons.Outlined.AccessTime,
+                        if (failed) Icons.Outlined.ErrorOutline else Icons.Outlined.AccessTime,
                         contentDescription = null,
                         modifier = Modifier.size(11.dp),
-                        tint = if (isFuture) MaterialTheme.colorScheme.onPrimaryContainer
-                               else MaterialTheme.colorScheme.onErrorContainer
+                        tint = badgeColor
                     )
                     Text(
-                        text = formatScheduledTime(publishTime),
+                        text = if (failed) {
+                            stringResource(R.string.scheduled_status_failed) + " · " + formatScheduledTime(item.publishAt)
+                        } else {
+                            formatScheduledTime(item.publishAt)
+                        },
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (isFuture) MaterialTheme.colorScheme.onPrimaryContainer
-                                else MaterialTheme.colorScheme.onErrorContainer
+                        color = badgeColor
                     )
                 }
             }
-            // Remove button
-            IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
-                Icon(
-                    Icons.Outlined.Close,
-                    contentDescription = stringResource(R.string.remove_from_schedule),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(18.dp)
-                )
+            // Only a pending post can be cancelled. The row stays until the server answers.
+            if (!failed) {
+                if (cancelling) {
+                    Box(modifier = Modifier.size(36.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    }
+                } else {
+                    IconButton(onClick = onCancel, modifier = Modifier.size(36.dp)) {
+                        Icon(
+                            Icons.Outlined.Close,
+                            contentDescription = stringResource(R.string.remove_from_schedule),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
             }
         }
 
         Spacer(Modifier.height(6.dp))
 
-        // Note content — full RichContent just like PostCard
-        RichContent(
-            content = post.content,
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurface,
-            emojiMap = emojiMap,
-            imetaMap = imetaMap
-        )
+        // Text: the note, caption, poll question or article title. Inline images
+        // in a note are drawn by RichContent, exactly as in the feed.
+        if (preview.text.isNotBlank()) {
+            RichContent(
+                content = preview.text,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                emojiMap = emojiMap,
+                imetaMap = imetaMap
+            )
+        } else if (preview.imageUrl == null && preview.pollOptions.isEmpty()) {
+            Text(
+                text = stringResource(R.string.scheduled_no_caption),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        // First picture of a gallery post, or a video's poster frame.
+        preview.imageUrl?.let { url ->
+            Spacer(Modifier.height(6.dp))
+            AsyncImage(
+                model = url,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 220.dp)
+                    .clip(RoundedCornerShape(8.dp))
+            )
+        }
+
+        if (preview.pollOptions.isNotEmpty()) {
+            Spacer(Modifier.height(6.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                preview.pollOptions.forEach { option ->
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = option,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        if (failed) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = stringResource(R.string.scheduled_failed_explanation),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error
+            )
+            // The server's or a relay's own words: shown as detail, never interpreted.
+            item.lastError?.takeIf { it.isNotBlank() }?.let { detail ->
+                Text(
+                    text = stringResource(R.string.scheduled_failed_detail, detail),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
 
         Spacer(Modifier.height(4.dp))
     }
