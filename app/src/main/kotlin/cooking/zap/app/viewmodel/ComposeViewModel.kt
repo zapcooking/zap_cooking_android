@@ -1631,6 +1631,15 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
                 _publishing.value = false
                 return 0
             }
+            // Say what happened: scheduled, and for when. The composer closes on success,
+            // so without this a scheduled post would look exactly like one that was posted.
+            val app = getApplication<Application>()
+            val whenText = formatScheduledTime(scheduledAt, java.time.ZoneId.systemDefault(), java.util.Locale.getDefault())
+            withContext(Dispatchers.Main) {
+                android.widget.Toast.makeText(
+                    app, app.getString(R.string.compose_post_scheduled, whenText), android.widget.Toast.LENGTH_LONG
+                ).show()
+            }
             completePublish(owner, relayPool, signer) {
                 applyScheduleOptions(scheduleOptions().scheduleOff())
             }

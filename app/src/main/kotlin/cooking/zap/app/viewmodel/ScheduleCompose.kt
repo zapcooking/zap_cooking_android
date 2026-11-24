@@ -10,6 +10,8 @@ import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 /*
  * The composer's scheduling rules, as pure functions so the hermetic JVM
@@ -129,6 +131,14 @@ internal data class ScheduleOptions(
     fun withPrivateReply(on: Boolean): ScheduleOptions =
         if (on) scheduleOff().copy(privateReply = true) else copy(privateReply = false)
 }
+
+/**
+ * The publish time as the success message shows it, e.g. "Nov 25, 2026 at
+ * 6:30 PM" — the same spelling as the composer's "Scheduled for" banner.
+ */
+internal fun formatScheduledTime(epochSeconds: Long, zone: ZoneId, locale: Locale): String =
+    DateTimeFormatter.ofPattern("MMM d, yyyy 'at' h:mm a", locale)
+        .format(Instant.ofEpochSecond(epochSeconds).atZone(zone))
 
 /**
  * The publish-path backstop for "a private reply cannot be scheduled":

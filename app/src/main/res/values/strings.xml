@@ -1136,6 +1136,8 @@
     <string name="error_post_empty">Post cannot be empty</string>
     <string name="error_not_logged_in">Not logged in</string>
     <string name="error_schedule_date_required">Pick a date and time to schedule</string>
+    <!-- Shown after a successful schedule. Must say "scheduled" and when; never "posted". %1$s = date and time -->
+    <string name="compose_post_scheduled">Post scheduled for %1$s</string>
     <string name="schedule_picker_too_soon">Pick a time at least 5 minutes from now.</string>
     <string name="schedule_picker_too_far">Pick a time within 90 days.</string>
     <string name="schedule_unavailable_private_reply">Private replies can\'t be scheduled</string>

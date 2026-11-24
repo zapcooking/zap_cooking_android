@@ -9,10 +9,12 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.ZoneOffset
+import java.util.Locale
 
 /**
  * The composer's scheduling rules (ScheduleCompose.kt): picker bounds,
@@ -278,6 +280,28 @@ class ScheduleComposeTest {
         assertTrue(useUndoCountdown(timerEnabled = true, timerSeconds = 10, scheduled = false))
         assertFalse(useUndoCountdown(timerEnabled = false, timerSeconds = 10, scheduled = false))
         assertFalse(useUndoCountdown(timerEnabled = true, timerSeconds = 0, scheduled = false))
+    }
+
+    // --- the success message ---
+
+    @Test
+    fun `the success message gives the publish time in the user's zone`() {
+        val publishAt = at(newYork, 2026, 11, 25, 18, 30)
+        assertEquals("Nov 25, 2026 at 6:30 PM", formatScheduledTime(publishAt, newYork, Locale.US))
+        // The same instant reads differently elsewhere: it is local time, not UTC.
+        assertEquals("Nov 25, 2026 at 11:30 PM", formatScheduledTime(publishAt, utc, Locale.US))
+    }
+
+    @Test
+    fun `the success message says scheduled and when and never posted`() {
+        // No Android resources in the hermetic suite: read the string as shipped.
+        val xml = File("src/main/res/values/strings.xml").readText()
+        val text = Regex("""<string name="compose_post_scheduled">(.*?)</string>""").find(xml)!!.groupValues[1]
+        assertTrue(text, text.contains("scheduled", ignoreCase = true))
+        assertTrue(text, text.contains("%1\$s"))
+        for (wrong in listOf("posted", "published", "sent")) {
+            assertFalse(text, text.contains(wrong, ignoreCase = true))
+        }
     }
 
     // --- copy ---
