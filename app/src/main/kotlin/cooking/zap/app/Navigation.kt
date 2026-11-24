@@ -1398,6 +1398,9 @@ fun WispNavHost(
             FeedScreen(
                 viewModel = feedViewModel,
                 onOpenDrawer = onOpenDrawer,
+                // Read-only accounts have no Messages tab, so no DM dot.
+                hasUnreadActivity = hasUnreadNotifications ||
+                    (signingMode != SigningMode.READ_ONLY && hasUnreadDms),
                 scrollToTopTrigger = scrollToTopTrigger,
                 onAskCheffy = { noteReviewTarget = it },
                 onCompose = if (signingMode == SigningMode.READ_ONLY) null else {
