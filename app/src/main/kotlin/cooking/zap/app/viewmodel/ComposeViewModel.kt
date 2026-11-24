@@ -13,6 +13,10 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import com.madebyevan.thumbhash.ThumbHash
+import cooking.zap.app.api.ScheduleEventResult
+import cooking.zap.app.api.ScheduleFailure
+import cooking.zap.app.api.ScheduleRelays
+import cooking.zap.app.api.ScheduleSignResult
 import cooking.zap.app.nostr.ClientMessage
 import cooking.zap.app.nostr.Filter
 import cooking.zap.app.nostr.Keys
@@ -58,7 +62,6 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -410,7 +413,8 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
 
     fun togglePrivateReply() {
         if (_privateReplyLocked.value) return
-        _privateReply.value = !_privateReply.value
+        // A private reply cannot be scheduled: turning it on clears a set schedule.
+        applyScheduleOptions(scheduleOptions().withPrivateReply(!_privateReply.value))
     }
 
     /** Called by ComposeScreen when the screen mounts with [replyTo]; auto-enables
@@ -418,20 +422,43 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
     fun configureForReply(replyTo: NostrEvent?) {
         val isReplyingToPrivate = replyTo != null && eventRepo?.isPrivate(replyTo.id) == true
         _privateReplyLocked.value = isReplyingToPrivate
-        if (isReplyingToPrivate) _privateReply.value = true
+        if (isReplyingToPrivate) applyScheduleOptions(scheduleOptions().withPrivateReply(true))
     }
 
     private val _powEnabled = MutableStateFlow(false)
     val powEnabled: StateFlow<Boolean> = _powEnabled
 
     fun initPowState(enabled: Boolean) {
-        _powEnabled.value = enabled
+        applyScheduleOptions(scheduleOptions().initPow(enabled))
     }
 
     fun togglePow(powPrefs: cooking.zap.app.repo.PowPreferences) {
-        val newValue = !_powEnabled.value
-        _powEnabled.value = newValue
-        powPrefs.setNotePowEnabled(newValue)
+        // No-op while a schedule is on: mining and scheduling do not mix.
+        val before = scheduleOptions()
+        val after = before.togglePow()
+        if (after == before) return
+        applyScheduleOptions(after)
+        powPrefs.setNotePowEnabled(after.powEnabled)
+    }
+
+    /** The user's PoW choice from before a schedule was turned on; restored when it is cleared. */
+    private var powBeforeSchedule: Boolean? = null
+
+    /** The mutually constraining options as one value; rules live in [ScheduleOptions]. */
+    private fun scheduleOptions() = ScheduleOptions(
+        scheduleEnabled = _scheduleEnabled.value,
+        scheduleTimestamp = _scheduleTimestamp.value,
+        powEnabled = _powEnabled.value,
+        powBeforeSchedule = powBeforeSchedule,
+        privateReply = _privateReply.value,
+    )
+
+    private fun applyScheduleOptions(options: ScheduleOptions) {
+        _scheduleEnabled.value = options.scheduleEnabled
+        _scheduleTimestamp.value = options.scheduleTimestamp
+        _powEnabled.value = options.powEnabled
+        powBeforeSchedule = options.powBeforeSchedule
+        _privateReply.value = options.privateReply
     }
 
     private val _galleryMode = MutableStateFlow(false)
@@ -684,7 +711,6 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
     }
 
     companion object {
-        val SCHEDULER_RELAYS = listOf("wss://scheduler.nostrarchives.com")
         const val MAX_GALLERY_IMAGES = 21
 
         /** Upper bound for pasted-link metadata downloads (larger files keep
@@ -724,13 +750,13 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
     private val _scheduleTimestamp = MutableStateFlow<Long?>(null)
     val scheduleTimestamp: StateFlow<Long?> = _scheduleTimestamp
 
+    /** Turns the schedule on or off. Turning it on is refused while private reply is on; PoW is parked while it is on. */
     fun toggleSchedule() {
-        _scheduleEnabled.value = !_scheduleEnabled.value
-        if (!_scheduleEnabled.value) _scheduleTimestamp.value = null
+        applyScheduleOptions(scheduleOptions().toggleSchedule())
     }
 
     fun setScheduleTimestamp(epochSeconds: Long) {
-        _scheduleTimestamp.value = epochSeconds
+        applyScheduleOptions(scheduleOptions().withTimestamp(epochSeconds))
     }
 
     fun togglePoll() {
@@ -1281,8 +1307,10 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
                 _error.value = getApplication<Application>().getString(R.string.error_schedule_date_required)
                 return
             }
-            if (ts <= System.currentTimeMillis() / 1000) {
-                _error.value = getApplication<Application>().getString(R.string.error_schedule_future)
+            // The lead-time check itself runs where the event is signed
+            // (ZapCookingApi.signForSchedule), not here.
+            if (privateReplyBlockedBySchedule(_privateReply.value, true, ts)) {
+                _error.value = getApplication<Application>().getString(R.string.schedule_error_private_reply)
                 return
             }
         }
@@ -1299,7 +1327,8 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         pendingPublishDraftId = owner.draftId
 
         _publishing.value = true
-        if (!useTimer || timerSeconds <= 0) {
+        // A scheduled post skips the undo countdown; see [useUndoCountdown].
+        if (!useUndoCountdown(useTimer, timerSeconds, scheduled = _scheduleEnabled.value)) {
             launchPublish(owner, inputs, text, s, relayPool, replyTo, quoteTo, outboxRouter, onSuccess, onNotePublished, powManager, powPrefs, resolvedEmojis)
             return
         }
@@ -1456,6 +1485,13 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         // branch before those tag-building paths and emit just the reply + mentions + hashtags
         // + emojis inside the encrypted rumor.
         if (replyTo != null && inputs.privateReply) {
+            // Backstop: a private reply is sent immediately by construction, so one that
+            // still carries a schedule is refused outright, however that state was reached.
+            if (privateReplyBlockedBySchedule(true, inputs.scheduleEnabled, inputs.scheduleTimestamp)) {
+                _error.value = getApplication<Application>().getString(R.string.schedule_error_private_reply)
+                _publishing.value = false
+                return 0
+            }
             for (hashtag in inputs.hashtags) tags.add(listOf("t", hashtag))
             tags.addAll(Nip30.buildEmojiTagsForContent(content, resolvedEmojis))
             if (interfacePrefs.isClientTagEnabled()) tags.add(Nip89.clientTag())
@@ -1577,33 +1613,28 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
             tags.add(Nip89.clientTag())
         }
 
-        // Scheduled post — sign with future created_at and send to scheduler relays
-        if (inputs.scheduleEnabled && inputs.scheduleTimestamp != null) {
+        // Scheduled post: sign once with created_at = the publish time and hand the signed
+        // event to the Zap Cooking scheduler API. It never touches a relay from here, is
+        // never mined (PoW is off while a schedule is set), and on any failure the composer
+        // stays open with the text intact.
+        if (inputs.scheduleEnabled) {
             val scheduledAt = inputs.scheduleTimestamp
-            val event = signer.signEvent(kind = eventKind, content = finalContent, tags = tags, createdAt = scheduledAt)
-            val msg = ClientMessage.event(event)
-            var sentCount = 0
-            for (url in SCHEDULER_RELAYS) {
-                // Pre-approve auth so the relay auto-signs without prompting
-                relayPool.autoApproveRelayAuth(url)
-                // Connect without sending anything — relay will issue AUTH challenge on open
-                relayPool.connectEphemeralRelay(url)
-                // Wait for auth to complete before sending the EVENT (up to 5s)
-                withTimeoutOrNull(5_000) {
-                    relayPool.authCompleted.first { it == url }
-                }
-                if (relayPool.sendToRelayOrEphemeral(url, msg, skipBadCheck = true)) sentCount++
+            if (scheduledAt == null) {
+                // Never fall through to an immediate publish of a post the user meant to schedule.
+                _error.value = getApplication<Application>().getString(R.string.error_schedule_date_required)
+                _publishing.value = false
+                return 0
             }
-            if (sentCount == 0) {
-                _error.value = getApplication<Application>().getString(R.string.error_scheduler_relay)
+            val failure = scheduleViaApi(signer, eventKind, finalContent, tags, scheduledAt)
+            if (failure != null) {
+                _error.value = getApplication<Application>().getString(scheduleFailureMessageRes(failure))
                 _publishing.value = false
                 return 0
             }
             completePublish(owner, relayPool, signer) {
-                _scheduleEnabled.value = false
-                _scheduleTimestamp.value = null
+                applyScheduleOptions(scheduleOptions().scheduleOff())
             }
-            return sentCount
+            return 1
         }
 
         // Pubkeys whose inbox relays should also receive this note: the reply target plus
@@ -1674,6 +1705,36 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         }
         completePublish(owner, relayPool, signer)
         return sentCount
+    }
+
+    /**
+     * Sign [kind]/[content]/[tags] for [publishAt] and schedule it. Returns null on success,
+     * or why it failed. The 3-minute lead check and the "signer returned exactly what was
+     * asked" check both live in [cooking.zap.app.api.ZapCookingApi.signForSchedule].
+     *
+     * `relays` is the account's own NIP-65 write relays in list order, through
+     * [ScheduleRelays.pick]; the field is omitted when none qualify. A fresh
+     * [KeyRepository] is read here because this ViewModel's own instance is bound to the
+     * account that was active when it was created.
+     */
+    private suspend fun scheduleViaApi(
+        signer: NostrSigner,
+        kind: Int,
+        content: String,
+        tags: List<List<String>>,
+        publishAt: Long,
+    ): ScheduleFailure? {
+        val event = when (val signed = zapCookingApi.signForSchedule(signer, kind, content, tags, publishAt)) {
+            is ScheduleSignResult.Failed -> return signed.failure
+            is ScheduleSignResult.Signed -> signed.event
+        }
+        val writeRelays = withContext(Dispatchers.IO) {
+            KeyRepository(getApplication()).getRelays().filter { it.write }.map { it.url }
+        }
+        return when (val result = zapCookingApi.scheduleEvent(signer, event, ScheduleRelays.pick(writeRelays))) {
+            is ScheduleEventResult.Scheduled -> null
+            is ScheduleEventResult.Failed -> result.failure
+        }
     }
 
     private suspend fun publishPrivateReply(
@@ -2409,6 +2470,7 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         _hashtags.value = emptyList()
         _foodTagSuggestions.value = false
         _powEnabled.value = false
+        powBeforeSchedule = null
         _privateReply.value = false
         _privateReplyLocked.value = false
         _galleryMode.value = false

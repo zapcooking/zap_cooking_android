@@ -54,6 +54,8 @@ fun ComposerMoreSheet(
     powAvailable: Boolean,
     onTogglePow: () -> Unit,
     scheduleEnabled: Boolean,
+    /** False while private reply is on: a private reply cannot be scheduled. */
+    scheduleAvailable: Boolean,
     scheduleSummary: String?,
     onToggleSchedule: () -> Unit,
     privateReplyVisible: Boolean,
@@ -95,9 +97,15 @@ fun ComposerMoreSheet(
             ComposerMoreRow(
                 icon = Icons.Outlined.Shield,
                 title = stringResource(R.string.compose_more_pow),
-                subtitle = if (powEnabled) stringResource(R.string.compose_more_on) else null,
+                // Mining and scheduling do not mix: while a time is set the row is
+                // off and disabled, and says why.
+                subtitle = when {
+                    scheduleEnabled -> stringResource(R.string.schedule_pow_unavailable)
+                    powEnabled -> stringResource(R.string.compose_more_on)
+                    else -> null
+                },
                 checked = powEnabled,
-                enabled = powAvailable,
+                enabled = powAvailable && !scheduleEnabled,
                 onToggle = onTogglePow
             )
 
@@ -106,8 +114,13 @@ fun ComposerMoreSheet(
             ComposerMoreRow(
                 icon = Icons.Outlined.Schedule,
                 title = stringResource(R.string.compose_more_schedule),
-                subtitle = if (scheduleEnabled) scheduleSummary else null,
+                subtitle = when {
+                    !scheduleAvailable -> stringResource(R.string.schedule_unavailable_private_reply)
+                    scheduleEnabled -> scheduleSummary
+                    else -> null
+                },
                 checked = scheduleEnabled,
+                enabled = scheduleAvailable,
                 onToggle = onToggleSchedule
             )
 

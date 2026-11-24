@@ -82,6 +82,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.SelectableDates
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
@@ -171,11 +172,11 @@ import cooking.zap.app.ui.theme.WispThemeColors
 import cooking.zap.app.viewmodel.ComposeViewModel
 import cooking.zap.app.viewmodel.PowManager
 import cooking.zap.app.viewmodel.PowStatus
+import cooking.zap.app.viewmodel.ScheduleTime
 import java.text.SimpleDateFormat
-import java.util.Calendar
 import java.util.Date
 import java.util.Locale
-import java.util.TimeZone
+import java.time.ZoneId
 
 private val QUOTED_URL_REGEX = Regex("""https?://\S+""")
 private val QUOTED_IMAGE_EXTS = setOf("jpg", "jpeg", "png", "gif", "webp", "bmp", "heic", "heif", "avif")
@@ -1664,8 +1665,22 @@ fun ComposeScreen(
         }
 
         if (showDatePicker) {
+            // Only 5 minutes to 90 days out can be picked (ScheduleTime); the picker
+            // opens on the set time, or about an hour ahead — never in the past.
+            val zone = remember { ZoneId.systemDefault() }
+            val openedAt = remember { System.currentTimeMillis() / 1000 }
+            val initialTime = scheduleTimestamp
+                ?.takeIf { ScheduleTime.check(it, openedAt) == ScheduleTime.Check.OK }
+                ?: ScheduleTime.defaultTime(openedAt)
             val datePickerState = rememberDatePickerState(
-                initialSelectedDateMillis = (scheduleTimestamp ?: (System.currentTimeMillis() / 1000 + 3600)) * 1000
+                initialSelectedDateMillis = ScheduleTime.utcDayMillisOf(initialTime, zone),
+                selectableDates = object : SelectableDates {
+                    override fun isSelectableDate(utcTimeMillis: Long): Boolean =
+                        ScheduleTime.isSelectableDay(utcTimeMillis, System.currentTimeMillis() / 1000, zone)
+
+                    override fun isSelectableYear(year: Int): Boolean =
+                        ScheduleTime.isSelectableYear(year, System.currentTimeMillis() / 1000, zone)
+                }
             )
             DatePickerDialog(
                 onDismissRequest = {
@@ -1694,36 +1709,57 @@ fun ComposeScreen(
         }
 
         if (showTimePicker) {
-            val cal = Calendar.getInstance().apply {
-                scheduleTimestamp?.let { timeInMillis = it * 1000 }
+            val zone = remember { ZoneId.systemDefault() }
+            // Opens on the set time, or about an hour ahead — so today plus the
+            // untouched default is a valid choice, never "now".
+            val initial = remember {
+                val now = System.currentTimeMillis() / 1000
+                val seconds = scheduleTimestamp
+                    ?.takeIf { ScheduleTime.check(it, now) == ScheduleTime.Check.OK }
+                    ?: ScheduleTime.defaultTime(now)
+                java.time.Instant.ofEpochSecond(seconds).atZone(zone).toLocalTime()
             }
             val timePickerState = rememberTimePickerState(
-                initialHour = cal.get(Calendar.HOUR_OF_DAY),
-                initialMinute = cal.get(Calendar.MINUTE)
+                initialHour = initial.hour,
+                initialMinute = initial.minute
             )
+            var pickedTimeError by remember { mutableStateOf<Int?>(null) }
             androidx.compose.material3.AlertDialog(
                 onDismissRequest = {
                     showTimePicker = false
                     if (scheduleTimestamp == null) viewModel.toggleSchedule()
                 },
                 title = { Text("Select time") },
-                text = { TimePicker(state = timePickerState) },
+                text = {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        TimePicker(state = timePickerState)
+                        pickedTimeError?.let { message ->
+                            Text(
+                                text = stringResource(message),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                },
                 confirmButton = {
                     TextButton(onClick = {
                         val datePart = pendingDateMillis ?: return@TextButton
-                        val utcCal = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
-                            timeInMillis = datePart
+                        val picked = ScheduleTime.combine(datePart, timePickerState.hour, timePickerState.minute, zone)
+                        // The clock face cannot grey out minutes, so the bound is
+                        // enforced here: an out-of-range time keeps the dialog open.
+                        when (ScheduleTime.check(picked, System.currentTimeMillis() / 1000)) {
+                            ScheduleTime.Check.TOO_SOON -> {
+                                pickedTimeError = R.string.schedule_picker_too_soon
+                                return@TextButton
+                            }
+                            ScheduleTime.Check.TOO_FAR -> {
+                                pickedTimeError = R.string.schedule_picker_too_far
+                                return@TextButton
+                            }
+                            ScheduleTime.Check.OK -> Unit
                         }
-                        val calendar = Calendar.getInstance().apply {
-                            set(Calendar.YEAR, utcCal.get(Calendar.YEAR))
-                            set(Calendar.MONTH, utcCal.get(Calendar.MONTH))
-                            set(Calendar.DAY_OF_MONTH, utcCal.get(Calendar.DAY_OF_MONTH))
-                            set(Calendar.HOUR_OF_DAY, timePickerState.hour)
-                            set(Calendar.MINUTE, timePickerState.minute)
-                            set(Calendar.SECOND, 0)
-                            set(Calendar.MILLISECOND, 0)
-                        }
-                        viewModel.setScheduleTimestamp(calendar.timeInMillis / 1000)
+                        viewModel.setScheduleTimestamp(picked)
                         showTimePicker = false
                         pendingDateMillis = null
                     }) { Text("Confirm") }
@@ -1758,6 +1794,8 @@ fun ComposeScreen(
                 powAvailable = powPrefs != null,
                 onTogglePow = { powPrefs?.let { viewModel.togglePow(it) } },
                 scheduleEnabled = scheduleEnabled,
+                // A private reply cannot be scheduled.
+                scheduleAvailable = !privateReply,
                 scheduleSummary = scheduleTimestamp?.let {
                     context.getString(
                         R.string.compose_scheduled_for,
