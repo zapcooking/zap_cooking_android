@@ -1,11 +1,14 @@
 package cooking.zap.app.api
 
+import cooking.zap.app.nostr.Keys
 import cooking.zap.app.nostr.Nip98
 import cooking.zap.app.nostr.Nip98HeaderCache
 import cooking.zap.app.nostr.NostrEvent
 import cooking.zap.app.nostr.NostrSigner
 import cooking.zap.app.nostr.SignerCancelledException
 import cooking.zap.app.nostr.SignerRejectedException
+import cooking.zap.app.nostr.hexToByteArray
+import cooking.zap.app.nostr.toHex
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -39,15 +42,21 @@ import java.util.Base64
 class ScheduleApiTest {
 
     /**
-     * Signs what it is asked to (dummy signature — the suite has no native
-     * secp256k1), honouring `createdAt` for everything except NIP-98 auth
-     * events, which get a distinct increasing time so two headers are
+     * Signs for real with a throwaway key (the unit suite carries the host
+     * JVM secp256k1), honouring `createdAt` for everything except NIP-98
+     * auth events, which get a distinct increasing time so two headers are
      * never byte-equal. [tamper] rewrites a non-auth event after signing,
      * standing in for a signer that changes what it was given.
      */
     private class FakeScheduleSigner(
-        override val pubkeyHex: String = "ab".repeat(32),
+        private val keys: Keys.Keypair = Keys.generate(),
     ) : NostrSigner {
+        override val pubkeyHex: String = keys.pubkey.toHex()
+
+        /** A genuine signature by this signer's key over [event]'s fields as they now stand. */
+        fun resign(event: NostrEvent): NostrEvent =
+            NostrEvent.create(keys.privkey, keys.pubkey, event.kind, event.content, event.tags, event.created_at)
+
         var authSignCount = 0
         var eventSignCount = 0
         var failure: Exception? = null
@@ -57,12 +66,10 @@ class ScheduleApiTest {
             failure?.let { throw it }
             if (kind == Nip98.KIND) {
                 authSignCount++
-                return NostrEvent.createUnsigned(pubkeyHex, kind, content, tags, 1_700_000_000L + authSignCount)
-                    .withSignature("0".repeat(128))
+                return NostrEvent.create(keys.privkey, keys.pubkey, kind, content, tags, 1_700_000_000L + authSignCount)
             }
             eventSignCount++
-            val signed = NostrEvent.createUnsigned(pubkeyHex, kind, content, tags, createdAt)
-                .withSignature("0".repeat(128))
+            val signed = NostrEvent.create(keys.privkey, keys.pubkey, kind, content, tags, createdAt)
             return tamper?.invoke(signed) ?: signed
         }
 
@@ -76,7 +83,8 @@ class ScheduleApiTest {
     private lateinit var server: MockWebServer
     private lateinit var signer: FakeScheduleSigner
     private lateinit var baseUrl: String
-    private var signatureValid = true
+    /** Only for the one test that needs verification to fail on an otherwise good event. */
+    private var forceSignatureInvalid = false
 
     private val now = 1_800_000_000L
     private val publishAt = now + 3600
@@ -88,7 +96,7 @@ class ScheduleApiTest {
         server.start()
         baseUrl = server.url("/").toString().trimEnd('/')
         signer = FakeScheduleSigner()
-        signatureValid = true
+        forceSignatureInvalid = false
     }
 
     @After
@@ -96,13 +104,12 @@ class ScheduleApiTest {
         runCatching { server.shutdown() }
     }
 
-    private fun api() = ZapCookingApi(
-        baseUrl = baseUrl,
-        client = OkHttpClient(),
-        nip98Cache = Nip98HeaderCache(),
-        nowSeconds = { now },
-        verifyEventSignature = { signatureValid },
-    )
+    /** Real [NostrEvent.verifySignature] unless a test forces a failure. */
+    private fun api() = if (forceSignatureInvalid) {
+        ZapCookingApi(baseUrl, OkHttpClient(), Nip98HeaderCache(), nowSeconds = { now }, verifyEventSignature = { false })
+    } else {
+        ZapCookingApi(baseUrl, OkHttpClient(), Nip98HeaderCache(), nowSeconds = { now })
+    }
 
     private fun json(code: Int, body: String) =
         MockResponse().setResponseCode(code).setHeader("Content-Type", "application/json").setBody(body)
@@ -141,6 +148,7 @@ class ScheduleApiTest {
         assertEquals("hello", event.content)
         assertEquals(tags, event.tags)
         assertEquals(signer.pubkeyHex, event.pubkey)
+        assertTrue(event.verifySignature())
         assertEquals(1, signer.eventSignCount)
     }
 
@@ -201,37 +209,58 @@ class ScheduleApiTest {
         assertEquals(ScheduleSignResult.Failed(ScheduleFailure.SignerChangedEvent), result)
     }
 
-    /** Re-derive the id so the tampered event is self-consistent, as a real signer's would be. */
-    private fun NostrEvent.reId(): NostrEvent =
-        copy(id = NostrEvent.computeId(pubkey, created_at, kind, tags, content))
+    // The tampered events below are genuinely signed and verify on their
+    // own — exactly what a re-dating signer returns — so it is the field
+    // comparison that has to catch them, not the signature check.
 
     @Test
     fun sign_signerChangedEvent_whenRedatedToNow() =
-        assertSignerChanged { it.copy(created_at = now).reId() }
+        assertSignerChanged { signer.resign(it.copy(created_at = now)).also { e -> assertTrue(e.verifySignature()) } }
 
     @Test
     fun sign_signerChangedEvent_whenContentChanged() =
-        assertSignerChanged { it.copy(content = "hello!").reId() }
+        assertSignerChanged { signer.resign(it.copy(content = "hello!")) }
 
     @Test
     fun sign_signerChangedEvent_whenATagWasAdded() =
-        assertSignerChanged { it.copy(tags = it.tags + listOf(listOf("client", "other"))).reId() }
+        assertSignerChanged { signer.resign(it.copy(tags = it.tags + listOf(listOf("client", "other")))) }
 
     @Test
     fun sign_signerChangedEvent_whenKindChanged() =
-        assertSignerChanged { it.copy(kind = 30023).reId() }
+        assertSignerChanged { signer.resign(it.copy(kind = 30023)) }
 
     @Test
-    fun sign_signerChangedEvent_whenSignedByAnotherKey() =
-        assertSignerChanged { it.copy(pubkey = "cd".repeat(32)).reId() }
+    fun sign_signerChangedEvent_whenSignedByAnotherKey() {
+        val other = Keys.generate()
+        assertSignerChanged {
+            NostrEvent.create(other.privkey, other.pubkey, it.kind, it.content, it.tags, it.created_at)
+                .also { e -> assertTrue(e.verifySignature()) }
+        }
+    }
 
     @Test
     fun sign_signerChangedEvent_whenOnlyTheIdDiffers() =
         assertSignerChanged { it.copy(id = "f".repeat(64)) }
 
+    // Every field is what was asked for; only the real signature check can refuse these.
+
     @Test
-    fun sign_signerChangedEvent_whenTheSignatureDoesNotVerify() = runBlocking {
-        signatureValid = false
+    fun sign_signerChangedEvent_whenTheSignatureIsGarbage() =
+        assertSignerChanged { it.copy(sig = "0".repeat(128)) }
+
+    @Test
+    fun sign_signerChangedEvent_whenTheSignatureIsAnotherKeysOverTheSameId() {
+        val other = Keys.generate()
+        assertSignerChanged { it.copy(sig = Keys.sign(other.privkey, it.id.hexToByteArray()).toHex()) }
+    }
+
+    @Test
+    fun sign_signerChangedEvent_whenASignatureIsOverADifferentEvent() =
+        assertSignerChanged { it.copy(sig = signer.resign(it.copy(content = "something else")).sig) }
+
+    @Test
+    fun sign_signerChangedEvent_whenVerificationIsForcedToFail() = runBlocking {
+        forceSignatureInvalid = true
         val result = api().signForSchedule(signer, 1, "hello", emptyList(), publishAt)
         assertEquals(ScheduleSignResult.Failed(ScheduleFailure.SignerChangedEvent), result)
     }

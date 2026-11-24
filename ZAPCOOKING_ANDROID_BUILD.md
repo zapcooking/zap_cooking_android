@@ -71,6 +71,14 @@ in zapcooking/frontend and wins over this summary):
   retry without `relays` on `bad_relays`, and a 409 `already_scheduled`
   whose row is pending/publishing/sent is success. Never mine PoW on a
   scheduled event, and never re-sign to retry.
+- Composer (`ComposeViewModel`, rules in `viewmodel/ScheduleCompose.kt`):
+  the picker allows 5 minutes to 90 days out and the 3-minute check runs
+  at signing; a scheduled post skips the undo countdown; PoW and a
+  schedule are mutually exclusive; a private reply cannot be scheduled
+  (and is never sent immediately while a time is set). `relays` is the
+  account's own NIP-65 write relays in list order through
+  `ScheduleRelays.pick` — a port of web's `pickScheduleRelays`, sharing
+  its test cases — and is omitted when empty.
 
 Membership:
 - `GET /api/membership?pubkey=<hex>` — **public batch read** of status
