@@ -416,6 +416,15 @@ fun FeedScreen(
     // show them again on scroll up or at top (FeedBarsAutoHide). The restore
     // circle's tap holds hiding until the next finger drag.
     val barsGate = remember { FeedBarsAutoHide() }
+    // "Hide bars while scrolling" (Interface → Appearance, off by default).
+    // Read on entry: the setting lives on its own route, so coming back to
+    // the feed recomposes this screen with the current value.
+    val autoHideBars = remember { viewModel.interfacePrefs.isAutoHideFeedBars() }
+    LaunchedEffect(autoHideBars) {
+        barsGate.enabled = autoHideBars
+        // Switched off while collapsed: bring the bars back now.
+        if (!autoHideBars) viewModel.setBarsVisible(true)
+    }
     LaunchedEffect(listState) {
         viewModel.setBarsVisible(true)
         snapshotFlow {
