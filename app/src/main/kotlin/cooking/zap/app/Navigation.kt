@@ -1594,7 +1594,8 @@ fun WispNavHost(
         composable(Routes.DRAFTS) {
             LaunchedEffect(Unit) {
                 draftsViewModel.loadDrafts(feedViewModel.relayPool, activeSigner, feedViewModel.deletedEventsRepo)
-                draftsViewModel.loadScheduledPosts(feedViewModel.relayPool, activeSigner)
+                // Every entry reloads, so a post scheduled a moment ago is in the list.
+                draftsViewModel.loadScheduledPosts(feedViewModel.zapCookingApi, activeSigner)
             }
             val profileVersion by feedViewModel.eventRepo.profileVersion.collectAsState()
             val userPubkey = feedViewModel.getUserPubkey()
@@ -1637,8 +1638,11 @@ fun WispNavHost(
                 onDeleteDraft = { dTag ->
                     draftsViewModel.deleteDraft(dTag, feedViewModel.relayPool, activeSigner, feedViewModel.deletedEventsRepo)
                 },
-                onDeleteScheduled = { eventId ->
-                    draftsViewModel.deleteScheduledPost(eventId, feedViewModel.relayPool, activeSigner)
+                onCancelScheduled = { eventId ->
+                    draftsViewModel.cancelScheduledPost(eventId, feedViewModel.zapCookingApi, activeSigner)
+                },
+                onRefreshScheduled = {
+                    draftsViewModel.loadScheduledPosts(feedViewModel.zapCookingApi, activeSigner, userInitiated = true)
                 },
                 userProfile = userProfile
             )

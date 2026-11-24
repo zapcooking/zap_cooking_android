@@ -830,8 +830,8 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
         if (eventCache.containsKey(event.id)) return
         seenEventIds.add(event.id)
         eventCache[event.id] = event
-        // Don't persist future-dated notes — scheduled posts fetched from the scheduler
-        // relay would poison the ObjectBox cache and the feed's since filter on next boot.
+        // Don't persist future-dated notes — they would poison the ObjectBox cache and the
+        // feed's since filter on next boot.
         if (event.created_at <= System.currentTimeMillis() / 1000 + 30) {
             eventPersistence?.persistEvent(event)
         }

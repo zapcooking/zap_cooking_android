@@ -98,7 +98,7 @@ class RelayPool(private val prefs: SharedPreferences? = null) {
     fun isAuthenticated(url: String): Boolean = url in authenticatedRelays
 
     /**
-     * Pre-approve auth for a relay (e.g. scheduler relay) so that when it sends an AUTH
+     * Pre-approve auth for a relay (e.g. the members relay) so that when it sends an AUTH
      * challenge it is auto-signed without prompting the user. Must be called before connecting.
      */
     fun autoApproveRelayAuth(url: String) {
