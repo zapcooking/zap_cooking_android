@@ -162,6 +162,16 @@ class InterfacePreferences(context: Context) {
     fun setLiveStreamsHidden(hidden: Boolean) =
         prefs.edit().putBoolean(KEY_LIVE_STREAMS_HIDDEN, hidden).apply()
 
+    /**
+     * Feed chrome auto-hide (Interface → Appearance → Hide bars while
+     * scrolling): when on, scrolling the feed down collapses its top bar and
+     * the bottom bar ([cooking.zap.app.ui.component.FeedBarsAutoHide]). Off
+     * by default — the bars stay put.
+     */
+    fun isAutoHideFeedBars(): Boolean = prefs.getBoolean(KEY_AUTO_HIDE_FEED_BARS, false)
+    fun setAutoHideFeedBars(enabled: Boolean) =
+        prefs.edit().putBoolean(KEY_AUTO_HIDE_FEED_BARS, enabled).apply()
+
     fun isAutoTranslate(): Boolean = prefs.getBoolean("auto_translate", false)
     fun setAutoTranslate(enabled: Boolean) = prefs.edit().putBoolean("auto_translate", enabled).apply()
 
@@ -279,6 +289,7 @@ class InterfacePreferences(context: Context) {
 
         /** Pref key for hiding live-stream content; observed by FeedViewModel. */
         const val KEY_LIVE_STREAMS_HIDDEN = "live_streams_hidden"
+        const val KEY_AUTO_HIDE_FEED_BARS = "auto_hide_feed_bars"
     }
 
     /** Reset all interface preferences to defaults (called on full logout). */

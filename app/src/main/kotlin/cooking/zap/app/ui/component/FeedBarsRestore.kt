@@ -34,8 +34,13 @@ import androidx.compose.ui.unit.dp
  * [restored] is the restore circle's tap: it starts the count over and holds
  * hiding until the next finger drag ([newTouch]), so whatever is left of the
  * fling the tap interrupted can't collapse the bars it just brought back.
+ *
+ * [enabled] is the "Hide bars while scrolling" setting (off by default).
+ * While false every verdict is dropped — the position is still tracked so
+ * switching it on mid-list doesn't start from a stale baseline.
  */
 class FeedBarsAutoHide(val threshold: Int = 50) {
+    var enabled = true
     var scrollDelta = 0
         private set
     var holdUntilNewTouch = false
@@ -45,6 +50,12 @@ class FeedBarsAutoHide(val threshold: Int = 50) {
 
     /** One list position update. Returns the visibility the bars should take, or null to leave them. */
     fun onScroll(index: Int, offset: Int, atTop: Boolean, scrolling: Boolean): Boolean? {
+        if (!enabled) {
+            scrollDelta = 0
+            prevIndex = index
+            prevOffset = offset
+            return null
+        }
         val verdict: Boolean? = when {
             atTop -> {
                 scrollDelta = 0

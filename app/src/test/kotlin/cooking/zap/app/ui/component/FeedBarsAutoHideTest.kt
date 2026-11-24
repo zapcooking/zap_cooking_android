@@ -74,4 +74,26 @@ class FeedBarsAutoHideTest {
         gate.restored()
         assertEquals(true, gate.onScroll(0, 0, atTop = true, scrolling = true))
     }
+
+    @Test fun disabled_dropsEveryVerdict() {
+        val gate = scrolling()
+        gate.enabled = false
+        var offset = 100
+        repeat(10) {
+            offset += 40
+            assertNull(gate.onScroll(5, offset, false, true))
+        }
+        assertNull(gate.onScroll(0, 0, atTop = true, scrolling = true))
+        assertEquals(0, gate.scrollDelta)
+    }
+
+    @Test fun reEnabled_startsFromCurrentPosition() {
+        val gate = scrolling()
+        gate.enabled = false
+        gate.onScroll(9, 300, false, true)
+        gate.enabled = true
+        // Baseline is the disabled-time position, not the old one: no jump.
+        assertNull(gate.onScroll(9, 300 + t, false, true))
+        assertEquals(false, gate.onScroll(9, 300 + t + 1, false, true))
+    }
 }

@@ -59,6 +59,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.semantics.Role
@@ -204,6 +205,7 @@ fun InterfaceScreen(
     var notifFeedStyle by remember { mutableStateOf(interfacePrefs.getNotificationFeedStyle()) }
     var autoTranslate by remember { mutableStateOf(interfacePrefs.isAutoTranslate()) }
     var appearance by remember { mutableStateOf(interfacePrefs.getAppearanceMode()) }
+    var autoHideFeedBars by remember { mutableStateOf(interfacePrefs.isAutoHideFeedBars()) }
     var startupTab by remember { mutableStateOf(interfacePrefs.getStartupTab()) }
     var selectedLanguage by remember { mutableStateOf(interfacePrefs.getLanguage()) }
     var languagesExpanded by remember { mutableStateOf(false) }
@@ -350,6 +352,30 @@ fun InterfaceScreen(
                     onChanged()
                 }
             )
+            Spacer(Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(stringResource(R.string.settings_auto_hide_feed_bars), style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        stringResource(R.string.settings_auto_hide_feed_bars_description),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = autoHideFeedBars,
+                    onCheckedChange = {
+                        autoHideFeedBars = it
+                        interfacePrefs.setAutoHideFeedBars(it)
+                        onChanged()
+                    },
+                    colors = wispSwitchColors(),
+                    modifier = Modifier.testTag("settings-auto-hide-feed-bars")
+                )
+            }
 
             Spacer(Modifier.height(24.dp))
 

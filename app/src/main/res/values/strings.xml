@@ -623,6 +623,8 @@
     <string name="settings_increase_text_size">Increase text size across the app</string>
     <string name="settings_language">Language</string>
     <string name="settings_appearance">Appearance</string>
+    <string name="settings_auto_hide_feed_bars">Hide bars while scrolling</string>
+    <string name="settings_auto_hide_feed_bars_description">Scrolling down the feed hides the top bar and the tab bar. Scroll up or tap the menu circle to bring them back.</string>
     <string name="settings_appearance_system">System</string>
     <string name="settings_appearance_light">Light</string>
     <string name="settings_appearance_dark">Dark</string>
