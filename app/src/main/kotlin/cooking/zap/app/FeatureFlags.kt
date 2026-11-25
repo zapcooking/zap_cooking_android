@@ -33,4 +33,13 @@ object FeatureFlags {
      * NOTE_REVIEW_ENABLED — do not delete it or inline its call sites.
      */
     const val ALT_TEXT_AI_ENABLED = true
+
+    /**
+     * NIP-42 login to the curated feed relay (`wss://feed.zap.cooking`, build
+     * spec §1 "Fresh feed relay"). Off: Fresh is free tier only, and a login
+     * tells the relay who is reading. Consulted through
+     * `FeedRelay.loginAllowed`, never directly. Turning it on is a product
+     * decision (Cook+ topic feeds and history), not a bug fix.
+     */
+    const val FEED_RELAY_LOGIN_ENABLED = false
 }
