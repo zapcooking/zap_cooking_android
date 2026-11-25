@@ -9,7 +9,9 @@ import cooking.zap.app.nostr.NostrEvent
  * Wire them to `MuteRepository` (`isBlocked`, `containsMutedWord`,
  * `isThreadMuted`, `getMutedHashtags`).
  *
- * @param mutedHashtags lowercase, no leading `#`.
+ * @param mutedHashtags lowercase, no leading `#`. The caller must lowercase
+ *   them: `MuteRepository` stores hashtags as they arrive from the mute list
+ *   event, and the match here is against the lowercased `t` tag.
  * @param hellthreadPLimit a post tagging this many people or more is hidden;
  *   null turns the rule off. Android's rule is fixed (OnlyFood uses 25), where
  *   iOS reads a setting.
@@ -31,7 +33,9 @@ class FreshReaderRules(
  * Differences from iOS, all deliberate:
  * - Hashtag mutes apply (web does this; iOS has no hashtag mutes).
  * - The hellthread rule is a fixed p-tag limit, not a setting.
- * - No "reported" sets: Android hides a reported post through the mute list.
+ * - No "reported" sets: Android has no report action on feed posts. NIP-56 is
+ *   wired only into group rooms, where a reported message is hidden through an
+ *   in-memory set, so there is nothing to apply here yet.
  */
 object FreshPosts {
 
