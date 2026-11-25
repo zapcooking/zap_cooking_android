@@ -348,6 +348,10 @@ class FreshRelayClient(
     private val invalidTopics = HashSet<String>()
     private var lastForegroundAtMs: Long? = null
 
+    /** The check every event passes. Replaced only by tests, before the first request. */
+    @Volatile
+    internal var verify: (NostrEvent) -> Boolean = FreshEventVerifier::isValid
+
     /**
      * The start of the free window, by this device's clock. The relay's own
      * clock decides; a disagreement shows up as [FreshOutcome.Floor] on a page.
@@ -558,8 +562,13 @@ class FreshRelayClient(
     private fun armTimeout(subId: String, pending: Pending) {
         pending.timeout?.cancel()
         pending.timeout = scope.launch {
-            delay(silenceTimeoutMs)
-            finishRequest(subId, FreshOutcome.TimedOut)
+            try {
+                delay(silenceTimeoutMs)
+                finishRequest(subId, FreshOutcome.TimedOut)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+            }
         }
     }
 
@@ -611,9 +620,16 @@ class FreshRelayClient(
             consumer = scope.launch {
                 for (signal in signals) {
                     if (signal.generation != generation) continue
-                    when (signal) {
-                        is Signal.Text -> handle(signal.text)
-                        is Signal.Closed -> connectionLost()
+                    // A signal whose handling throws is dropped; the loop
+                    // must outlive it, or every later frame would be lost.
+                    try {
+                        when (signal) {
+                            is Signal.Text -> handle(signal.text)
+                            is Signal.Closed -> connectionLost()
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
                     }
                 }
             }
@@ -692,7 +708,7 @@ class FreshRelayClient(
     private fun receiveRequestEvent(subId: String, pending: Pending, json: JsonObject) {
         pending.received += 1
         if (pending.received <= MAX_EVENTS_PER_REQUEST) {
-            val event = parseEvent(json)?.takeIf { FreshEventVerifier.isValid(it) }
+            val event = parseEvent(json)?.takeIf { verify(it) }
             if (event == null) {
                 pending.rejected += 1
             } else if (pending.ids.add(event.id)) {
@@ -704,7 +720,7 @@ class FreshRelayClient(
 
     private fun receiveTailEvent(json: JsonObject) {
         val state = tail ?: return
-        val event = parseEvent(json)?.takeIf { FreshEventVerifier.isValid(it) } ?: return
+        val event = parseEvent(json)?.takeIf { verify(it) } ?: return
         // Clamped: a future-dated post must not move the resume point ahead.
         val createdAt = minOf(event.created_at, now() + FUTURE_SKEW_SECONDS)
         if (createdAt > state.newest) state.newest = createdAt

@@ -1063,6 +1063,37 @@ class FreshRelayClientTest {
         assertEquals(listOf("CLOSE", subId), closeFrame.map { it.jsonPrimitive.content })
     }
 
+    /** a frame whose handling throws is dropped; the next frames on the same socket are still processed */
+    @Test
+    fun aThrowingFrameDoesNotStopTheLoop() = runTest {
+        val transport = FakeFreshTransport()
+        val client = makeClient(transport)
+        val author = Author()
+        val before = author.event(NOW - 5)
+        val marked = author.event(NOW - 6, content = "throws")
+        val after = author.event(NOW - 7)
+        client.verify = { event ->
+            if (event.id == marked.id) throw IllegalStateException("marked event")
+            FreshEventVerifier.isValid(event)
+        }
+
+        val page = async { client.feedPage() }
+        val req = awaitReq(transport)
+        feed(transport.latest, req.subId, listOf(before, marked, after))
+        val answer = page.await()
+        assertEquals(FreshOutcome.Answered, answer.outcome)
+        assertEquals(listOf(before.id, after.id), answer.events.map { it.id })
+        assertEquals(3, answer.received)
+        assertEquals(close(req.subId), transport.latest?.sent?.last())
+
+        // The same socket and the same loop serve the next request.
+        val next = async { client.topicPreview("pasta") }
+        val req2 = awaitReq(transport, 2)
+        feed(transport.latest, req2.subId, emptyList())
+        assertEquals(FreshOutcome.Answered, next.await().outcome)
+        assertEquals(1, transport.opened.size)
+    }
+
     /** close(): cancels the socket, fails what was pending with what arrived, and leaves no timer */
     @Test
     fun closeLeavesNothingPending() = runTest {
