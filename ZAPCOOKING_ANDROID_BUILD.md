@@ -128,10 +128,32 @@ Membership:
 - `profiles`: `purplepag.es`
 - `articles` (kind 30023 = **recipes**): `relay.primal.net`, `nos.lol`,
   `nostr.wine`, `eden.nostr.land`, `relay.noswhere.com`
+- `feed` (**Fresh**): `wss://feed.zap.cooking` — read-only, curated, its
+  own socket, never authenticated. See "Fresh feed relay" below.
 - **Recipes live on the public article relays, not on Pantry.** Adding
   Pantry as the members relay is correct; replacing the aggregators is
   not — it breaks recipe loading. Leave `RelayProber.BOOTSTRAP` and the
   discovery hardcodes alone.
+
+### Fresh feed relay (`wss://feed.zap.cooking`)
+The curated food-and-drink relay behind the Fresh feed. The contract **as
+measured** (free window, paging, `auth-required` floor, topic previews, live
+tail, which kinds it serves) is recorded in the iOS build spec,
+`zapcooking_ios/ZAPCOOKING_IOS_BUILD.md` §2 "Fresh feed relay — contract as
+measured" (probed 2026-11-10/11). iOS is the baseline for this port; re-probe
+before relying on a number. Rules that hold on Android (Seth, 2026-11-25):
+
+- **Free tier only in v1.** No NIP-42 login to this relay:
+  `FeatureFlags.FEED_RELAY_LOGIN_ENABLED = false`, enforced by
+  `FeedRelay.loginAllowed` inside `RelayPool` (the signer wrapper, the
+  challenge collector and `approveAuth`). The relay re-sends its challenge
+  before every `CLOSED auth-required:`, and a login names the reader.
+- It is never a publish target, a relay hint, or a member of another set.
+- Nothing about viewing leaves the device: no view counts, no per-user
+  activity; seen state is device-local.
+- Fresh becomes the landing feed for **new sign-ins only**; existing accounts
+  keep the feed they have. Special cards (recipe box, topic spotlights) are a
+  second wave after the plain feed ships.
 
 ---
 

@@ -3,6 +3,7 @@ package cooking.zap.app.relay
 import android.content.SharedPreferences
 import android.util.Log
 import android.util.LruCache
+import cooking.zap.app.fresh.FeedRelay
 import cooking.zap.app.nostr.ClientMessage
 import cooking.zap.app.repo.DiagnosticLogger
 import cooking.zap.app.nostr.NostrEvent
@@ -71,6 +72,11 @@ class RelayPool(private val prefs: SharedPreferences? = null) {
 
     /** Approve a pending AUTH request — signs and sends AUTH, persists approval. */
     fun approveAuth(request: PendingAuthRequest) {
+        if (!FeedRelay.loginAllowed(request.relayUrl)) {
+            // Never approved, never persisted: see [FeedRelay.loginAllowed].
+            _pendingAuthRequest.value = null
+            return
+        }
         userApprovedAuthRelays.add(request.relayUrl)
         prefs?.edit()?.putStringSet(PREF_APPROVED_AUTH_RELAYS, userApprovedAuthRelays.toSet())?.apply()
         _pendingAuthRequest.value = null
@@ -205,9 +211,17 @@ class RelayPool(private val prefs: SharedPreferences? = null) {
     /**
      * Register a signer for NIP-42 AUTH challenges.
      * The lambda receives the relay URL and challenge string and must return a signed kind-22242 event.
+     *
+     * Every AUTH this pool signs goes through the lambda stored here, so the
+     * feed-relay refusal ([FeedRelay.loginAllowed]) is enforced at this one
+     * point: a call site added later cannot sign for that relay by accident.
+     * The call sites also return early, so the refusal is not an error path.
      */
     fun setAuthSigner(signer: suspend (relayUrl: String, challenge: String) -> NostrEvent) {
-        authSigner = signer
+        authSigner = { relayUrl, challenge ->
+            check(FeedRelay.loginAllowed(relayUrl)) { "AUTH refused: login to the feed relay is off" }
+            signer(relayUrl, challenge)
+        }
     }
 
     fun registerDedupBypass(prefix: String) {
@@ -579,6 +593,12 @@ class RelayPool(private val prefs: SharedPreferences? = null) {
             relay.authChallenges.collect { challenge ->
                 val signer = authSigner ?: return@collect
                 val url = relay.config.url
+                // The feed relay is never logged in to, whichever tier its URL
+                // landed in (a user can add it to their own relay list).
+                if (!FeedRelay.loginAllowed(url)) {
+                    Log.d("RelayPool", "AUTH challenge discarded — feed relay login is off")
+                    return@collect
+                }
                 val dmRelayUrls = dmRelays.map { it.config.url }.toSet()
 
                 // Tier 1: User's own relays — auto-sign silently (if auth enabled on config)
