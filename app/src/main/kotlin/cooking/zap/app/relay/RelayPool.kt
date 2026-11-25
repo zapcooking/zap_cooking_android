@@ -108,6 +108,8 @@ class RelayPool(private val prefs: SharedPreferences? = null) {
      * challenge it is auto-signed without prompting the user. Must be called before connecting.
      */
     fun autoApproveRelayAuth(url: String) {
+        // The feed relay never enters the approved set: see [FeedRelay.loginAllowed].
+        if (!FeedRelay.loginAllowed(url)) return
         dmDeliveryTargets.add(url)
         userApprovedAuthRelays.add(url)
     }
