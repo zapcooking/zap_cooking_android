@@ -1678,30 +1678,25 @@ class ComposeViewModel(app: Application, private val savedStateHandle: SavedStat
         val event = signer.signEvent(kind = eventKind, content = finalContent, tags = tags)
         android.util.Log.d("GALLERY", "[ComposeVM] publishNote kind=$eventKind id=${event.id.take(12)} content='${finalContent.take(50)}' tags=${tags.size} galleryMode=${inputs.galleryMode} uploadedUrls=${inputs.uploadedUrls.size}")
         val msg = ClientMessage.event(event)
-        var sentCount = if (outboxRouter != null && inboxPubkeys.isNotEmpty()) {
-            outboxRouter.publishToInbox(msg, inboxPubkeys)
-        } else {
-            relayPool.sendToWriteRelays(msg)
-        }
-        // If no relays were reachable, try reconnecting write relays and retry once
-        if (sentCount == 0) {
-            val reconnected = relayPool.ensureWriteRelaysConnected()
-            if (reconnected > 0) {
-                sentCount = if (outboxRouter != null && inboxPubkeys.isNotEmpty()) {
-                    outboxRouter.publishToInbox(msg, inboxPubkeys)
-                } else {
-                    relayPool.sendToWriteRelays(msg)
-                }
+        val send = {
+            if (outboxRouter != null && inboxPubkeys.isNotEmpty()) {
+                outboxRouter.publishToInbox(msg, inboxPubkeys)
+            } else {
+                relayPool.sendToWriteRelays(msg)
             }
         }
+        val sentCount = sendSignedNote(
+            event = event,
+            eventRepo = eventRepo,
+            send = send,
+            reconnect = { relayPool.ensureWriteRelaysConnected() },
+            trackPublish = relayPool::trackPublish,
+        )
         if (sentCount == 0) {
             _error.value = getApplication<Application>().getString(R.string.error_no_relays_connected)
             _publishing.value = false
             return 0
         }
-        relayPool.trackPublish(event.id, sentCount)
-        // Insert into feed so the note appears immediately without waiting for relay echo
-        eventRepo?.addEvent(event)
         if (replyTo != null) {
             // Increment on direct parent so the PostCard showing replyTo updates
             eventRepo?.addReplyCount(replyTo.id, event.id)

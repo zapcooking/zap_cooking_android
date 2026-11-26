@@ -214,11 +214,7 @@ class RecipePublisher(
             }
             if (includeClientTag) tags.add(Nip89.clientTag())
 
-            val event = signer.signEvent(unsigned.kind, unsigned.content, tags)
-            // Cache first so the detail screen renders optimistically (no relay round-trip).
-            eventRepo.cacheEvent(event)
-
-            broadcast(event)
+            signCacheAndBroadcast(signer, unsigned.kind, unsigned.content, tags, eventRepo, ::broadcast)
 
             Result.Published(author = signer.pubkeyHex, dTag = dTag)
         } catch (e: CancellationException) {
@@ -400,4 +396,25 @@ class RecipePublisher(
          */
         private val PANTRY_MIRROR_KINDS = setOf(30023)
     }
+}
+
+/**
+ * Sign, cache, broadcast, announce — in that order. Cached first so the detail
+ * screen renders optimistically (no relay round-trip); announced on
+ * [EventRepository.publishedEvents] last, so a recipe whose signing or broadcast
+ * threw is never announced as published.
+ */
+internal suspend fun signCacheAndBroadcast(
+    signer: NostrSigner,
+    kind: Int,
+    content: String,
+    tags: List<List<String>>,
+    eventRepo: EventRepository,
+    broadcast: (NostrEvent) -> Unit,
+): NostrEvent {
+    val event = signer.signEvent(kind, content, tags)
+    eventRepo.cacheEvent(event)
+    broadcast(event)
+    eventRepo.announcePublished(event)
+    return event
 }
