@@ -572,14 +572,22 @@ class ThreadViewModel : ViewModel() {
         val deletedRepo = eventRepoRef?.deletedEventsRepo
 
         val admissible = mutableListOf<NostrEvent>()
+        val mutedEventIds = mutableSetOf<String>()
         for (event in threadEvents.values) {
             if (event.id == rootId) continue
             if (deletedRepo?.isDeleted(event.id) == true) continue
-            if (muteRepo?.isBlocked(event.pubkey) == true) continue
-            if (Nip10.isStandaloneQuote(event)) continue
-            if (eventRepoRef?.isWotFiltered(event.pubkey, event.kind) == true) continue
-            if (isIgnoredStrayKind1(event)) continue
+            // Muted replies stay in the tree, flagged for the UI's per-row
+            // placeholder reveal (iOS/web parity) — their own replies still
+            // hang off them. The placeholder wins over the filters below, as
+            // on iOS, so quote/WoT/stray checks are skipped for them.
+            val isMuted = muteRepo?.isBlocked(event.pubkey) == true
+            if (!isMuted) {
+                if (Nip10.isStandaloneQuote(event)) continue
+                if (eventRepoRef?.isWotFiltered(event.pubkey, event.kind) == true) continue
+                if (isIgnoredStrayKind1(event)) continue
+            }
             admissible.add(event)
+            if (isMuted) mutedEventIds.add(event.id)
         }
 
         // Degraded root: the conversation root never arrived, so the screen
@@ -643,7 +651,8 @@ class ThreadViewModel : ViewModel() {
             expandedIds = expandedIds,
             scrollTargetId = scrollTargetId,
             // Fan-out ("show more replies") cap lands with its UI toggle in Phase 3.
-            maxSiblingsInline = Int.MAX_VALUE
+            maxSiblingsInline = Int.MAX_VALUE,
+            mutedIds = mutedEventIds
         )
         _flatThread.value = flattened
 

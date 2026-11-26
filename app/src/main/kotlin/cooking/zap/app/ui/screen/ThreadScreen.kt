@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -132,6 +133,9 @@ fun ThreadScreen(
     var showRootButton by remember { mutableStateOf(false) }
     var previousIndex by remember { mutableIntStateOf(0) }
     var previousOffset by remember { mutableIntStateOf(0) }
+    // Muted replies the reader chose to view, per reply (iOS ThreadView parity) —
+    // an id here renders that reply's card; every other muted reply stays collapsed.
+    var revealedMutedIds by remember { mutableStateOf(emptySet<String>()) }
     // When expanding a folded branch, hold the viewport steady on the note above the button:
     // capture the top visible item + its scroll offset, then snap back to it once the subtree is
     // inserted so the screen keeps its exact position.
@@ -295,6 +299,10 @@ fun ThreadScreen(
                         } else {
                             val event = item.event
                             val depth = item.depth
+                            val indentPadding = threadIndentDp(depth)
+                            val lineColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                            val showConnector = depth > 0
+                            val mutedCollapsed = item.isMuted && event.id !in revealedMutedIds
                             val profileData = eventRepo.getProfileData(event.pubkey)
                             val likeCount = reactionVersion.let { eventRepo.getReactionCount(event.id) }
                             val replyCount = replyCountVersion.let { eventRepo.getReplyCount(event.id) }
@@ -333,9 +341,6 @@ fun ThreadScreen(
                             val userZapPollVote = remember(pollVoteVersion, event.id) {
                                 if (event.kind == 6969) eventRepo.getUserZapPollVote(event.id) else null
                             }
-                            val indentPadding = threadIndentDp(depth)
-                            val lineColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-                            val showConnector = depth > 0
                             Box(
                                 modifier = Modifier
                                     .animateItem()
@@ -347,7 +352,14 @@ fun ThreadScreen(
                                         dashedTop = item.connectorStartsMidAir
                                     )
                             ) {
-                                if (isGalleryEvent(event)) {
+                                if (mutedCollapsed) {
+                                    // Collapsed muted reply — never names the account;
+                                    // taps to reveal just this reply (iOS/web parity).
+                                    MutedReplyRow(
+                                        onReveal = { revealedMutedIds += event.id },
+                                        modifier = Modifier.padding(start = indentPadding)
+                                    )
+                                } else if (isGalleryEvent(event)) {
                                     GalleryCard(
                                         event = event,
                                         profile = profileData,
@@ -451,6 +463,7 @@ fun ThreadScreen(
                                         zapPollTotalSats = zapPollTotalSats,
                                         userZapPollVote = userZapPollVote,
                                         onZapPollVote = { idx -> onZapPollVote(event.id, idx) },
+                                        onHideMuted = if (item.isMuted) ({ revealedMutedIds -= event.id }) else null,
                                         showDivider = !showConnector,
                                         modifier = Modifier.padding(start = indentPadding)
                                     )
@@ -605,6 +618,38 @@ fun ThreadScreen(
                 }
             }
         }
+    }
+}
+
+/**
+ * Collapsed muted reply: a one-liner that never names the account, with a per-reply "View"
+ * reveal (iOS ThreadView / web CommentCard parity). The whole row taps to reveal. "View" is
+ * deliberately plain text — the same tertiary color as the rest of the row, not a link.
+ */
+@Composable
+private fun MutedReplyRow(onReveal: () -> Unit, modifier: Modifier = Modifier) {
+    val tertiary = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable(onClick = onReveal)
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+    ) {
+        Icon(
+            Icons.Outlined.Block,
+            contentDescription = null,
+            modifier = Modifier.size(14.dp),
+            tint = tertiary
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = stringResource(R.string.thread_muted_reply) +
+                " \u00B7 " +
+                stringResource(R.string.thread_muted_reply_view),
+            style = MaterialTheme.typography.bodyMedium,
+            color = tertiary
+        )
     }
 }
 

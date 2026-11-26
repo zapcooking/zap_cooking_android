@@ -19,7 +19,11 @@ import cooking.zap.app.nostr.NostrEvent
  * The [scrollTargetId] path (the note to scroll to, plus all its ancestors) is exempt from
  * collapse and the depth cap, so a freshly-published reply is always reachable/visible.
  *
- * All inputs are assumed already cleaned (deletions/blocked/spam filtered) and chronologically
+ * Muted authors ([mutedIds]) stay in the tree as [ThreadItem.Post] rows flagged [ThreadItem.Post.isMuted]
+ * — the UI renders each as a collapsed placeholder until revealed per-row (iOS/web parity) —
+ * while deletions and spam are filtered out by the caller before flattening.
+ *
+ * All inputs are assumed already cleaned (deletions/spam filtered) and chronologically
  * sorted within each sibling group — done by the caller's `rebuildTree`.
  */
 object ThreadFlattener {
@@ -38,7 +42,8 @@ object ThreadFlattener {
         expandedFanOut: Set<String> = emptySet(),
         scrollTargetId: String? = null,
         maxSiblingsInline: Int = MAX_SIBLINGS_INLINE,
-        depthCap: Int = DEPTH_CAP
+        depthCap: Int = DEPTH_CAP,
+        mutedIds: Set<String> = emptySet()
     ): List<ThreadItem> {
         val subtreeSizes = computeSubtreeSizes(parentToChildren)
         val pathToTarget = scrollTargetId?.let { ancestorsOf(it, parentToChildren) } ?: emptySet()
@@ -55,7 +60,7 @@ object ThreadFlattener {
                     collapsed = false
                 )
             )
-            walk(rootEvent, 0, parentToChildren, subtreeSizes, collapsedIds, expandedIds, expandedFanOut, pathToTarget, visited, raw, maxSiblingsInline, depthCap, false)
+            walk(rootEvent, 0, parentToChildren, subtreeSizes, collapsedIds, expandedIds, expandedFanOut, pathToTarget, visited, raw, maxSiblingsInline, depthCap, false, mutedIds)
         } else {
             // Root not yet loaded — render the top-level replies we have, each as a depth-0 root.
             for (child in parentToChildren[rootId].orEmpty()) {
@@ -67,10 +72,11 @@ object ThreadFlattener {
                         event = child,
                         depth = 0,
                         descendantCount = subtreeSizes[child.id] ?: 0,
-                        collapsed = collapsed
+                        collapsed = collapsed,
+                        isMuted = child.id in mutedIds
                     )
                 )
-                walk(child, 0, parentToChildren, subtreeSizes, collapsedIds, expandedIds, expandedFanOut, pathToTarget, visited, raw, maxSiblingsInline, depthCap, false)
+                walk(child, 0, parentToChildren, subtreeSizes, collapsedIds, expandedIds, expandedFanOut, pathToTarget, visited, raw, maxSiblingsInline, depthCap, false, mutedIds)
             }
         }
         return applyConnectorFlags(raw)
@@ -89,7 +95,8 @@ object ThreadFlattener {
         result: MutableList<ThreadItem>,
         maxSiblingsInline: Int,
         depthCap: Int,
-        insideExpanded: Boolean
+        insideExpanded: Boolean,
+        mutedIds: Set<String>
     ) {
         val children = parentToChildren[parentEvent.id] ?: return
         val childDepth = parentDepth + 1
@@ -106,7 +113,8 @@ object ThreadFlattener {
                     event = child,
                     depth = childDepth,
                     descendantCount = subtreeSizes[child.id] ?: 0,
-                    collapsed = collapsed
+                    collapsed = collapsed,
+                    isMuted = child.id in mutedIds
                 )
             )
             // Fold the subtree when capped (unless the user expanded this branch, or it's on the
@@ -130,7 +138,7 @@ object ThreadFlattener {
                         )
                     )
                 }
-                else -> walk(child, childDepth, parentToChildren, subtreeSizes, collapsedIds, expandedIds, expandedFanOut, pathToTarget, visited, result, maxSiblingsInline, depthCap, insideExpanded || child.id in expandedIds)
+                else -> walk(child, childDepth, parentToChildren, subtreeSizes, collapsedIds, expandedIds, expandedFanOut, pathToTarget, visited, result, maxSiblingsInline, depthCap, insideExpanded || child.id in expandedIds, mutedIds)
             }
         }
 

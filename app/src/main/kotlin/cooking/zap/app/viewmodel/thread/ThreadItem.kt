@@ -20,13 +20,17 @@ sealed interface ThreadItem {
      *  - [descendantCount]: full subtree size under this note (used for "+N replies" affordances).
      *  - [connectorStartsMidAir]: true when this note's depth-guide rail has no same-depth Post
      *    immediately above it in the rendered list — i.e. the rail's top would "start in mid-air"
-     *    rather than continuing a visible spine. The UI dashes the top of the rail in that case. */
+     *    rather than continuing a visible spine. The UI dashes the top of the rail in that case.
+     *  - [isMuted]: author is on the NIP-51 mute list. The row stays in the tree (its replies
+     *    still hang off it) but the UI renders a one-line placeholder until the user reveals it.
+     *    Never names the account. */
     data class Post(
         val event: NostrEvent,
         override val depth: Int,
         val descendantCount: Int,
         val collapsed: Boolean,
-        val connectorStartsMidAir: Boolean = false
+        val connectorStartsMidAir: Boolean = false,
+        val isMuted: Boolean = false
     ) : ThreadItem {
         override val key: Any get() = event.id
         override val contentType: String get() = "post"

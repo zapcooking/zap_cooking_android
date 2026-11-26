@@ -168,6 +168,9 @@ fun PostCard(
     unicodeEmojis: List<String> = emptyList(),
     onOpenEmojiLibrary: (() -> Unit)? = null,
     onMuteThread: (() -> Unit)? = null,
+    /** Set on a revealed muted reply: renders a trailing "Hide" on the "replying to"
+     *  row that re-collapses just this reply (per-row reveal, iOS/web parity). */
+    onHideMuted: (() -> Unit)? = null,
     pollVoteCounts: Map<String, Int> = emptyMap(),
     pollTotalVotes: Int = 0,
     userPollVotes: List<String> = emptyList(),
@@ -357,26 +360,41 @@ fun PostCard(
         // render blank and the comment looks like it's replying to nobody.
         val contextLabel = commentingOnLabel
             ?: replyToName?.let { stringResource(R.string.post_replying_to_prefix) + " " + it }
-        if (contextLabel != null) {
+        if (contextLabel != null || onHideMuted != null) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(bottom = 4.dp)
             ) {
-                Icon(
-                    imageVector = if (externalCommentRef != null) Icons.Outlined.Link
-                        else Icons.AutoMirrored.Outlined.Reply,
-                    contentDescription = null,
-                    modifier = Modifier.size(14.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    text = if (externalCommentRef != null) "Commenting on $contextLabel" else contextLabel,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                if (contextLabel != null) {
+                    Icon(
+                        imageVector = if (externalCommentRef != null) Icons.Outlined.Link
+                            else Icons.AutoMirrored.Outlined.Reply,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = if (externalCommentRef != null) "Commenting on $contextLabel" else contextLabel,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        // Yield the tail to the "Hide" control when one is present.
+                        modifier = if (onHideMuted != null) Modifier.weight(1f, fill = false) else Modifier
+                    )
+                }
+                if (onHideMuted != null) {
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        text = stringResource(R.string.thread_tap_to_hide),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .clickable(onClick = onHideMuted)
+                            .padding(start = 8.dp)
+                    )
+                }
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
