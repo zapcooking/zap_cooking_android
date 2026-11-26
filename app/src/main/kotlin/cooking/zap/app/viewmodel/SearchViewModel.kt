@@ -3,21 +3,22 @@ package cooking.zap.app.viewmodel
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import cooking.zap.app.nostr.BrainstormSearch
 import cooking.zap.app.nostr.ClientMessage
+import cooking.zap.app.nostr.FoodHashtags
 import cooking.zap.app.nostr.Filter
 import cooking.zap.app.nostr.NostrEvent
 import cooking.zap.app.nostr.Nip22
 import cooking.zap.app.nostr.ProfileData
 import cooking.zap.app.nostr.RecipeFormats
 import cooking.zap.app.nostr.RecipeParser
-import cooking.zap.app.nostr.RecipeTag
-import cooking.zap.app.nostr.RecipeTagCatalog
 import cooking.zap.app.relay.RelayConfig
 import cooking.zap.app.relay.RelayPool
 import cooking.zap.app.repo.EventRepository
 import cooking.zap.app.repo.KeyRepository
 import cooking.zap.app.repo.MuteRepository
 import cooking.zap.app.repo.RecipeRepository
+import java.util.Locale
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,7 +26,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 // Recipes first — recipe-first, mirroring the web's submit priority.
-enum class SearchFilter { RECIPES, TAGS, PEOPLE, NOTES }
+enum class SearchFilter { RECIPES, PEOPLE, NOTES }
 
 enum class RelayOption {
     DEFAULT,
@@ -73,8 +74,8 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
     private val _recipeResults = MutableStateFlow<List<RecipeParser.Recipe>>(emptyList())
     val recipeResults: StateFlow<List<RecipeParser.Recipe>> = _recipeResults
 
-    private val _tagResults = MutableStateFlow<List<RecipeTag>>(emptyList())
-    val tagResults: StateFlow<List<RecipeTag>> = _tagResults
+    private val _tagResults = MutableStateFlow<List<String>>(emptyList())
+    val tagResults: StateFlow<List<String>> = _tagResults
 
     private val _isSearching = MutableStateFlow(false)
     val isSearching: StateFlow<Boolean> = _isSearching
@@ -96,10 +97,6 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
 
     fun selectFilter(filter: SearchFilter) {
         _filter.value = filter
-        if (filter == SearchFilter.TAGS) {
-            stopNetworkSearchForTags()
-            _tagResults.value = RecipeTagCatalog.search(_query.value)
-        }
     }
 
     fun selectDefaultRelay() {
@@ -151,11 +148,10 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
     fun updateQuery(newQuery: String) {
         _query.value = newQuery
         val normalized = newQuery.trim().removePrefix("nostr:")
-        _tagResults.value = RecipeTagCatalog.search(normalized)
-        if (_filter.value == SearchFilter.TAGS) {
-            stopNetworkSearchForTags()
-            return
-        }
+        // Tag matches stay populated in every mode — the UI renders them as
+        // hashtag suggestion chips above the results (iOS parity), never as
+        // a separate search mode.
+        _tagResults.value = matchingTags(normalized)
         // Debounced auto-search: trigger after 500ms of no typing
         autoSearchJob?.cancel()
         val pool = relayPool ?: return
@@ -196,14 +192,25 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
         _authorSearchResults.value = emptyList()
 
         val relaysToQuery = when (_selectedRelayOption.value) {
-            RelayOption.DEFAULT -> listOf(DEFAULT_SEARCH_RELAY)
+            RelayOption.DEFAULT -> DEFAULT_SEARCH_RELAYS
             RelayOption.ALL_RELAYS -> _searchRelays.value
             RelayOption.INDIVIDUAL -> listOfNotNull(_selectedRelayUrl.value)
         }
 
-        val authorFilter = Filter(kinds = listOf(0), search = trimmed, limit = 10)
-        val req = ClientMessage.req(authorSubId, authorFilter)
-        for (url in relaysToQuery) {
+        // One REQ per relay with a per-relay search string: Brainstorm needs
+        // its `observer:` token; other relays must never receive it (they
+        // would match it as literal words and empty the results).
+        val authorReqByRelay = relaysToQuery.mapNotNull { url ->
+            BrainstormSearch.searchQueryString(url, trimmed)?.let { search ->
+                url to ClientMessage.req(authorSubId, Filter(kinds = listOf(0), search = search, limit = 10))
+            }
+        }
+        if (authorReqByRelay.isEmpty()) {
+            // The query cleans to nothing that may be sent — ask nobody.
+            _isAuthorSearching.value = false
+            return
+        }
+        for ((url, req) in authorReqByRelay) {
             relayPool.sendToRelayOrEphemeral(url, req)
         }
 
@@ -215,7 +222,9 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
                 relayPool.relayEvents.collect { relayEvent ->
                     if (relayEvent.subscriptionId != activeSubId) return@collect
                     val event = relayEvent.event
-                    if (event.kind == 0 && event.pubkey !in seenPubkeys) {
+                    if (event.kind == 0 && event.pubkey !in seenPubkeys &&
+                        _authorSearchResults.value.size < 10
+                    ) {
                         seenPubkeys.add(event.pubkey)
                         eventRepo.cacheEvent(event)
                         val profile = ProfileData.fromEvent(event)
@@ -268,18 +277,24 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
         _users.value = emptyList()
         _notes.value = emptyList()
         _recipeResults.value = emptyList()
-        _tagResults.value = emptyList()
+        // _tagResults intentionally survives: the suggestion chips are a
+        // property of the typed text (set in updateQuery), not of the search.
 
         val activeFilter = _filter.value
-        if (activeFilter == SearchFilter.TAGS) {
-            _tagResults.value = RecipeTagCatalog.search(trimmed)
-            _isSearching.value = false
-            return
-        }
         val relaysToQuery = when (_selectedRelayOption.value) {
-            RelayOption.DEFAULT -> listOf(DEFAULT_SEARCH_RELAY)
+            RelayOption.DEFAULT -> DEFAULT_SEARCH_RELAYS
             RelayOption.ALL_RELAYS -> _searchRelays.value
             RelayOption.INDIVIDUAL -> listOfNotNull(_selectedRelayUrl.value)
+        }
+
+        // Brainstorm refuses a NIP-50 search without its `observer:` token and
+        // treats `key:value` words as instructions, so what is sent is the
+        // relay-safe cleaned form (see [BrainstormSearch]). Nothing sendable
+        // means ask nobody: an honest empty, not a failure.
+        val cleaned = BrainstormSearch.cleanQuery(trimmed)
+        if (cleaned == null) {
+            _isSearching.value = false
+            return
         }
 
         // Recipe search merges (1) an instant client-side baseline over loaded
@@ -289,50 +304,46 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
 
         val activeSubId = when (activeFilter) {
             SearchFilter.RECIPES -> {
-                // Opportunistic network NIP-50 via the registry searchFilter.
-                // No hardcoded 30023. This is not required for results because
-                // cached catalog search plus deep fill is the guaranteed path.
-                // Default relay path intentionally sends no recipe NIP-50 REQ
-                // (confirmed dead for kind-30023). Keep opportunistic NIP-50
-                // only for user-selected relays.
-                val recipeNetworkRelays = when (_selectedRelayOption.value) {
-                    RelayOption.DEFAULT -> emptyList()
-                    RelayOption.ALL_RELAYS, RelayOption.INDIVIDUAL -> relaysToQuery
-                }
-                if (recipeNetworkRelays.isNotEmpty()) {
-                    val recipeFilters = RecipeFormats.active.map { it.searchFilter(trimmed, 50) }
-                    val recipeReq = ClientMessage.req(recipeSubId, recipeFilters)
-                    for (url in recipeNetworkRelays.distinct()) {
-                        relayPool.sendToRelayOrEphemeral(url, recipeReq)
+                // Network NIP-50 via the registry searchFilter (no hardcoded
+                // 30023), one REQ per relay with a per-relay search string.
+                // This used to be disabled on the default relay path because
+                // Nostr Archives was confirmed dead for kind-30023; Brainstorm
+                // serves recipe search (verified live, 2026-11-17).
+                for (url in relaysToQuery.distinct()) {
+                    val recipeSearch = BrainstormSearch.searchQueryString(url, cleaned)
+                        ?: continue
+                    val recipeFilters = RecipeFormats.active.map {
+                        it.searchFilter(cleaned, 50).copy(search = recipeSearch)
                     }
+                    relayPool.sendToRelayOrEphemeral(url, ClientMessage.req(recipeSubId, recipeFilters))
                 }
                 recipeSubId
             }
             SearchFilter.PEOPLE -> {
-                val userFilter = Filter(kinds = listOf(0), search = trimmed, limit = 20)
-                val userReq = ClientMessage.req(userSubId, userFilter)
                 for (url in relaysToQuery) {
-                    relayPool.sendToRelayOrEphemeral(url, userReq)
+                    val userSearch = BrainstormSearch.searchQueryString(url, cleaned) ?: continue
+                    relayPool.sendToRelayOrEphemeral(
+                        url, ClientMessage.req(userSubId, Filter(kinds = listOf(0), search = userSearch, limit = 20))
+                    )
                 }
                 userSubId
             }
             SearchFilter.NOTES -> {
                 val authorPubkey = _authorFilter.value?.pubkey
-                val noteFilter = Filter(
-                    // Kind 1111 (NIP-22 comments) rides along so a pasted note1/nevent1
-                    // that resolves to a comment isn't dropped as "No results found".
-                    kinds = listOf(1, Nip22.KIND_COMMENT),
-                    authors = authorPubkey?.let { listOf(it) },
-                    search = trimmed,
-                    limit = 50
-                )
-                val noteReq = ClientMessage.req(noteSubId, noteFilter)
                 for (url in relaysToQuery) {
-                    relayPool.sendToRelayOrEphemeral(url, noteReq)
+                    val noteSearch = BrainstormSearch.searchQueryString(url, cleaned) ?: continue
+                    val noteFilter = Filter(
+                        // Kind 1111 (NIP-22 comments) rides along so a pasted note1/nevent1
+                        // that resolves to a comment isn't dropped as "No results found".
+                        kinds = listOf(1, Nip22.KIND_COMMENT),
+                        authors = authorPubkey?.let { listOf(it) },
+                        search = noteSearch,
+                        limit = 50
+                    )
+                    relayPool.sendToRelayOrEphemeral(url, ClientMessage.req(noteSubId, noteFilter))
                 }
                 noteSubId
             }
-            SearchFilter.TAGS -> return
         }
 
         val seenUserPubkeys = mutableSetOf<String>()
@@ -353,12 +364,17 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
                             if (mergeRecipe(recipeByCoord, recipe)) {
                                 eventRepo.cacheEvent(event)
                                 eventRepo.requestProfileIfMissing(recipe.author)
-                                _recipeResults.value = recipeByCoord.values.toList()
+                                _recipeResults.value = recipeByCoord.values.take(25)
                             }
                         }
                         SearchFilter.PEOPLE -> {
                             val event = relayEvent.event
-                            if (event.kind == 0 && event.pubkey !in seenUserPubkeys) {
+                            // Ranked rows are third-party signed: check the
+                            // signature before showing (web's toResults gate).
+                            if (event.kind == 0 && !event.verifySignature()) return@collect
+                            if (event.kind == 0 && event.pubkey !in seenUserPubkeys &&
+                                _users.value.size < 20
+                            ) {
                                 if (muteRepo?.isBlocked(event.pubkey) == true) return@collect
                                 seenUserPubkeys.add(event.pubkey)
                                 eventRepo.cacheEvent(event)
@@ -370,7 +386,9 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
                         }
                         SearchFilter.NOTES -> {
                             val event = relayEvent.event
-                            if ((event.kind == 1 || event.kind == Nip22.KIND_COMMENT) && event.id !in seenNoteIds) {
+                            if ((event.kind == 1 || event.kind == Nip22.KIND_COMMENT) &&
+                                event.id !in seenNoteIds && _notes.value.size < 50
+                            ) {
                                 if (muteRepo?.isBlocked(event.pubkey) == true) return@collect
                                 if (muteRepo?.containsMutedWord(event.content) == true) return@collect
                                 seenNoteIds.add(event.id)
@@ -378,7 +396,6 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
                                 eventRepo.cacheEvent(event)
                             }
                         }
-                        SearchFilter.TAGS -> return@collect
                     }
                 }
             }
@@ -486,6 +503,22 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
             recipe.summary?.lowercase()?.contains(q) == true
     }
 
+    /** Keyword / hashtag completions from the static food taxonomy — the
+     *  counterpart of web's `recipeTags` suggestion rows and iOS
+     *  `matchingTags`. Prefix matches first, then substring, capped at 8. */
+    private fun matchingTags(query: String, limit: Int = 8): List<String> {
+        val q = query.trim().lowercase(Locale.ROOT)
+        if (q.length < 2) return emptyList()
+        val prefix = mutableListOf<String>()
+        val contains = mutableListOf<String>()
+        for (tag in FoodHashtags.ALL) {
+            val t = tag.lowercase(Locale.ROOT)
+            if (t.startsWith(q)) prefix.add(tag)
+            else if (t.contains(q)) contains.add(tag)
+        }
+        return (prefix + contains).take(limit)
+    }
+
     fun clear() {
         searchJob?.cancel()
         authorSearchJob?.cancel()
@@ -494,7 +527,8 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
         _users.value = emptyList()
         _notes.value = emptyList()
         _recipeResults.value = emptyList()
-        _tagResults.value = emptyList()
+        // _tagResults intentionally survives: the suggestion chips are a
+        // property of the typed text (set in updateQuery), not of the search.
         _isSearching.value = false
         _authorFilter.value = null
         _authorSearchResults.value = emptyList()
@@ -502,7 +536,14 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     companion object {
+        /** Legacy pin kept for the OnlyFood hashtag feed (matches web's
+         *  single-relay hashtag path); search no longer uses it. */
         const val DEFAULT_SEARCH_RELAY = "wss://search.nostrarchives.com"
+
+        /** The NIP-50 search-relay pair fanned for every full-text query —
+         *  Brainstorm primary, nos.today behind it. See [BrainstormSearch]
+         *  for the per-relay `observer:` token rules. */
+        val DEFAULT_SEARCH_RELAYS: List<String> = BrainstormSearch.DEFAULT_RELAYS
     }
 
     private fun closeSubscriptions(relayPool: RelayPool) {
@@ -513,10 +554,4 @@ class SearchViewModel(app: Application) : AndroidViewModel(app) {
         relayPool.closeOnAllRelays(metricsSubId)
     }
 
-    private fun stopNetworkSearchForTags() {
-        autoSearchJob?.cancel()
-        searchJob?.cancel()
-        relayPool?.let { closeSubscriptions(it) }
-        _isSearching.value = false
-    }
 }

@@ -1,8 +1,10 @@
 package cooking.zap.app.ui.screen
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -18,7 +20,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.windowInsetsTopHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -99,6 +101,7 @@ import cooking.zap.app.ui.component.EmojiLibrarySheet
 import cooking.zap.app.ui.component.pendingEmojiReactCallback
 import cooking.zap.app.ui.component.GalleryCard
 import cooking.zap.app.ui.component.isGalleryEvent
+import cooking.zap.app.ui.util.noteZapOfferable
 import cooking.zap.app.ui.component.PostCard
 import cooking.zap.app.ui.component.ProfilePicture
 import cooking.zap.app.ui.component.RelayIcon
@@ -157,6 +160,14 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.launch
+import cooking.zap.app.nostr.RecipeParser
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.foundation.gestures.stopScroll
+import cooking.zap.app.ui.component.FEED_BARS_RESTORE_SIZE
+import cooking.zap.app.ui.component.FeedBarsRestoreButton
+import cooking.zap.app.ui.component.FeedBarsAutoHide
+import androidx.compose.foundation.interaction.DragInteraction
+import androidx.compose.animation.ExitTransition
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -175,6 +186,7 @@ fun FeedScreen(
     onQuotedNoteClick: ((String) -> Unit)? = null,
     onSearch: () -> Unit = {},
     onGadgets: () -> Unit = {},
+    gadgetsActive: Boolean = false,
     onSousChef: () -> Unit = {},
     onCheffy: () -> Unit = {},
     onNourish: () -> Unit = {},
@@ -191,6 +203,9 @@ fun FeedScreen(
     fetchGroupPreview: (suspend (String, String) -> cooking.zap.app.repo.GroupPreview?)? = null,
     scrollToTopTrigger: Int = 0,
     onAskCheffy: ((NostrEvent) -> Unit)? = null,
+    // Unread Messages / Notifications, for the restore circle's dot while
+    // the bottom bar (and its own dots) is collapsed.
+    hasUnreadActivity: Boolean = false,
 ) {
     val feed by viewModel.feed.collectAsState()
     val feedType by viewModel.feedType.collectAsState()
@@ -396,6 +411,61 @@ fun FeedScreen(
             listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
         }
     }
+
+    // Scroll direction detection — hide the top/bottom bars on scroll down,
+    // show them again on scroll up or at top (FeedBarsAutoHide). The restore
+    // circle's tap holds hiding until the next finger drag.
+    val barsGate = remember { FeedBarsAutoHide() }
+    // "Hide bars while scrolling" (Interface → Appearance, off by default).
+    // Read on entry: the setting lives on its own route, so coming back to
+    // the feed recomposes this screen with the current value.
+    val autoHideBars = remember { viewModel.interfacePrefs.isAutoHideFeedBars() }
+    LaunchedEffect(autoHideBars) {
+        barsGate.enabled = autoHideBars
+        // Switched off while collapsed: bring the bars back now.
+        if (!autoHideBars) viewModel.setBarsVisible(true)
+    }
+    LaunchedEffect(listState) {
+        viewModel.setBarsVisible(true)
+        snapshotFlow {
+            listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+        }.collect { (index, offset) ->
+            barsGate.onScroll(index, offset, isAtTop, listState.isScrollInProgress)
+                ?.let { viewModel.setBarsVisible(it) }
+        }
+    }
+    LaunchedEffect(listState) {
+        listState.interactionSource.interactions.collect {
+            if (it is DragInteraction.Start) barsGate.newTouch()
+        }
+    }
+
+    val barsVisible by viewModel.barsVisible.collectAsState()
+    // The restore circle shows only once the collapse has settled: this
+    // screen's bottom edge travels down with the bottom bar for the 200ms
+    // shrink, and anything pinned to it meanwhile slides. It leaves at once.
+    var restoreCircleSettled by remember { mutableStateOf(false) }
+    LaunchedEffect(barsVisible) {
+        if (barsVisible) {
+            restoreCircleSettled = false
+        } else {
+            delay(220)
+            restoreCircleSettled = true
+        }
+    }
+    // The compose FAB's scroll fade, shared by the restore circle — the
+    // same three steps as iOS: 35% under the finger, 75% while a fling
+    // coasts, full at rest, 200ms each way.
+    val chromeDragged by listState.interactionSource.collectIsDraggedAsState()
+    val chromeAlpha by animateFloatAsState(
+        targetValue = when {
+            chromeDragged -> 0.35f
+            listState.isScrollInProgress -> 0.75f
+            else -> 1f
+        },
+        animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+        label = "fabAlpha"
+    )
 
 
     val initialLoadDone by viewModel.initialLoadDone.collectAsState()
@@ -618,29 +688,34 @@ fun FeedScreen(
 
     // The navigation drawer is hoisted to WispNavHost (shared with the
     // Recipes root tab); FeedScreen just opens it via onOpenDrawer.
+    Box(Modifier.fillMaxSize()) {
         Scaffold(
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             topBar = {
-                // The transparent background needs to paint the status-bar strip
-                // too, not just the 48dp bar below it — otherwise the bar's own
-                // windowInsetsPadding carves out an opaque gap above it and the
-                // translucency stops short of the top of the screen. Paint it on
-                // this outer Box (sized to bar + status-bar inset) and make the
-                // bar itself fully transparent so there's only one alpha layer.
-                Box(
+                // The translucent background needs to paint the status-bar strip
+                // too, not just the 48dp bar below it — so the paint lives on
+                // this outer Column, and the bar itself stays fully transparent
+                // (single alpha layer). The status-bar spacer is persistent so
+                // that when the bar shrinks away on scroll-down, content still
+                // doesn't bleed behind the system status bar.
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(MaterialTheme.colorScheme.background.copy(alpha = 0.85f))
                 ) {
+                Spacer(Modifier.windowInsetsTopHeight(WindowInsets.statusBars))
+                Spacer(Modifier.height(10.dp))
+                AnimatedVisibility(
+                    visible = barsVisible,
+                    enter = expandVertically(animationSpec = tween(200), expandFrom = Alignment.Bottom) + fadeIn(animationSpec = tween(200)),
+                    exit = shrinkVertically(animationSpec = tween(200), shrinkTowards = Alignment.Bottom) + fadeOut(animationSpec = tween(200))
+                ) {
                 CenterAlignedTopAppBar(
-                    // Compact: reserve the status-bar inset via
-                    // `windowInsetsPadding` (layout-time, no first-frame
-                    // snap) and clamp the content area to 48dp (was
-                    // Material's default 64dp). Disable the bar's
-                    // internal inset handling to avoid double-padding.
-                    modifier = Modifier
-                        .windowInsetsPadding(WindowInsets.statusBars)
-                        .height(48.dp),
+                    // Compact: the status-bar inset is reserved by the outer
+                    // Column's spacer, so clamp the content area to 48dp (was
+                    // Material's default 64dp) and disable the bar's internal
+                    // inset handling to avoid double-padding.
+                    modifier = Modifier.height(48.dp),
                     windowInsets = WindowInsets(0),
                     title = {
                                 Box {
@@ -798,7 +873,7 @@ fun FeedScreen(
                                 val (icon, tint) = when (contentFilter) {
                                     // Apps = 3x3 dot grid — reads as "everything" and stands
                                     // apart from the more literal Article/PhotoLibrary/CheckCircle
-                                    // glyphs, plus the nearby Gadgets icon's rectangular shape.
+                                    // glyphs, plus the nearby Gadgets icon's round egg shape.
                                     FeedContentFilter.ALL -> Icons.Outlined.Apps to MaterialTheme.colorScheme.onSurfaceVariant
                                     FeedContentFilter.TEXT_ONLY -> Icons.AutoMirrored.Outlined.Article to MaterialTheme.colorScheme.primary
                                     // PhotoLibrary (stacked photos) reads as "gallery" more
@@ -825,13 +900,15 @@ fun FeedScreen(
                             }
                             IconButton(onClick = onGadgets, modifier = Modifier.size(38.dp)) {
                                 Icon(
-                                    painter = painterResource(R.drawable.ic_kitchen_gadgets),
+                                    painter = painterResource(
+                                        if (gadgetsActive) R.drawable.ic_kitchen_gadgets_fill else R.drawable.ic_kitchen_gadgets
+                                    ),
                                     contentDescription = stringResource(R.string.drawer_gadgets),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    // Slightly smaller than the default 24.dp so the cup's
-                                    // full-bleed artwork matches the visual height of the
-                                    // adjacent AI (Intelligence) atom button.
-                                    modifier = Modifier.size(20.dp)
+                                    // A touch under the default 24.dp so the egg timer's
+                                    // full-bleed artwork reads clearly next to the adjacent
+                                    // AI (Intelligence) atom button.
+                                    modifier = Modifier.size(22.dp)
                                 )
                             }
                             // Intelligence menu — mirrors the web's IntelligenceMenu
@@ -849,23 +926,20 @@ fun FeedScreen(
                         }
                     }
                 )
-                }
+                } // AnimatedVisibility
+                HorizontalDivider(
+                    thickness = 0.5.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                )
+                } // Column
             },
             floatingActionButton = {
                 if (onCompose != null) {
-                    val isScrolling = listState.isScrollInProgress
-                    val fabAlpha by animateFloatAsState(
-                        targetValue = if (isScrolling) 0.3f else 1f,
-                        animationSpec = tween(
-                            durationMillis = if (isScrolling) 150 else 400
-                        ),
-                        label = "fabAlpha"
-                    )
                     cooking.zap.app.ui.component.ZapGradientFab(
                         onClick = onCompose,
                         contentDescription = stringResource(R.string.cd_new_post),
                         icon = Icons.Default.Edit,
-                        modifier = Modifier.graphicsLayer { alpha = fabAlpha }
+                        modifier = Modifier.graphicsLayer { alpha = chromeAlpha }
                     )
                 }
             }
@@ -1162,6 +1236,28 @@ fun FeedScreen(
             }
             } // Column
         }
+        // Minimized tab bar: bottom-left, level with the FAB (56dp, 16dp
+        // from the bottom). Tap brings both bars back and, mid-fling, stops
+        // the list too.
+        AnimatedVisibility(
+            visible = restoreCircleSettled && !barsVisible,
+            enter = fadeIn(animationSpec = tween(150)),
+            exit = ExitTransition.None,
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(start = 16.dp, bottom = 16.dp + (56.dp - FEED_BARS_RESTORE_SIZE) / 2)
+        ) {
+            FeedBarsRestoreButton(
+                hasUnread = hasUnreadActivity,
+                onClick = {
+                    barsGate.restored()
+                    scope.launch { listState.stopScroll() }
+                    viewModel.setBarsVisible(true)
+                },
+                modifier = Modifier.graphicsLayer { alpha = chromeAlpha }
+            )
+        }
+    } // Box
 
     if (showEmojiLibrary) {
         val sheetUnicodeEmojis by viewModel.customEmojiRepo.unicodeEmojis.collectAsState()
@@ -1549,7 +1645,13 @@ private fun FeedArticleItem(
                         modifier = Modifier.padding(end = 8.dp)
                     ) {
                         Text(
-                            text = "ARTICLE",
+                            // Recipes are kind-30023 like any other long-form post, so the
+                            // badge has to come from the same content gate the recipe feeds
+                            // use — not from the kind alone.
+                            text = stringResource(
+                                if (RecipeParser.isRecipe(event)) R.string.badge_recipe
+                                else R.string.badge_article
+                            ),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onPrimaryContainer,
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
@@ -1597,6 +1699,7 @@ private fun FeedArticleItem(
                 resolvedEmojis = resolvedEmojis,
                 unicodeEmojis = unicodeEmojis,
                 onOpenEmojiLibrary = onOpenEmojiLibrary,
+                showZap = noteZapOfferable(profileData),
                 modifier = Modifier.padding(horizontal = 4.dp)
             )
         }

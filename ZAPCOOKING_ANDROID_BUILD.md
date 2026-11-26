@@ -53,6 +53,40 @@ AI (OpenAI-backed, all server-side — the app only calls them):
 - `POST /api/cookbook-intro` — AI intro copy for recipe books (rides
   with the cookbook/recipe-books commerce feature; later phase).
 
+Scheduled posts (**all NIP-98**; contract is `docs/schedule-contract.md`
+in zapcooking/frontend and wins over this summary):
+- `POST /api/schedule` — body `{ event, relay_mode: "all", relays? }`.
+  The event is signed on the device with `created_at` = publish time;
+  the server holds no key and broadcasts it unchanged. `relays` is up to
+  4 of the author's own write relays (omitted when empty).
+- `GET /api/schedule?status=<status>` — the caller's rows, any client's
+  (a post scheduled on web lists here and the reverse). The query string
+  is NOT part of the signed `u` tag.
+- `DELETE /api/schedule/{id}` — cancel a `pending` row; `{id}` is the
+  event id.
+- Client: `ZapCookingApi.signForSchedule` / `scheduleEvent` /
+  `listScheduled` / `cancelScheduled`, results in `api/ScheduleApi.kt`.
+  These sign a **fresh header per request** and bypass
+  `Nip98HeaderCache` (the contract forbids reuse); one retry on 401, one
+  retry without `relays` on `bad_relays`, and a 409 `already_scheduled`
+  whose row is pending/publishing/sent is success. Never mine PoW on a
+  scheduled event, and never re-sign to retry.
+- Composer (`ComposeViewModel`, rules in `viewmodel/ScheduleCompose.kt`):
+  the picker allows 5 minutes to 90 days out and the 3-minute check runs
+  at signing; a scheduled post skips the undo countdown; PoW and a
+  schedule are mutually exclusive; a private reply cannot be scheduled
+  (and is never sent immediately while a time is set). `relays` is the
+  account's own NIP-65 write relays in list order through
+  `ScheduleRelays.pick` — a port of web's `pickScheduleRelays`, sharing
+  its test cases — and is omitted when empty.
+- Scheduled list (`DraftsViewModel`, rules in `viewmodel/ScheduledList.kt`):
+  two calls, `?status=pending` then `?status=failed`; pending is shown
+  as soon as it returns and survives a failed second call. Pending rows
+  sort soonest first. Reloads on every screen entry and on pull to
+  refresh. Cancel waits for the DELETE answer before removing the row.
+- The old `wss://scheduler.nostrarchives.com` relay is gone from the app;
+  posts parked on it were not migrated.
+
 Membership:
 - `GET /api/membership?pubkey=<hex>` — **public batch read** of status
   (no auth). Use for displaying a user's own/others' member state.
@@ -94,10 +128,53 @@ Membership:
 - `profiles`: `purplepag.es`
 - `articles` (kind 30023 = **recipes**): `relay.primal.net`, `nos.lol`,
   `nostr.wine`, `eden.nostr.land`, `relay.noswhere.com`
+- `feed` (**Fresh**): `wss://feed.zap.cooking` — read-only, curated, its
+  own socket, never authenticated. See "Fresh feed relay" below.
 - **Recipes live on the public article relays, not on Pantry.** Adding
   Pantry as the members relay is correct; replacing the aggregators is
   not — it breaks recipe loading. Leave `RelayProber.BOOTSTRAP` and the
   discovery hardcodes alone.
+
+### Fresh feed relay (`wss://feed.zap.cooking`)
+The curated food-and-drink relay behind the Fresh feed. The contract **as
+measured** (free window, paging, `auth-required` floor, topic previews, live
+tail, which kinds it serves) is recorded in the iOS build spec,
+`zapcooking_ios/ZAPCOOKING_IOS_BUILD.md` §2 "Fresh feed relay — contract as
+measured" (probed 2026-11-10/11). iOS is the baseline for this port; re-probe
+before relying on a number. Rules that hold on Android (Seth, 2026-11-25):
+
+- **Free tier only in v1.** No NIP-42 login to this relay:
+  `FeatureFlags.FEED_RELAY_LOGIN_ENABLED = false`, enforced by
+  `FeedRelay.loginAllowed` inside `RelayPool` (the signer wrapper, the
+  challenge collector and `approveAuth`). The relay re-sends its challenge
+  before every `CLOSED auth-required:`, and a login names the reader.
+- It is never a publish target, a relay hint, or a member of another set.
+- Nothing about viewing leaves the device: no view counts, no per-user
+  activity; seen state is device-local.
+- Fresh becomes the landing feed for **new sign-ins only**; existing accounts
+  keep the feed they have. Special cards (recipe box, topic spotlights) are a
+  second wave after the plain feed ships.
+
+**Port status** (one PR per step, in this order):
+
+1. Feed relay never authenticated — done (#311).
+2. Pure logic (posts, spacing, last visit, finish line, topic catalog) — done
+   (#312).
+3. Relay client — `fresh/FreshRelayClient` over the `FreshSocketTransport`
+   seam: its own read-only socket, only `REQ` and `CLOSE` sent, every event
+   verified. Port of iOS #202. Nothing in the app calls it yet.
+4. View model + feed picker entry.
+5. UI.
+6. Default-on for new sign-ins.
+7. Specials (recipe box, topic spotlights).
+
+**Android differences from iOS:**
+
+- `FreshRelayClient.foregrounded()` is called by the view model. The client
+  has no lifecycle dependency and does not observe the app's state itself
+  (iOS observes the foreground notification).
+- Hashtag mutes apply (iOS has none). The caller lowercases them.
+- The hellthread limit is fixed at 25 p-tags (iOS reads a setting).
 
 ---
 
@@ -326,13 +403,30 @@ app calls `zap.cooking` HTTPS endpoints; it never embeds model keys. Android
 work = API client + UI + branding + (for Sous Chef "save") a recipe-create
 pipeline.
 
-⚠️ **ARCHITECTURAL DRIFT from the kickoff assumption:** the four AI endpoints
-do **NOT** use NIP-98. They take **`pubkey` in the JSON body** and the server
-calls `hasActiveMembership(pubkey)` (an insecure, client-supplied trust model
-the web acknowledges — there's a planned `FOLLOWUPS-auth-migration` to NIP-98).
-So Android needs a **plain `postJson`** helper (no NIP-98 signing) — NOT
-`authedPost`. `getJson` (GET) + new `postJson` cover all four. NIP-98 stays
-for `membership/check-status` only. When the server migrates, swap to NIP-98.
+⚠️ **AUTH SHAPE — verify against the live server, never against prose.**
+The kickoff assumed NIP-98 everywhere; the Phase 2 build then found the AI
+endpoints took **`pubkey` in the JSON body** (`hasActiveMembership(pubkey)`,
+a client-supplied trust model the web acknowledged as temporary). The web
+has since migrated most of them: frontend `04cf67cd` (2026-08-17, "require
+NIP-98 on AI-backed and gated-content endpoints") moved `/api/zappy` and
+`/api/zappy/scan` to NIP-98 — Android missed it and served every paying
+member a members-only wall for two weeks (issue #247). **Current state
+(verified against frontend `main` + production probes, 2026-09-01):**
+
+| Endpoint | Auth | Android helper |
+|---|---|---|
+| `POST /api/zappy`, `/api/zappy/scan`, `/api/zappy/note-review`, `/api/zappy/meal-plan` | **NIP-98**, body-hash bound; body `pubkey` ignored | `authedRaw` |
+| `POST /api/extract-recipe` (image/text) | **NIP-98** | `authedPost` |
+| `POST /api/extract-recipe/public` | none (URL only, per-IP cap) | `postJson` |
+| `POST /api/nourish` | **pubkey-in-body** (the last one; `requireMembership(body.pubkey)`, header ignored) | bare compute call |
+| `POST /api/membership/check-status` | NIP-98 | `authedPost` |
+| `GET /api/membership`, `/api/pantry/recipes-by-week` | none | `getJson` |
+
+This is the second time a doc comment about auth shape was wrong (Sous Chef
+gating was the first). Treat every auth comment as unverified until probed:
+a bogus `Authorization: Nostr …` header answering **401** means NIP-98 is
+enforced; the same body answering identically with and without the header
+means it is ignored.
 
 **Contracts (verified against `zapcooking/frontend`):**
 
@@ -348,7 +442,10 @@ for `membership/check-status` only. When the server migrates, swap to NIP-98.
    preview until sign-in**, then save.
 
 2. **Cheffy** — `POST /api/zappy` (brand is "Cheffy"; endpoint stays `/zappy`
-   for back-compat — confirmed) + `/api/zappy/scan`.
+   for back-compat — confirmed) + `/api/zappy/scan`. **Both NIP-98** since
+   frontend `04cf67cd`; the Authorization header is optional on `/zappy` only
+   for the anonymous `experience:true` preview (3 turns/device via cookie),
+   which Android does not use.
    Body `{ prompt, mode?:'prompt'|'chat'|'hungry'|'format', pubkey?, messages?:
    {role,content}[] }` → `{ ok, output }`. Scan: `{ image:(base64), pubkey? }`.
    **Member-gated** (Pro Kitchen) when `MEMBERSHIP_ENABLED`; fail-open on the
@@ -474,10 +571,11 @@ membership link-out, `MembershipRepository` (Phase 3).
   `StateFlow<List<Message>>`, **stateless full-history** per send (maps
   non-pending/non-error msgs → `{role,content}`, mirrors the web `buildHistory`
   exactly, server-cap 12 turns + 2000-char prompt enforced client-side), "Start
-  over" clears it, no DB/Nostr. `ZapCookingApi.sendCheffy(CheffyRequest)` on
-  `getComputeClient()` (75s — whole-response, **no streaming**), mirroring
-  `computeNourish` one-to-one: `CheffyResult { Reply | MembersOnly | Error }`,
-  **403 → MembersOnly**, `ok:false`/non-2xx → Error. Wait-not-stream: a pending
+  over" clears it, no DB/Nostr. `ZapCookingApi.sendCheffy(CheffyRequest, signer)`
+  on `getComputeClient()` (75s — whole-response, **no streaming**): **NIP-98
+  via `authedRaw`** (since #247 — the server ignores a body pubkey, so
+  `CheffyRequest` carries none), `CheffyResult { Reply | MembersOnly | Error }`,
+  **403 → MembersOnly**, 401 / declined signer / `ok:false` / non-2xx → Error. Wait-not-stream: a pending
   bubble shows a `THINKING_LINES` status line (`COOKING_LINES` when a recipe is
   expected, via `looksLikeRecipeRequest`; one line picked per request, not timed
   rotation); replies render markdown;
@@ -492,7 +590,8 @@ membership link-out, `MembershipRepository` (Phase 3).
   (`PROMPT_PLACEHOLDERS`/`THINKING`/`COOKING`/`ERROR` pools + `pickLine` +
   `looksLikeStructuredRecipe`, verbatim from the web, unit-tested). Drawer entry
   "Cheffy" with the icon. Endpoint stays `/api/zappy`. Suite 98/0/0/0.
-  - **2.3b** = scan (fridge vision, `/api/zappy/scan`, base64 image).
+  - **2.3b** = scan (fridge vision, `/api/zappy/scan`, body `{ image }`,
+    **NIP-98 required** — 401 without a header; use `authedRaw`).
 - **2.3c** ✅ Cheffy Save (the hungry-mode fast-follow — one PR, SAVE only).
   A structured Cheffy reply (`looksLikeStructuredRecipe`) gains a **"Save to my
   recipes"** button that routes through the existing write spine — no new
@@ -567,7 +666,8 @@ membership link-out, `MembershipRepository` (Phase 3).
   signing account auth-and-read pantry (share-once-read-many implies yes), or
   does pantry restrict reads to active members (→ Nourish read becomes
   member-gated)? **2.4b COMPUTE** ✅ — `ZapCookingApi.computeNourish` →
-  `POST /api/nourish` (pubkey-in-body, NOT NIP-98) on a long-timeout compute
+  `POST /api/nourish` (pubkey-in-body, NOT NIP-98 — still true on 2026-09-01,
+  the last endpoint on that shape; re-probe before trusting) on a long-timeout compute
   client (`getComputeClient`, 75s — LLM + awaited pantry publish exceed the
   general 15s). **Response-direct** (no pantry re-read; the server publishes to
   pantry for future viewers). Request carries `recipePubkey`/`recipeDTag`/
@@ -604,11 +704,13 @@ Branding note: the bespoke icons (`CheffyIcon`, Sous Chef / Nourish marks) are
 SVG components — port them per-feature during each build, against the live site.
 
 **Phase 2 tracked follow-ups (don't lose these):**
-- **NIP-98 auth-migration parity.** The AI endpoints trust a client-supplied
-  `pubkey` (no signature). The web has a planned `FOLLOWUPS-auth-migration`
-  to NIP-98. When the server moves, Android swaps `postJson(pubkey-in-body)`
-  → `authedPost` (the NIP-98 spine already exists for `check-status`). Keep
-  the request models auth-agnostic so this is a one-call swap per endpoint.
+- **NIP-98 auth-migration parity.** Mostly landed server-side (frontend
+  `04cf67cd`); Android caught up for Cheffy in #247. **Only `/api/nourish`
+  still trusts a body `pubkey`.** When it moves, `computeNourish` swaps to
+  `authedRaw` exactly as `sendCheffy` did (drop `pubkey` from the request
+  model; sign the one serialized body string). Because the server gives no
+  signal other than a 403 to an anonymous caller, watch the frontend
+  `src/routes/api/nourish/+server.ts` for a `verifyNip98` import.
 - **NIP-101n — consider later** (per Seth; tracked, not scoped). Evaluate
   its relevance when the auth-migration item above is picked up; out of scope
   for the current Phase 2 build order. Specifics TBD.
@@ -720,7 +822,7 @@ so every `credentialManager.getCredential()` on this fork failed with
 ### Release signing
 Release builds are signed by Gradle from credentials that live outside
 the repo. Put all four in `local.properties` (already gitignored, and
-already where the Breez and Giphy keys live):
+already where the Breez and gifs.nostr.build keys live):
 
 ```properties
 zapcooking.keystore.path=~/.zapcooking-keys/zap-cooking-release.jks

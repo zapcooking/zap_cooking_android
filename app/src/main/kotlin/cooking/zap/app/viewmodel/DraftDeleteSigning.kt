@@ -11,7 +11,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * Shared signing for the background draft-delete paths ([ComposeViewModel.deleteDraftOnPublish]
+ * Shared signing for the background draft-delete paths ([ComposeViewModel.deleteDraftById]
  * and [DraftsViewModel.deleteDraft]). Both previously swallowed every signer failure with
  * `catch (_: Exception)`, so on a RemoteSigner (Amber) a failed delete-sign vanished silently and
  * the "deleted" draft survived on relays — a resurrection vector.

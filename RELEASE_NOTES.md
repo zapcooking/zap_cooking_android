@@ -1,5 +1,86 @@
 # Changelog
 
+## [1.7.0]
+
+🛟 Data recovery — Lost follows, mutes, bookmarks, relay lists or profile details to another app overwriting them? Data recovery finds earlier versions of your lists on relays, shows you exactly what a restore would change, and puts them back with one confirmation.
+
+💬 Complete comment threads — Replies to comments now show up in full, however deep the conversation goes, and replying to a comment keeps it in the same thread. Stray notes that only look like replies no longer clutter threads or inflate reply counts.
+
+🏠 Choose your start tab — A new Startup setting under Interface lets you open the app on Feed or Recipes. Feed is now the default.
+
+🎞️ GIFs from nostr.build — The GIF picker now searches gifs.nostr.build, with topic chips to start from, suggestions as you type, and a grid that keeps each GIF's shape. Picked GIFs post as GIFs (no longer converted to video), with their title filled in as alt text. The alt-text editor is also roomier, now opening as a full-width sheet.
+
+🔗 Smarter links — Bare web addresses like zap.cooking are now tappable, including international domains, without swallowing trailing punctuation or mangling email addresses.
+
+🎬 Plus: the screen stays awake while a video plays in your feed, and note details now show what kind of event you're looking at.
+
+
+## [1.6.0]
+
+📝 Drafts you can trust — Posts you've published no longer come back as drafts, and "Draft saved" only appears when something was actually saved. A restored draft now shows "Continuing your last draft" with a Discard option to start fresh.
+
+⏱️ Safer undo countdown — If you leave the composer during the undo countdown and come back, your pending post keeps its own settings: private replies stay private, and gallery posts, scheduled posts, polls and content warnings go out exactly as you set them.
+
+🖼️ Better attachments and alt text — Photos and media now sit as their own tiles on your draft, separate from your text, and can be reordered by dragging. Add image descriptions (alt text) for screen readers, or have Cheffy draft one for you with Cook+.
+
+⚡ Wallet at a glance — A mini-wallet in the sidebar shows your balance (with a hide option), and you'll now be told within seconds if a connected NWC wallet has been revoked or isn't responding.
+
+💱 Accurate payment history — Token transfers made from the same wallet in another app no longer show up as huge sats amounts; they're shown in their own units instead.
+
+🔍 Search in the bottom bar — Search now has its own tab, and the wallet moves to the sidebar, matching the iOS app.
+
+🎨 Plus: a simple System / Light / Dark appearance setting, poll authors can now see their own results and who voted, multiple cooking timers stack neatly instead of squeezing side by side, and a cleaner look for threads with no replies yet.
+
+
+## [1.5.1]
+
+🔧 Cheffy reliability — Improved authentication when communicating with Cheffy so requests are handled more consistently.
+
+⚡ Better wallet reliability — Updated the Breez SDK and improved handling of pending Spark payments.
+
+🛡️ Payment protection — Updated Branta protections and hardened payment retrieval.
+
+✨ Cleaner posts — Reduced unnecessary blank space when displaying longer posts and rich content.
+
+👤 Better sign-in experience — Improved the visibility and placement of the cancel option during sign-in.
+
+
+## [1.5.0]
+
+🍳 Plan with Cheffy — Let Cheffy build your weekly meal plan using real recipes from your Zap Cooking kitchen.
+
+📅 Smarter meal planning — Choose the days and meal slots you want to plan, with support for breakfast, lunch, dinner, and other meal types.
+
+🥦 Plan around your preferences — Cheffy can account for things like maximum cooking time, vegetarian meals, and ingredients you want to exclude.
+
+👀 Preview before applying — Review Cheffy’s proposed week before it changes your planner. Existing meals can be preserved when filling open slots.
+
+🛒 Planner + grocery flow — Recipes added by Cheffy continue through the existing meal planner and grocery-list workflow.
+
+✨ Plus reliability improvements and additional testing around meal planning and recipe matching.
+
+
+## [1.4.0]
+
+🔐 Encrypted key import & export — Added NIP-49 support for password-encrypted ncryptsec keys. Import encrypted keys or create encrypted backups with improved validation and recovery tools.
+
+🛡️ Safer payments with Branta — Lightning and on-chain payment destinations can now display Branta Guardrail verification before you send.
+
+🔔 Better notifications — Notifications now open with their content expanded by default, making replies, zaps, polls, and referenced posts easier to read. A compact mode is still available in settings.
+
+⚡ Broadcast anywhere — Broadcast public notes to your relays from feeds, threads, profiles, search, notifications, and more, with confirmation showing how many relays received the note.
+
+❤️ Cleaner reactions and reposts — See who reacted or reposted with a cleaner, compact engagement view.
+
+🍳 Better recipe discovery — Recipes embedded throughout the app are now clearly identified as recipes instead of generic articles, with improved recipe and article context in comments.
+
+💬 More reliable replies — Fixed thread reply behavior so the reply composer stays connected to the note you actually opened.
+
+🔑 Improved Google sign-in — Fixed account selection, retry behavior, and several Google authentication error states.
+
+📱 Android 16 ready — Updated Zap Cooking for Android 16 / API 36 with additional compatibility and release-build improvements.
+
+
 ## [1.3.6]
 
 🍳 Edit and delete published recipes — Update your own recipes directly from Android while keeping the same recipe link, photos, and original publish date. You can also remove recipes from the recipe detail screen, and deleted recipes now stay deleted after restarting the app.

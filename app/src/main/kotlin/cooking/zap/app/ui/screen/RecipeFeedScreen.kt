@@ -153,6 +153,7 @@ fun RecipeFeedScreen(
     onOpenDrawer: () -> Unit = {},
     onSearch: () -> Unit = {},
     onGadgets: () -> Unit = {},
+    gadgetsActive: Boolean = false,
     onSousChef: () -> Unit = {},
     onCheffy: () -> Unit = {},
     onNourish: () -> Unit = {},
@@ -171,6 +172,10 @@ fun RecipeFeedScreen(
     debugPlantPlan: (() -> Unit)? = null,
     debugPlantReadOnlyPlan: (() -> Unit)? = null,
     debugCleanupPlan: (() -> Unit)? = null,
+    candidateSource: cooking.zap.app.repo.MealPlanCandidateSource? = null,
+    zapCookingApi: cooking.zap.app.api.ZapCookingApi? = null,
+    signer: cooking.zap.app.nostr.NostrSigner? = null,
+    onViewMembership: (() -> Unit)? = null,
 ) {
     val recipes by viewModel.recipes.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
@@ -248,11 +253,13 @@ fun RecipeFeedScreen(
                         }
                         IconButton(onClick = onGadgets, modifier = Modifier.size(38.dp)) {
                             Icon(
-                                painter = painterResource(R.drawable.ic_kitchen_gadgets),
+                                painter = painterResource(
+                                    if (gadgetsActive) R.drawable.ic_kitchen_gadgets_fill else R.drawable.ic_kitchen_gadgets
+                                ),
                                 contentDescription = stringResource(R.string.drawer_gadgets),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 // Match the adjacent AI (Intelligence) atom button's height.
-                                modifier = Modifier.size(20.dp)
+                                modifier = Modifier.size(22.dp)
                             )
                         }
                         IntelligenceMenu(
@@ -331,6 +338,10 @@ fun RecipeFeedScreen(
                         debugPlantPlan = debugPlantPlan,
                         debugPlantReadOnlyPlan = debugPlantReadOnlyPlan,
                         debugCleanupPlan = debugCleanupPlan,
+                        candidateSource = candidateSource,
+                        zapCookingApi = zapCookingApi,
+                        signer = signer,
+                        onViewMembership = onViewMembership,
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(top = topInset),
@@ -708,6 +719,10 @@ private fun CookbookSection(
     debugPlantPlan: (() -> Unit)? = null,
     debugPlantReadOnlyPlan: (() -> Unit)? = null,
     debugCleanupPlan: (() -> Unit)? = null,
+    candidateSource: cooking.zap.app.repo.MealPlanCandidateSource? = null,
+    zapCookingApi: cooking.zap.app.api.ZapCookingApi? = null,
+    signer: cooking.zap.app.nostr.NostrSigner? = null,
+    onViewMembership: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val lists by viewModel.lists.collectAsState()
@@ -910,6 +925,11 @@ private fun CookbookSection(
                         onDebugLongPress = if (cooking.zap.app.BuildConfig.DEBUG) {
                             { showPlannerStopGate = true }
                         } else null,
+                        candidateSource = candidateSource,
+                        zapCookingApi = zapCookingApi,
+                        signer = signer,
+                        onViewMembership = onViewMembership,
+                        onOpenRecipe = onRecipeClick,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }

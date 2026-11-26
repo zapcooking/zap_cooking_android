@@ -124,7 +124,17 @@ class NwcRepository(private val context: Context, private val relayPool: RelayPo
             r.messages.collect { message ->
                 when (message) {
                     is RelayMessage.EventMsg -> {
-                        if (message.event.kind == 23195) {
+                        // NIP-47 responses are authored by the wallet service
+                        // keypair, and relays verify event signatures — so
+                        // pubkey equality is an authenticity check. Without
+                        // it, anyone on the relay could publish a kind-23195
+                        // referencing a pending request id; a forged event
+                        // that failed decrypt completed the request as
+                        // DECODE_FAILED and the liveness probe classified an
+                        // offline wallet as Alive.
+                        if (message.event.kind == 23195 &&
+                            message.event.pubkey == conn.walletServicePubkey.toHex()
+                        ) {
                             handleResponse(message.event)
                         }
                     }
@@ -213,11 +223,11 @@ class NwcRepository(private val context: Context, private val relayPool: RelayPo
 
     private fun handleResponse(event: cooking.zap.app.nostr.NostrEvent) {
         val conn = connection ?: return
+        // Match by "e" tag pointing to request event id
+        val requestId = event.tags.firstOrNull { it.size >= 2 && it[0] == "e" }?.get(1)
         try {
             val response = Nip47.parseResponse(conn, event)
             emitStatus("Response decrypted")
-            // Match by "e" tag pointing to request event id
-            val requestId = event.tags.firstOrNull { it.size >= 2 && it[0] == "e" }?.get(1)
             if (requestId != null) {
                 pendingRequests.remove(requestId)?.complete(response)
             } else {
@@ -226,6 +236,15 @@ class NwcRepository(private val context: Context, private val relayPool: RelayPo
         } catch (e: Exception) {
             emitStatus("Decrypt failed: ${e.message}")
             Log.e(TAG, "Failed to parse NWC response: ${e.message}")
+            // A response we couldn't decode still proves a live service
+            // answered — complete the pending request so its caller fails
+            // fast (and liveness classifies as Alive) instead of sitting
+            // out the full timeout in silence.
+            if (requestId != null) {
+                pendingRequests.remove(requestId)?.complete(
+                    Nip47.NwcResponse.Error(code = "DECODE_FAILED", message = e.message ?: "unreadable response")
+                )
+            }
         }
     }
 
@@ -282,7 +301,7 @@ class NwcRepository(private val context: Context, private val relayPool: RelayPo
         val response = deferred.await()
         return if (response is Nip47.NwcResponse.Error) {
             emitStatus("Wallet error: ${response.code}")
-            Result.failure(Exception("${response.code}: ${response.message}"))
+            Result.failure(NwcRpcError(response.code, response.message))
         } else {
             emitStatus("Success")
             Result.success(response)
@@ -297,6 +316,31 @@ class NwcRepository(private val context: Context, private val relayPool: RelayPo
             _balance.value = balance
             balance
         }
+    }
+
+    /**
+     * Round-trip a cheap NIP-47 `get_info` to check the wallet service is
+     * actually alive (zapcooking_ios#140 parity). [connect] only opens the
+     * relay subscription — a revoked or offline wallet still "connects",
+     * and every real RPC then sits out the full request timeout in silence.
+     * The probe carries its own few-second budget (outer timeout, so the
+     * relay-ready wait can't stretch it) and classifies the outcome.
+     */
+    suspend fun probeLiveness(timeoutMs: Long = 7_000L): NwcLiveness {
+        val failure = try {
+            withTimeout(timeoutMs) {
+                // timeoutMs = 0 → no inner timeout; the outer withTimeout is
+                // the single budget for ready-wait + request + response.
+                sendRequest(Nip47.NwcRequest.GetInfo, timeoutMs = 0).exceptionOrNull()
+            }
+        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+            return NwcLiveness.Unresponsive
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            e
+        }
+        return classifyNwcLiveness(failure)
     }
 
     /**

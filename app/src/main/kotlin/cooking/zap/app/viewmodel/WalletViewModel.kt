@@ -23,6 +23,7 @@ import cooking.zap.app.repo.EventRepository
 import cooking.zap.app.repo.KeyRepository
 import cooking.zap.app.repo.BalanceUnit
 import cooking.zap.app.repo.NofferClient
+import cooking.zap.app.repo.NwcLiveness
 import cooking.zap.app.repo.NwcRepository
 import cooking.zap.app.repo.SparkRepository
 import cooking.zap.app.repo.WalletMode
@@ -200,6 +201,21 @@ class WalletViewModel(
     private val _sendError = MutableStateFlow<String?>(null)
     val sendError: StateFlow<String?> = _sendError
 
+    /**
+     * Non-null when the configured NWC wallet failed a liveness probe — the
+     * string was revoked or the wallet went unresponsive (zapcooking_ios#140
+     * parity). The wallet screen surfaces it as a "Wallet not responding"
+     * alert (dismissing the alert does NOT clear this — only a passed
+     * re-probe does, so refreshState keeps probing cheaply instead of
+     * firing doomed balance RPCs).
+     */
+    private val _nwcConnectionProblem = MutableStateFlow<String?>(null)
+    val nwcConnectionProblem: StateFlow<String?> = _nwcConnectionProblem
+
+    fun clearNwcConnectionProblem() {
+        _nwcConnectionProblem.value = null
+    }
+
     // Receive flow
     private val _receiveAmount = MutableStateFlow("")
     val receiveAmount: StateFlow<String> = _receiveAmount
@@ -373,6 +389,15 @@ class WalletViewModel(
     private var connectJob: Job? = null
     private var statusCollectJob: Job? = null
     private var connectionMonitorJob: Job? = null
+
+    /** True while a liveness probe is in flight — refreshState must not fire a
+     *  full balance RPC into the same possibly-dead wallet concurrently. */
+    private val _nwcProbeInFlight = MutableStateFlow(false)
+
+    /** Handle to the running probe so a reconnect cancels it instead of
+     *  leaking it next to the new one (two probes + a stale monitor could
+     *  race each other's verdicts). */
+    private var livenessProbeJob: Job? = null
     private var syncPollJob: Job? = null
     private var searchRelayBackupJob: Job? = null
     private var relayBackupStatusJob: Job? = null
@@ -794,7 +819,48 @@ class WalletViewModel(
 
         startStatusCollection(nwcRepo)
         nwcRepo.connect()
-        startConnectionMonitor(nwcRepo)
+        // Prove the wallet actually answers before trusting the session:
+        // connect() only opens the relay subscription, so a revoked or
+        // offline wallet would otherwise "connect" and the first RPC would
+        // hang the full request timeout in silence. The URI stays saved in
+        // both failure cases (an offline wallet may come back); the doomed
+        // balance/monitor refreshes are skipped entirely. A previous probe
+        // or monitor from an earlier connect is cancelled first — a stale
+        // monitor can observe the new false→true relay transition and fire
+        // a balance fetch that races this probe's verdict.
+        livenessProbeJob?.cancel()
+        connectionMonitorJob?.cancel()
+        livenessProbeJob = viewModelScope.launch {
+            _nwcProbeInFlight.value = true
+            try {
+                val problem = nwcRepo.probeLiveness().let(::nwcLivenessProblem)
+                _nwcConnectionProblem.value = problem
+                if (problem == null) {
+                    startConnectionMonitor(nwcRepo)
+                } else {
+                    _statusLines.value = _statusLines.value + problem
+                    _walletState.value = WalletState.Error(problem)
+                }
+            } finally {
+                _nwcProbeInFlight.value = false
+            }
+        }
+    }
+
+    /**
+     * Translate a liveness verdict into user-facing copy, mirroring the iOS
+     * `nwcLivenessProblem` strings: refused and unresponsive get distinct
+     * wording so the user knows whether to mint a fresh connection string
+     * or just check whether their wallet app is open.
+     */
+    private fun nwcLivenessProblem(liveness: NwcLiveness): String? = when (liveness) {
+        NwcLiveness.Alive -> null
+        NwcLiveness.Refused ->
+            "Your wallet refused this connection — it may have been revoked. " +
+                "Reconnect with a fresh connection string from your wallet app."
+        NwcLiveness.Unresponsive ->
+            "Your wallet didn't respond within a few seconds. It may be offline, " +
+                "or the connection was revoked — check your wallet app and try again."
     }
 
     // --- Spark Connection ---
@@ -1054,7 +1120,22 @@ class WalletViewModel(
         }
 
         if (provider.isConnected.value) {
-            refreshBalance()
+            // A wallet that failed its liveness probe — or is being probed
+            // right now — would silently eat the full request timeout: skip
+            // the doomed refresh. A standing problem gets a CHEAP re-probe
+            // instead, so a wallet that recovered clears the flag and the
+            // balance follows; the probe in-flight flag covers the window
+            // before the first verdict lands.
+            val nwcProblemStanding = mode == WalletMode.NWC && _nwcConnectionProblem.value != null
+            when {
+                mode == WalletMode.NWC && _nwcProbeInFlight.value -> {}
+                nwcProblemStanding -> viewModelScope.launch {
+                    val problem = nwcRepo.probeLiveness().let(::nwcLivenessProblem)
+                    _nwcConnectionProblem.value = problem
+                    if (problem == null) refreshBalance()
+                }
+                else -> refreshBalance()
+            }
             if (mode == WalletMode.SPARK) fetchLightningAddress()
         } else if (_walletState.value is WalletState.Connected) {
             // Was previously connected — reconnect silently

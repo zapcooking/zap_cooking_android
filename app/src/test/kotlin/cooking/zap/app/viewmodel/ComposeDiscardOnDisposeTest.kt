@@ -15,13 +15,29 @@ class ComposeDiscardOnDisposeTest {
 
     @Test
     fun `emptied restored top-level draft discards`() {
-        // User cleared the text they could see; the editor was showing the cached draft.
+        // User cleared the text they could see; the editor was showing the restored draft.
         assertTrue(
             shouldDiscardOnDispose(
                 isTopLevel = true,
                 currentDraftId = "draft-abc",
-                cachedId = "draft-abc",
-                textIsBlank = true
+                restoredDraftId = "draft-abc",
+                textIsBlank = true,
+                mediaIsEmpty = true
+            )
+        )
+    }
+
+    @Test
+    fun `blank editor with attachments still up does not discard`() {
+        // Attachment slots are content too — emptying the prose but keeping the
+        // images leaves a live draft the auto-save path owns.
+        assertFalse(
+            shouldDiscardOnDispose(
+                isTopLevel = true,
+                currentDraftId = "draft-abc",
+                restoredDraftId = "draft-abc",
+                textIsBlank = true,
+                mediaIsEmpty = false
             )
         )
     }
@@ -34,8 +50,9 @@ class ComposeDiscardOnDisposeTest {
             shouldDiscardOnDispose(
                 isTopLevel = false,
                 currentDraftId = "draft-abc",
-                cachedId = "draft-abc",
-                textIsBlank = true
+                restoredDraftId = "draft-abc",
+                textIsBlank = true,
+                mediaIsEmpty = true
             )
         )
     }
@@ -48,34 +65,68 @@ class ComposeDiscardOnDisposeTest {
             shouldDiscardOnDispose(
                 isTopLevel = true,
                 currentDraftId = null,
-                cachedId = "draft-abc",
-                textIsBlank = true
+                restoredDraftId = "draft-abc",
+                textIsBlank = true,
+                mediaIsEmpty = true
             )
         )
     }
 
     @Test
-    fun `restored draft id not matching cache does not discard`() {
-        // The editor isn't showing the cached draft (ids diverged) — don't clear the cache.
+    fun `editor draft id not matching the restored one does not discard`() {
+        // The editor isn't showing the auto-restored draft (ids diverged) — leave it alone.
         assertFalse(
             shouldDiscardOnDispose(
                 isTopLevel = true,
                 currentDraftId = "draft-abc",
-                cachedId = "draft-XYZ",
-                textIsBlank = true
+                restoredDraftId = "draft-XYZ",
+                textIsBlank = true,
+                mediaIsEmpty = true
+            )
+        )
+    }
+
+    @Test
+    fun `emptied relay-restored draft discards even with an empty cache`() {
+        // Slow-path restore (draft fetched from relays, e.g. written on another device) never
+        // fills LastDraftCache. The old cache-id gate saw cachedId == null here and never
+        // discarded, so the emptied draft kept coming back. restoredDraftId is set by both paths.
+        assertTrue(
+            shouldDiscardOnDispose(
+                isTopLevel = true,
+                currentDraftId = "draft-from-relay",
+                restoredDraftId = "draft-from-relay",
+                textIsBlank = true,
+                mediaIsEmpty = true
+            )
+        )
+    }
+
+    @Test
+    fun `emptied draft opened from the drafts list does not discard`() {
+        // A deliberate pick from the Drafts list is never marked restored; emptying it and
+        // backing out leaves it in the list.
+        assertFalse(
+            shouldDiscardOnDispose(
+                isTopLevel = true,
+                currentDraftId = "draft-picked",
+                restoredDraftId = null,
+                textIsBlank = true,
+                mediaIsEmpty = true
             )
         )
     }
 
     @Test
     fun `non-blank text does not discard`() {
-        // The user still has content; the non-blank auto-save path owns this, not discard.
+        // The user still has content; the non-blank auto-save path owns that, not discard.
         assertFalse(
             shouldDiscardOnDispose(
                 isTopLevel = true,
                 currentDraftId = "draft-abc",
-                cachedId = "draft-abc",
-                textIsBlank = false
+                restoredDraftId = "draft-abc",
+                textIsBlank = false,
+                mediaIsEmpty = true
             )
         )
     }

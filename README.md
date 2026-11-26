@@ -114,6 +114,7 @@ A built-in non-custodial Lightning wallet powered by [Breez SDK (Spark)](https:/
 - **EncryptedSharedPreferences** (AES256-GCM) for private keys — `nsec` never touches plain SharedPreferences
 - **Biometric authentication** for key access
 - **NIP-19 bech32** — npub, nsec, note, nevent, nprofile encode/decode, with `nostr:` URI rendering in post content
+- **NIP-49 `ncryptsec`** — sign in with a password-encrypted key (typed, pasted, or scanned), and export your key encrypted with a password (scrypt + XChaCha20-Poly1305) to copy, show as a QR, or save to a file
 - **NIP-05 DNS verification** with result caching
 - **QR code display** for sharing keys and profiles
 
@@ -215,6 +216,7 @@ app/src/main/kotlin/cooking/zap/app/
 | [42](https://github.com/nostr-protocol/nips/blob/master/42.md) | Relay AUTH | ✅ |
 | [44](https://github.com/nostr-protocol/nips/blob/master/44.md) | Versioned encryption | ✅ |
 | [47](https://github.com/nostr-protocol/nips/blob/master/47.md) | Wallet Connect (NWC) | ✅ |
+| [49](https://github.com/nostr-protocol/nips/blob/master/49.md) | Private key encryption (`ncryptsec`) | ✅ |
 | [51](https://github.com/nostr-protocol/nips/blob/master/51.md) | Lists (mute, bookmark, pin, follow sets, relay sets) | ✅ |
 | [53](https://github.com/nostr-protocol/nips/blob/master/53.md) | Live activities | ✅ |
 | [55](https://github.com/nostr-protocol/nips/blob/master/55.md) | Android signer (Amber) | ❌ (removed) |
@@ -257,7 +259,7 @@ APK downloads are available on the [Releases](../../releases) page.
 
 - [Android Studio](https://developer.android.com/studio) Ladybug or later
 - JDK 17
-- Android SDK 35
+- Android SDK 36
 
 ### Build
 
@@ -341,7 +343,7 @@ Contributions are welcome. Zap Cooking is open source and community help makes i
 | QR Codes | ZXing |
 | Build | Gradle 8.x / AGP 8.x |
 | Min SDK | Android 8.0 (API 26) |
-| Target SDK | Android 15 (API 35) |
+| Target SDK | Android 16 (API 36) |
 
 ---
 

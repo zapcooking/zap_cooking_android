@@ -159,4 +159,62 @@ class Nip22Test {
         ))
         assertTrue(Nip22.eventRoot(e) is Nip22.EventRootRef.ById)
     }
+
+    // STRAY: kind-1 replies to comments
+
+    /** A kind-1 whose reply target resolves to a 1111 comment is a stray
+     *  main-feed note: thread and article-comment views hide it and it must
+     *  not bump the comment's reply count. Ports barrydeen/wisp#667. */
+    @Test fun strayKind1ReplyToCommentDetectedByCachedParent() {
+        val stray = NostrEvent(
+            id = "s1", pubkey = "pk", created_at = 0, kind = 1,
+            tags = listOf(listOf("e", "c1", "", "reply")), content = "", sig = ""
+        )
+        val kindOf = fun(id: String): Int? = when (id) {
+            "c1" -> Nip22.KIND_COMMENT
+            "root" -> 1
+            else -> null
+        }
+        assertTrue(Nip22.isStrayKind1OnComment(stray, kindOf))
+    }
+
+    /** The `k` tag decides without any parent cache — the replying client
+     *  named the kind it answered. */
+    @Test fun strayKind1DetectedByKTagWithoutParentCache() {
+        val stray = NostrEvent(
+            id = "s2", pubkey = "pk", created_at = 0, kind = 1,
+            tags = listOf(
+                listOf("e", "unknown-parent", "", "reply"),
+                listOf("k", "1111"),
+            ), content = "", sig = ""
+        )
+        assertTrue(Nip22.isStrayKind1OnComment(stray) { null })
+    }
+
+    /** Replies to notes, comments themselves, and unresolvable parents are
+     *  not strays — the default is to keep counting, never to drop. */
+    @Test fun normalRepliesAreNotStrays() {
+        val kindOf = fun(id: String): Int? = when (id) {
+            "c1" -> Nip22.KIND_COMMENT
+            "root" -> 1
+            else -> null
+        }
+        val replyToNote = NostrEvent(
+            id = "r1", pubkey = "pk", created_at = 0, kind = 1,
+            tags = listOf(listOf("e", "root", "", "reply")), content = "", sig = ""
+        )
+        assertFalse(Nip22.isStrayKind1OnComment(replyToNote, kindOf))
+
+        val commentReply = NostrEvent(
+            id = "r2", pubkey = "pk", created_at = 0, kind = Nip22.KIND_COMMENT,
+            tags = listOf(listOf("e", "c1", "", "pk")), content = "", sig = ""
+        )
+        assertFalse(Nip22.isStrayKind1OnComment(commentReply, kindOf))
+
+        val unknownParent = NostrEvent(
+            id = "r3", pubkey = "pk", created_at = 0, kind = 1,
+            tags = listOf(listOf("e", "missing", "", "reply")), content = "", sig = ""
+        )
+        assertFalse(Nip22.isStrayKind1OnComment(unknownParent, kindOf))
+    }
 }

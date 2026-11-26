@@ -61,6 +61,12 @@ class RelayListRepository(context: Context) {
 
     fun hasRelayList(pubkey: String): Boolean = cache.get(pubkey) != null
 
+    /** created_at of the kind 10002 the cached list came from, or null when none is cached. */
+    fun getUpdatedAt(pubkey: String): Long? = timestamps.get(pubkey)
+
+    /** created_at of the kind 10050 the cached DM relays came from, or null when none are cached. */
+    fun getDmUpdatedAt(pubkey: String): Long? = dmTimestamps.get(pubkey)
+
     fun updateDmRelaysFromEvent(event: NostrEvent) {
         if (event.kind != Nip51.KIND_DM_RELAYS) return
         val existing = dmTimestamps.get(event.pubkey)

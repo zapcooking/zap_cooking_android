@@ -31,8 +31,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Block
-import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Restore
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Refresh
@@ -140,6 +142,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharedFlow
 
 import kotlinx.serialization.json.put
+import cooking.zap.app.nostr.RecipeParser
 
 private sealed class ProfileZapStatus {
     object Idle : ProfileZapStatus()
@@ -203,6 +206,7 @@ fun UserProfileScreen(
     onOpenEmojiLibrary: (() -> Unit)? = null,
     onSearchAuthor: (() -> Unit)? = null,
     onPayInvoice: (suspend (String) -> Boolean)? = null,
+    onBroadcast: ((NostrEvent) -> Unit)? = null,
     onGroupRoom: ((String, String) -> Unit)? = null,
     onLiveStreamClick: ((String, String, String?) -> Unit)? = null,
     fetchGroupPreview: (suspend (String, String) -> cooking.zap.app.repo.GroupPreview?)? = null,
@@ -210,7 +214,7 @@ fun UserProfileScreen(
     onRemoveEmojiSet: ((String, String) -> Unit)? = null,
     isEmojiSetAdded: ((String, String) -> Boolean)? = null,
     onMuteUser: (() -> Unit)? = null,
-    onRestoreFollows: (() -> Unit)? = null,
+    onRestoreData: (() -> Unit)? = null,
     onRecipeClick: ((String, String) -> Unit)? = null
 ) {
     val resolvedEmojisState = rememberUpdatedState(resolvedEmojis)
@@ -218,6 +222,7 @@ fun UserProfileScreen(
     val invoiceNoteActions = remember(onPayInvoice, onGroupRoom, onLiveStreamClick, fetchGroupPreview, onAddEmojiSet, onOpenEmojiLibrary) {
         if (onPayInvoice != null || onGroupRoom != null || fetchGroupPreview != null || onAddEmojiSet != null || onLiveStreamClick != null || onOpenEmojiLibrary != null) {
             cooking.zap.app.ui.component.NoteActions(
+            onBroadcast = onBroadcast,
             onProfileClick = { pubkey -> onNavigateToProfile?.invoke(pubkey) },
             onPayInvoice = onPayInvoice,
             onGroupRoom = onGroupRoom,
@@ -462,11 +467,13 @@ fun UserProfileScreen(
     var blockedContentRevealed by remember { mutableStateOf(false) }
     var fullScreenMediaImageUrl by remember { mutableStateOf<String?>(null) }
     var fullScreenMediaVideoUrl by remember { mutableStateOf<String?>(null) }
+    var fullScreenMediaImageAlt by remember { mutableStateOf<String?>(null) }
 
     if (fullScreenMediaImageUrl != null) {
         FullScreenImageViewer(
             imageUrl = fullScreenMediaImageUrl!!,
-            onDismiss = { fullScreenMediaImageUrl = null }
+            onDismiss = { fullScreenMediaImageUrl = null },
+            alt = fullScreenMediaImageAlt
         )
     }
 
@@ -567,9 +574,9 @@ fun UserProfileScreen(
                     val imeta = parseImetaTags(event.tags)
                     parseContent(event.content, imetaMap = imeta).mapNotNull { segment ->
                         when (segment) {
-                            is ContentSegment.ImageSegment -> MediaItem(segment.meta.url, MediaType.IMAGE)
-                            is ContentSegment.VideoSegment -> MediaItem(segment.meta.url, MediaType.VIDEO)
-                            is ContentSegment.UnknownMediaSegment -> MediaItem(segment.meta.url, MediaType.IMAGE)
+                            is ContentSegment.ImageSegment -> MediaItem(segment.meta.url, MediaType.IMAGE, segment.meta.alt)
+                            is ContentSegment.VideoSegment -> MediaItem(segment.meta.url, MediaType.VIDEO, segment.meta.alt)
+                            is ContentSegment.UnknownMediaSegment -> MediaItem(segment.meta.url, MediaType.IMAGE, segment.meta.alt)
                             else -> null
                         }
                     }
@@ -708,7 +715,7 @@ fun UserProfileScreen(
                     isBlocked = isBlocked,
                     onMuteUser = onMuteUser,
                     onUnmuteUser = onUnblockUser,
-                    onRestoreFollows = if (isOwnProfile) onRestoreFollows else null,
+                    onRestoreData = if (isOwnProfile) onRestoreData else null,
                     sortContent = sortButtonContent
                 )
             }
@@ -1293,7 +1300,10 @@ fun UserProfileScreen(
                         items(items = mediaItems.chunked(3), key = { row -> row.first().url }) { row ->
                             MediaGridRow(
                                 items = row,
-                                onImageClick = { url -> fullScreenMediaImageUrl = url },
+                                onImageClick = { url ->
+                                    fullScreenMediaImageAlt = row.firstOrNull { it.url == url }?.alt
+                                    fullScreenMediaImageUrl = url
+                                },
                                 onVideoClick = { url -> fullScreenMediaVideoUrl = url }
                             )
                         }
@@ -1515,11 +1525,12 @@ private fun ProfileHeader(
     isBlocked: Boolean = false,
     onMuteUser: (() -> Unit)? = null,
     onUnmuteUser: (() -> Unit)? = null,
-    onRestoreFollows: (() -> Unit)? = null,
+    onRestoreData: (() -> Unit)? = null,
     sortContent: (@Composable RowScope.() -> Unit)? = null
 ) {
     var fullScreenImageUrl by remember { mutableStateOf<String?>(null) }
     val canSign = LocalCanSign.current
+    val restoreDescription = stringResource(R.string.cd_profile_restore)
 
     if (fullScreenImageUrl != null) {
         FullScreenImageViewer(
@@ -1781,20 +1792,6 @@ private fun ProfileHeader(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                if (onRestoreFollows != null) {
-                    Spacer(Modifier.width(4.dp))
-                    androidx.compose.material3.IconButton(
-                        onClick = onRestoreFollows,
-                        modifier = Modifier.size(20.dp)
-                    ) {
-                        Icon(
-                            Icons.Outlined.History,
-                            contentDescription = stringResource(R.string.drawer_restore_follows),
-                            modifier = Modifier.size(16.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
                 Spacer(Modifier.width(16.dp))
             }
             Text(
@@ -1808,6 +1805,33 @@ private fun ProfileHeader(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            // Own profile only: Data recovery with the follow list preselected.
+            // Outside the following-count guard, since an emptied follow list
+            // is exactly when it's needed.
+            if (onRestoreData != null) {
+                Spacer(Modifier.width(8.dp))
+                TextButton(
+                    onClick = onRestoreData,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    ),
+                    modifier = Modifier
+                        .height(32.dp)
+                        .semantics { contentDescription = restoreDescription }
+                ) {
+                    Icon(
+                        Icons.Outlined.Restore,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = stringResource(R.string.profile_restore),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
             if (sortContent != null) {
                 Spacer(Modifier.weight(1f))
                 sortContent()
@@ -2204,7 +2228,7 @@ private fun EmptyTabContent(message: String) {
 
 private enum class MediaType { IMAGE, VIDEO }
 
-private data class MediaItem(val url: String, val type: MediaType)
+private data class MediaItem(val url: String, val type: MediaType, val alt: String? = null)
 
 @Composable
 private fun MediaGridRow(
@@ -2232,7 +2256,7 @@ private fun MediaGridRow(
             ) {
                 AsyncImage(
                     model = item.url,
-                    contentDescription = null,
+                    contentDescription = item.alt,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize()
                 )
@@ -2343,7 +2367,13 @@ private fun ProfileArticleCard(
                         modifier = Modifier.padding(end = 8.dp)
                     ) {
                         Text(
-                            text = "ARTICLE",
+                            // Recipes are kind-30023 like any other long-form post, so the
+                            // badge has to come from the same content gate the recipe feeds
+                            // use — not from the kind alone.
+                            text = stringResource(
+                                if (RecipeParser.isRecipe(event)) R.string.badge_recipe
+                                else R.string.badge_article
+                            ),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onPrimaryContainer,
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)

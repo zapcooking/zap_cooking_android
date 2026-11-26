@@ -1,6 +1,7 @@
 package cooking.zap.app.ui.component
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -18,6 +19,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
@@ -39,6 +41,10 @@ import cooking.zap.app.nostr.RecipeParser
  * engagement-agnostic: [headerAuthorSlot] (byline row, between title and
  * summary) and [headerTrailingSlot] (e.g. a "Start cooking" button, after the
  * hashtags). Both default to empty — the import preview renders neither.
+ *
+ * [heroAlt] is the NIP-92 imeta alt text for the hero image, when the
+ * publisher described it — announced to screen readers and inspectable via
+ * the ALT badge.
  */
 @OptIn(ExperimentalLayoutApi::class)
 fun LazyListScope.recipeBody(
@@ -48,19 +54,30 @@ fun LazyListScope.recipeBody(
     onHashtagClick: ((String) -> Unit)? = null,
     headerAuthorSlot: @Composable ColumnScope.() -> Unit = {},
     headerTrailingSlot: @Composable ColumnScope.() -> Unit = {},
+    heroAlt: String? = null,
 ) {
     item(key = "header") {
         Column(Modifier.padding(horizontal = 16.dp)) {
             recipe.image?.let { image ->
-                AsyncImage(
-                    model = image,
-                    contentDescription = recipe.title,
-                    contentScale = ContentScale.FillWidth,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .padding(top = 8.dp),
-                )
+                Box {
+                    AsyncImage(
+                        model = image,
+                        contentDescription = heroAlt ?: recipe.title,
+                        contentScale = ContentScale.FillWidth,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .padding(top = 8.dp),
+                    )
+                    if (!heroAlt.isNullOrBlank()) {
+                        AltBadgeWithSheet(
+                            alt = heroAlt,
+                            modifier = Modifier
+                                .align(Alignment.BottomStart)
+                                .padding(8.dp)
+                        )
+                    }
+                }
                 Spacer(Modifier.height(16.dp))
             }
             Text(

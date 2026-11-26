@@ -1,7 +1,9 @@
 package cooking.zap.app.api
 
+import cooking.zap.app.mealplan.MealPlanGeneration
 import cooking.zap.app.nostr.Nip98
 import cooking.zap.app.nostr.Nip98HeaderCache
+import cooking.zap.app.nostr.NostrEvent
 import cooking.zap.app.nostr.NostrSigner
 import cooking.zap.app.nostr.SignerCancelledException
 import cooking.zap.app.nostr.SignerRejectedException
@@ -38,6 +40,14 @@ class ZapCookingApi(
     private val baseUrl: String = DEFAULT_BASE_URL,
     private val client: OkHttpClient = HttpClientFactory.getGeneralClient(),
     private val nip98Cache: Nip98HeaderCache = Nip98HeaderCache(),
+    /** Unix seconds. Injected so the schedule lead-time check is testable. */
+    private val nowSeconds: () -> Long = { System.currentTimeMillis() / 1000 },
+    /**
+     * Schnorr check for an event a signer handed back. Injected because the
+     * hermetic JVM suite has no native secp256k1; production always uses
+     * [NostrEvent.verifySignature].
+     */
+    private val verifyEventSignature: (NostrEvent) -> Boolean = { it.verifySignature() },
 ) {
     private val json = Json { ignoreUnknownKeys = true }
     private val jsonMediaType = "application/json".toMediaType()
@@ -155,9 +165,11 @@ class ZapCookingApi(
     }
 
     /**
-     * Unauthenticated JSON POST on `Dispatchers.IO`. The Phase 2 AI endpoints
-     * gate on a client-supplied `pubkey` in the body (not NIP-98 — see build
-     * doc §Phase 2), so they use this rather than [authedPost]. Non-2xx throws
+     * Unauthenticated JSON POST on `Dispatchers.IO`, for endpoints that take
+     * no identity at all (today: `/api/extract-recipe/public`). Any
+     * member-gated endpoint belongs on [authedPost]/[authedRaw] — do not add
+     * a pubkey-in-body caller here without re-verifying the live server
+     * contract (see [computeNourish] for the one remaining case). Non-2xx throws
      * [ZapCookingApiException] carrying the HTTP code + body, so callers can
      * distinguish 400 (bad URL) / 429 (rate-limited) / 403 (membership).
      */
@@ -269,7 +281,12 @@ class ZapCookingApi(
 
     /**
      * `POST /api/nourish` — member-gated compute (concern 2.4b). pubkey-in-body
-     * (not NIP-98, same as the other AI endpoints). The response carries the
+     * — the server's `requireMembership(body.pubkey)` still trusts the body and
+     * ignores any `Authorization` header (verified against frontend `main` and
+     * production on 2026-09-01). This is now the LAST AI endpoint on that
+     * shape: `/api/zappy`, `/api/zappy/scan` and `/api/extract-recipe` all
+     * moved to NIP-98. When `/api/nourish` follows, swap this to [authedRaw]
+     * exactly as [sendCheffy] did (issue #247). The response carries the
      * score directly, so we parse it here (no pantry re-read); the server also
      * publishes to pantry for future viewers. Uses the long-timeout compute
      * client — LLM scoring + the awaited pantry publish routinely exceed 15s.
@@ -309,46 +326,45 @@ class ZapCookingApi(
     /**
      * `POST /api/zappy` — Cheffy, the member-gated kitchen-companion chat
      * (concern 2.3; endpoint stays `/zappy` for back-compat, the feature is
-     * "Cheffy"). pubkey-in-body (not NIP-98, same as the other AI endpoints).
+     * "Cheffy"). **NIP-98 with body-hash binding** — the server has required
+     * it since frontend commit 04cf67cd (2026-08-17): identity comes from the
+     * verified `Authorization` header and a body `pubkey` is ignored, so
+     * [CheffyRequest] carries none. Goes through [authedRaw] (header cache +
+     * one silent re-sign-and-retry on a 401). The body is serialized exactly
+     * once: that String is what we sign and what we send — re-serializing
+     * between the two would 401 on the payload hash.
+     *
      * **Stateless full-history**: the client passes the live thread
      * ([CheffyRequest.messages]) every request — the server keeps no session.
      * Whole-response (no streaming), so it uses the long-timeout compute client
-     * — `gpt-4.1-mini` replies routinely exceed the general 15s read timeout.
-     * 403 → [CheffyResult.MembersOnly], mirroring [computeNourish].
+     * — replies routinely exceed the general 15s read timeout.
+     *
+     * Status mapping lives in [mapCheffyResponse] (403 →
+     * [CheffyResult.MembersOnly]). A declined/cancelled signer
+     * ([SignerRejectedException] / [SignerCancelledException]) becomes a
+     * [CheffyResult.Error] with signer copy, not a "network error".
      */
-    suspend fun sendCheffy(request: CheffyRequest): CheffyResult =
-        withContext(Dispatchers.IO) {
-            try {
-                val bodyString = json.encodeToString(CheffyRequest.serializer(), request)
-                val httpRequest = Request.Builder()
-                    .url("$baseUrl/api/zappy")
-                    .post(bodyString.toRequestBody(jsonMediaType))
-                    .build()
-                HttpClientFactory.getComputeClient().newCall(httpRequest).execute().use { resp ->
-                    val body = resp.body?.string().orEmpty()
-                    if (resp.code == 403) return@withContext CheffyResult.MembersOnly
-                    // The server reports failures as { ok:false, error } even on
-                    // a 200, so parse the body rather than trusting the status.
-                    val obj = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull()
-                        ?: return@withContext CheffyResult.Error(parseError(body) ?: "Cheffy could not respond.")
-                    val ok = obj["ok"]?.let { it.toString() == "true" } == true
-                    if (!resp.isSuccessful || !ok) {
-                        val msg = obj["error"]?.let { runCatching { it.jsonPrimitive.content }.getOrNull() }
-                            ?: parseError(body)
-                        return@withContext CheffyResult.Error(msg ?: "Cheffy could not respond.")
-                    }
-                    val output = obj["output"]?.let { runCatching { it.jsonPrimitive.content }.getOrNull() }?.trim()
-                    if (output.isNullOrEmpty()) {
-                        return@withContext CheffyResult.Error("Cheffy went quiet. Please try again.")
-                    }
-                    CheffyResult.Reply(output)
-                }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                CheffyResult.Error("Network error — please try again.")
-            }
+    suspend fun sendCheffy(request: CheffyRequest, signer: NostrSigner): CheffyResult {
+        val bodyString = json.encodeToString(CheffyRequest.serializer(), request)
+        return try {
+            val resp = authedRaw(
+                method = "POST",
+                url = "$baseUrl/api/zappy",
+                bodyString = bodyString,
+                signer = signer,
+                httpClient = HttpClientFactory.getComputeClient(),
+            )
+            mapCheffyResponse(resp.code, resp.body)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: SignerRejectedException) {
+            CheffyResult.Error(CHEFFY_SIGN_FAILED_MESSAGE)
+        } catch (e: SignerCancelledException) {
+            CheffyResult.Error(CHEFFY_SIGN_FAILED_MESSAGE)
+        } catch (e: Exception) {
+            CheffyResult.Error("Network error — please try again.")
         }
+    }
 
     // --- Cheffy Note Review (CHEFFY_NOTE_REVIEW_PLAN.md, Phase 1) ---
 
@@ -465,6 +481,114 @@ class ZapCookingApi(
         CreditStatusResult.Error(NETWORK_ERROR_MESSAGE)
     }
 
+    /**
+     * `POST /api/zappy/meal-plan` — Cheffy fills a weekly planner from
+     * client-supplied candidate recipes. NIP-98 with body-hash binding
+     * (the body is unique per call, so [nip98Cache] never hits — every
+     * request is a real signer round trip). Long-timeout compute client:
+     * the model call plus a json_schema→json_object retry routinely
+     * exceeds the general 15s read timeout.
+     *
+     * [onAuthHeaderReady] fires after the Authorization header is in
+     * hand and before the HTTP call is issued — Phase 5's seam between
+     * "waiting on your signer" and "Cheffy is working". Default null;
+     * this PR adds no UI.
+     *
+     * The body is serialized exactly once: that String is what we sign
+     * and what we send. Re-serializing between those two would 401.
+     */
+    suspend fun requestMealPlan(
+        request: MealPlanGeneration.MealPlanGenerationRequest,
+        signer: NostrSigner,
+        onAuthHeaderReady: (() -> Unit)? = null,
+    ): MealPlanResult {
+        val count = request.candidates.size
+        if (count == 0) {
+            return MealPlanResult.InvalidRequest(
+                MealPlanGeneration.GenerationValidationError.NO_CANDIDATES.id,
+                "No recipes were available to plan with.",
+            )
+        }
+        if (count > MealPlanGeneration.MAX_CANDIDATES) {
+            return MealPlanResult.InvalidRequest(
+                MealPlanGeneration.GenerationValidationError.TOO_MANY_CANDIDATES.id,
+                "Too many candidate recipes (max ${MealPlanGeneration.MAX_CANDIDATES}).",
+            )
+        }
+        val bodyString = encodeMealPlanBody(request)
+        return try {
+            val resp = authedRaw(
+                method = "POST",
+                url = "$baseUrl/api/zappy/meal-plan",
+                bodyString = bodyString,
+                signer = signer,
+                httpClient = HttpClientFactory.getComputeClient(),
+                onAuthHeaderReady = onAuthHeaderReady,
+            )
+            when (val mapped = mapMealPlanResponse(resp.code, resp.body)) {
+                is MealPlanResult.Ok -> when (
+                    val validated = MealPlanGeneration.validateGeneratedPlan(
+                        MealPlanGeneration.GeneratedMealPlan(mapped.meals),
+                        request,
+                    )
+                ) {
+                    is MealPlanGeneration.ValidationResult.Ok ->
+                        MealPlanResult.Ok(validated.plan.meals)
+                    is MealPlanGeneration.ValidationResult.Err ->
+                        MealPlanResult.Rejected(validated.error.id, validated.message)
+                }
+                else -> mapped
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: SignerRejectedException) {
+            MealPlanResult.SignFailed
+        } catch (e: SignerCancelledException) {
+            MealPlanResult.SignFailed
+        } catch (e: Exception) {
+            MealPlanResult.Failed(NETWORK_ERROR_MESSAGE)
+        }
+    }
+
+    /**
+     * `POST /api/zappy/ask-photo` with `purpose: "alt"` — Cook+ image
+     * description generation for the composer's alt editor (alt-text
+     * handoff §4). Long-timeout compute client: vision description has the
+     * same latency profile as note review.
+     *
+     * [imageBase64] is the image **without** a `data:` prefix. Membership
+     * is enforced server-side and fails closed: a 403 `NOT_MEMBER` maps to
+     * [AltTextResult.NotMember] for the editor to render as an upsell.
+     * Rate budget is shared with note review (8/hour, 30/day per pubkey).
+     */
+    suspend fun requestAltText(
+        imageBase64: String,
+        signer: NostrSigner,
+    ): AltTextResult {
+        val bodyString = json.encodeToString(
+            AltTextRequest.serializer(),
+            AltTextRequest(image = imageBase64, purpose = "alt"),
+        )
+        return try {
+            val resp = authedRaw(
+                method = "POST",
+                url = "$baseUrl/api/zappy/ask-photo",
+                bodyString = bodyString,
+                signer = signer,
+                httpClient = HttpClientFactory.getComputeClient(),
+            )
+            mapAltTextResponse(resp.code, resp.body)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: SignerRejectedException) {
+            AltTextResult.SignFailed
+        } catch (e: SignerCancelledException) {
+            AltTextResult.SignFailed
+        } catch (e: Exception) {
+            AltTextResult.Error(NETWORK_ERROR_MESSAGE)
+        }
+    }
+
     /** Raw status + body of an HTTP response, for callers that map codes themselves. */
     private data class RawResponse(val code: Int, val body: String)
 
@@ -474,6 +598,10 @@ class ZapCookingApi(
      * silently re-signed once, and retried once (Phase 0 decision 1). A
      * null [bodyString] sends a GET; non-null sends a POST whose exact
      * bytes are hash-bound into the header.
+     *
+     * [onAuthHeaderReady] is invoked once, after the header is obtained
+     * and before the HTTP call is issued. Existing callers pass nothing
+     * (default null) and are unchanged.
      */
     private suspend fun authedRaw(
         method: String,
@@ -481,7 +609,9 @@ class ZapCookingApi(
         bodyString: String?,
         signer: NostrSigner,
         httpClient: OkHttpClient,
+        onAuthHeaderReady: (() -> Unit)? = null,
     ): RawResponse = withContext(Dispatchers.IO) {
+        var headerReadyNotified = false
         nip98Cache.withAuthHeader(
             signer = signer,
             method = method,
@@ -489,6 +619,10 @@ class ZapCookingApi(
             bodyString = bodyString,
             isUnauthorized = { it.code == 401 },
         ) { authHeader ->
+            if (!headerReadyNotified) {
+                headerReadyNotified = true
+                onAuthHeaderReady?.invoke()
+            }
             val builder = Request.Builder().url(url).header("Authorization", authHeader)
             if (bodyString != null) {
                 builder.post(bodyString.toRequestBody(jsonMediaType))
@@ -498,6 +632,188 @@ class ZapCookingApi(
             httpClient.newCall(builder.build()).execute().use { resp ->
                 RawResponse(resp.code, resp.body?.string().orEmpty())
             }
+        }
+    }
+
+    // --- Scheduled posts (contract: docs/schedule-contract.md in zapcooking/frontend) ---
+
+    /**
+     * Sign an event that will publish at [publishAt] (unix seconds):
+     * `created_at` is that time, signed once. The result is checked before
+     * it is returned — id, pubkey, kind, content, tags and `created_at`
+     * must be exactly what was asked for and the signature must verify. A
+     * signer that re-dates or alters what it signs (an external signer may
+     * return a whole event of its own) comes back as
+     * [ScheduleFailure.SignerChangedEvent] and is never sent.
+     *
+     * The lead-time check runs here, at the point of signing: 3 minutes or
+     * less away, or 90 days or more, is [ScheduleFailure.BadPublishTime]
+     * with no signer prompt.
+     *
+     * Never mine proof-of-work on an event headed here, and sign once: a
+     * retry of [scheduleEvent] reuses this exact event.
+     */
+    suspend fun signForSchedule(
+        signer: NostrSigner?,
+        kind: Int,
+        content: String,
+        tags: List<List<String>>,
+        publishAt: Long,
+    ): ScheduleSignResult {
+        if (signer == null) return ScheduleSignResult.Failed(ScheduleFailure.SignedOut)
+        val now = nowSeconds()
+        if (publishAt <= now + ScheduleWire.MIN_LEAD_SECONDS || publishAt >= now + ScheduleWire.MAX_LEAD_SECONDS) {
+            return ScheduleSignResult.Failed(ScheduleFailure.BadPublishTime)
+        }
+        val expected = NostrEvent.createUnsigned(signer.pubkeyHex, kind, content, tags, createdAt = publishAt)
+        val signed = try {
+            signer.signEvent(kind = kind, content = content, tags = tags, createdAt = publishAt)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            return ScheduleSignResult.Failed(ScheduleFailure.SignFailed)
+        }
+        val unchanged = signed.id == expected.id &&
+            signed.pubkey == expected.pubkey &&
+            signed.created_at == publishAt &&
+            signed.kind == kind &&
+            signed.content == content &&
+            signed.tags == tags
+        if (!unchanged || !verifyEventSignature(signed)) {
+            return ScheduleSignResult.Failed(ScheduleFailure.SignerChangedEvent)
+        }
+        return ScheduleSignResult.Signed(signed)
+    }
+
+    /**
+     * `POST /api/schedule` — schedule a signed event from [signForSchedule]
+     * to the public relays (`relay_mode: "all"`). [relays] is the author's
+     * own write relays, already filtered and capped by the caller; the
+     * field is omitted when empty.
+     *
+     * Safe to call again with the SAME event after [ScheduleFailure.Network]
+     * or [ScheduleFailure.Internal]: a 409 `already_scheduled` whose row is
+     * pending, publishing or sent comes back as success. If the server
+     * refuses the relay list (`bad_relays`), the request is sent once more
+     * without it so the post still reaches the scheduler's fixed relays.
+     */
+    suspend fun scheduleEvent(
+        signer: NostrSigner?,
+        event: NostrEvent,
+        relays: List<String> = emptyList(),
+    ): ScheduleEventResult {
+        if (signer == null) return ScheduleEventResult.Failed(ScheduleFailure.SignedOut)
+        // The auth header's key is the caller's identity; an account switch
+        // between signing and sending would be refused by the server anyway.
+        if (event.pubkey != signer.pubkeyHex) return ScheduleEventResult.Failed(ScheduleFailure.PubkeyMismatch)
+
+        val url = "$baseUrl/api/schedule"
+        var sentRelays = relays
+        var sent = scheduleSend(signer, "POST", url, ScheduleWire.buildScheduleBody(event, sentRelays))
+        if (sent is ScheduleSent.Response && sentRelays.isNotEmpty() &&
+            ScheduleWire.errorCode(sent.data) == "bad_relays"
+        ) {
+            sentRelays = emptyList()
+            sent = scheduleSend(signer, "POST", url, ScheduleWire.buildScheduleBody(event, sentRelays))
+        }
+        return when (sent) {
+            is ScheduleSent.Failure -> ScheduleEventResult.Failed(sent.failure)
+            is ScheduleSent.Response -> ScheduleWire.mapScheduleResponse(sent.code, sent.data, event, sentRelays)
+        }
+    }
+
+    /**
+     * `GET /api/schedule[?status=…]` — the account's scheduled events,
+     * newest publish time first (the server's order), at most 100. Rows
+     * this client cannot read are skipped rather than failing the list.
+     */
+    suspend fun listScheduled(
+        signer: NostrSigner?,
+        status: ScheduleStatus? = null,
+    ): ScheduleListResult {
+        if (signer == null) return ScheduleListResult.Failed(ScheduleFailure.SignedOut)
+        val url = baseUrl.toHttpUrl().newBuilder()
+            .addPathSegments("api/schedule")
+            .apply { if (status != null) addQueryParameter("status", status.wire) }
+            .build()
+        return when (val sent = scheduleSend(signer, "GET", url.toString(), bodyString = null)) {
+            is ScheduleSent.Failure -> ScheduleListResult.Failed(sent.failure)
+            is ScheduleSent.Response -> ScheduleWire.mapListResponse(sent.code, sent.data)
+        }
+    }
+
+    /**
+     * `DELETE /api/schedule/{id}` — cancel a pending scheduled event. A row
+     * that was already cancelled counts as done;
+     * [ScheduleFailure.NotCancellable] carries what happened instead
+     * (publishing / sent / failed).
+     */
+    suspend fun cancelScheduled(signer: NostrSigner?, id: String): ScheduleCancelResult {
+        if (signer == null) return ScheduleCancelResult.Failed(ScheduleFailure.SignedOut)
+        // The id becomes a path segment; anything but an event id is not a row.
+        if (!ScheduleWire.isEventId(id)) return ScheduleCancelResult.Failed(ScheduleFailure.NotFound)
+        return when (val sent = scheduleSend(signer, "DELETE", "$baseUrl/api/schedule/$id", bodyString = null)) {
+            is ScheduleSent.Failure -> ScheduleCancelResult.Failed(sent.failure)
+            is ScheduleSent.Response -> ScheduleWire.mapCancelResponse(sent.code, sent.data, id)
+        }
+    }
+
+    private sealed interface ScheduleSent {
+        data class Response(val code: Int, val data: kotlinx.serialization.json.JsonObject) : ScheduleSent
+        data class Failure(val failure: ScheduleFailure) : ScheduleSent
+    }
+
+    /**
+     * One authenticated schedule request. Deliberately NOT routed through
+     * [nip98Cache]: the schedule contract requires a freshly signed header
+     * for every request, never a reused one. On 401 the request is sent
+     * exactly once more with a newly signed header (the usual cause is a
+     * header that aged past the verifier's 60 s behind a signer prompt).
+     *
+     * [url] may carry a query string; the signed `u` tag never does
+     * ([Nip98.normalizeUrl]). A non-null [bodyString] is hashed into the
+     * `payload` tag and sent byte for byte; GET and DELETE carry neither.
+     */
+    private suspend fun scheduleSend(
+        signer: NostrSigner,
+        method: String,
+        url: String,
+        bodyString: String?,
+    ): ScheduleSent = withContext(Dispatchers.IO) {
+        val first = scheduleSendOnce(signer, method, url, bodyString)
+        if (first is ScheduleSent.Response && first.code == 401) {
+            scheduleSendOnce(signer, method, url, bodyString)
+        } else {
+            first
+        }
+    }
+
+    /** Sign a fresh header and issue the request once. Call only from `Dispatchers.IO`. */
+    private suspend fun scheduleSendOnce(
+        signer: NostrSigner,
+        method: String,
+        url: String,
+        bodyString: String?,
+    ): ScheduleSent {
+        val authHeader = try {
+            Nip98.authHeader(signer, method = method, url = url, bodyString = bodyString)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            return ScheduleSent.Failure(ScheduleFailure.SignFailed)
+        }
+        val builder = Request.Builder().url(url).header("Authorization", authHeader)
+        when (method) {
+            "POST" -> builder.post(requireNotNull(bodyString).toRequestBody(jsonMediaType))
+            "DELETE" -> builder.delete()
+            else -> builder.get()
+        }
+        return try {
+            client.newCall(builder.build()).execute().use { resp ->
+                ScheduleSent.Response(resp.code, ScheduleWire.parseObject(resp.body?.string().orEmpty()))
+            }
+        } catch (_: java.io.IOException) {
+            ScheduleSent.Failure(ScheduleFailure.Network)
         }
     }
 
@@ -526,6 +842,20 @@ class ZapCookingApi(
         private const val NETWORK_ERROR_MESSAGE =
             "Network error — check your connection and try again."
 
+        private const val MEAL_PLAN_UNPARSEABLE_MESSAGE =
+            "Cheffy could not finish that plan. Please try again."
+
+        private const val MEAL_PLAN_NOT_MEMBER_FALLBACK =
+            "Cheffy is available to Cook+ members."
+
+        /** Signer declined or cancelled the NIP-98 approval (Amber). */
+        internal const val CHEFFY_SIGN_FAILED_MESSAGE =
+            "Cheffy needs your signer's approval to cook. Try again and approve the request."
+
+        /** Server rejected the NIP-98 header even after the one silent re-sign. */
+        internal const val CHEFFY_AUTH_REJECTED_MESSAGE =
+            "Cheffy couldn't verify your key. Check your device clock and try again."
+
         /** Companion-scope decoder for the pure response-mapping helpers below. */
         private val lenientJson = Json { ignoreUnknownKeys = true }
 
@@ -535,6 +865,29 @@ class ZapCookingApi(
             } catch (_: Exception) {
                 null
             }
+
+        /**
+         * Map a `/api/zappy` response onto [CheffyResult]. Pure — unit-tested
+         * against the server's real shapes. 403 → [CheffyResult.MembersOnly]
+         * (the membership gate); 401 → a header rejected even after
+         * [authedRaw]'s re-sign, surfaced with signer copy. The server
+         * reports failures as `{ ok:false, error }` even on a 200, so the body
+         * is parsed rather than trusting the status alone.
+         */
+        internal fun mapCheffyResponse(code: Int, body: String): CheffyResult {
+            if (code == 403) return CheffyResult.MembersOnly
+            if (code == 401) return CheffyResult.Error(CHEFFY_AUTH_REJECTED_MESSAGE)
+            val obj = runCatching { lenientJson.parseToJsonElement(body).jsonObject }.getOrNull()
+                ?: return CheffyResult.Error("Cheffy could not respond.")
+            val ok = obj["ok"]?.let { runCatching { it.jsonPrimitive.content }.getOrNull() } == "true"
+            if (code !in 200..299 || !ok) {
+                val msg = obj["error"]?.let { runCatching { it.jsonPrimitive.content }.getOrNull() }
+                return CheffyResult.Error(msg ?: "Cheffy could not respond.")
+            }
+            val output = obj["output"]?.let { runCatching { it.jsonPrimitive.content }.getOrNull() }?.trim()
+            if (output.isNullOrEmpty()) return CheffyResult.Error("Cheffy went quiet. Please try again.")
+            return CheffyResult.Reply(output)
+        }
 
         /**
          * Map a note-review response onto [NoteReviewResult]. Pure —
@@ -567,6 +920,81 @@ class ZapCookingApi(
                     422 -> NoteReviewResult.DeadEnd
                     else -> NoteReviewResult.Error(
                         resp?.error ?: "Cheffy could not finish that one (HTTP $code)."
+                    )
+                }
+            }
+        }
+
+        /**
+         * Map a meal-plan response onto [MealPlanResult]. Pure.
+         *
+         * The body's typed `code` is read first; HTTP status is the
+         * fallback for bodies that fail to parse. `no-candidates` is the
+         * one code that picks its bucket regardless of status — 400 and
+         * 422 otherwise share [MealPlanGeneration.GenerationValidationError]
+         * and must be split by status. Server `error` strings pass
+         * through as user-facing copy. There is no membership-unavailable
+         * mapping: this endpoint fails open on a membership-service outage.
+         */
+        internal fun mapMealPlanResponse(code: Int, body: String): MealPlanResult {
+            val resp = decodeOrNull(MealPlanApiResponse.serializer(), body)
+            if (code in 200..299 && resp != null && resp.ok) {
+                val meals = resp.plan?.meals
+                if (meals != null) {
+                    return MealPlanResult.Ok(meals.map { it.toGeneratedMeal() })
+                }
+                return MealPlanResult.Failed(resp.error ?: MEAL_PLAN_UNPARSEABLE_MESSAGE)
+            }
+            if (resp?.code == "no-candidates") {
+                return MealPlanResult.NoCandidates(
+                    resp.error ?: "No recipes were available to plan with.",
+                )
+            }
+            val error = resp?.error
+            return when (code) {
+                401 -> MealPlanResult.SignInRequired
+                403 -> MealPlanResult.MembersOnly(error ?: MEAL_PLAN_NOT_MEMBER_FALLBACK)
+                429 -> MealPlanResult.RateLimited(resp?.retryAfter)
+                400 -> MealPlanResult.InvalidRequest(
+                    resp?.code.orEmpty(),
+                    error ?: MEAL_PLAN_UNPARSEABLE_MESSAGE,
+                )
+                422 -> MealPlanResult.Rejected(
+                    resp?.code.orEmpty(),
+                    error ?: MEAL_PLAN_UNPARSEABLE_MESSAGE,
+                )
+                else -> MealPlanResult.Failed(error ?: MEAL_PLAN_UNPARSEABLE_MESSAGE)
+            }
+        }
+
+        /**
+         * Map an ask-photo (`purpose: "alt"`) response onto [AltTextResult].
+         * Pure — unit-tested against the server's real shapes, same contract
+         * as [mapNoteReviewResponse]: typed `code` wins over HTTP status.
+         * The generated description is a draft — callers must put it in an
+         * editable field, never publish it sight-unseen.
+         */
+        internal fun mapAltTextResponse(code: Int, body: String): AltTextResult {
+            val resp = decodeOrNull(AltTextResponse.serializer(), body)
+            if (code in 200..299 && resp != null && resp.ok) {
+                val output = resp.output?.trim()
+                if (!output.isNullOrEmpty()) {
+                    return AltTextResult.Success(output)
+                }
+                return AltTextResult.Error("Cheffy went quiet for a second. Please try again.")
+            }
+            return when (resp?.code) {
+                "NOT_MEMBER" -> AltTextResult.NotMember
+                "MEMBERSHIP_UNAVAILABLE" -> AltTextResult.MembershipUnavailable
+                "RATE_LIMITED" -> AltTextResult.RateLimited(resp?.retryAfter)
+                "IMAGE_UNREADABLE" -> AltTextResult.ImageUnreadable
+                else -> when (code) {
+                    403 -> AltTextResult.NotMember
+                    503 -> AltTextResult.MembershipUnavailable
+                    429 -> AltTextResult.RateLimited(resp?.retryAfter)
+                    422 -> AltTextResult.ImageUnreadable
+                    else -> AltTextResult.Error(
+                        resp?.error ?: "Cheffy could not describe that one (HTTP $code)."
                     )
                 }
             }
@@ -723,8 +1151,10 @@ enum class CheffyMode(val wire: String) { CHAT("chat"), HUNGRY("hungry") }
 data class CheffyMessage(val role: String, val content: String)
 
 /**
- * `POST /api/zappy` request (concern 2.3). [pubkey] is the signed-in user's
- * (membership gate). [messages] is the live thread (stateless — re-sent every
+ * `POST /api/zappy` request (concern 2.3). Identity is NOT in the body: the
+ * membership gate reads the signing pubkey from the NIP-98 `Authorization`
+ * header ([ZapCookingApi.sendCheffy]), and the server ignores a body
+ * `pubkey`. [messages] is the live thread (stateless — re-sent every
  * request; server keeps no session). For [CheffyMode.HUNGRY] the server
  * supplies its own prompt, so [prompt] is empty.
  */
@@ -732,15 +1162,15 @@ data class CheffyMessage(val role: String, val content: String)
 data class CheffyRequest(
     val prompt: String,
     val mode: String,
-    val pubkey: String,
     val messages: List<CheffyMessage>,
 )
 
 /** Outcome of [ZapCookingApi.sendCheffy]. Mirrors [NourishComputeResult]. */
 sealed interface CheffyResult {
     data class Reply(val output: String) : CheffyResult
-    /** 403 — the account isn't an active member. */
+    /** 403 — the NIP-98-verified account isn't an active member. */
     object MembersOnly : CheffyResult
+    /** Anything else, including a declined signer and a rejected header (401). */
     data class Error(val message: String) : CheffyResult
 }
 
@@ -927,6 +1357,32 @@ sealed interface CreditInvoiceResult {
 enum class CreditStatus { PAID, PENDING, EXPIRED }
 
 /**
+ * Outcome of [ZapCookingApi.requestAltText] (ask-photo, `purpose: "alt"`).
+ * The success text is a DRAFT for the editor's editable field — never
+ * auto-published sight-unseen (alt-text handoff §4).
+ */
+sealed interface AltTextResult {
+    data class Success(val description: String) : AltTextResult
+
+    /** 403 `NOT_MEMBER` — the editor renders the Cook+ upsell. */
+    data object NotMember : AltTextResult
+
+    /** 503 `MEMBERSHIP_UNAVAILABLE` — retryable outage, never an upsell. */
+    data object MembershipUnavailable : AltTextResult
+
+    /** 429 — per-pubkey budget shared with note review (8/hour, 30/day). */
+    data class RateLimited(val retryAfterSeconds: Int? = null) : AltTextResult
+
+    /** 422 `IMAGE_UNREADABLE` — no message by design; UI shows a local line. */
+    data object ImageUnreadable : AltTextResult
+
+    /** The signer declined/cancelled — a user choice, not an error. */
+    data object SignFailed : AltTextResult
+
+    data class Error(val message: String) : AltTextResult
+}
+
+/**
  * Outcome of [ZapCookingApi.checkCreditStatus]. Callers must treat
  * [SignFailed]/[Error] as "check failed → keep the invoice" (invariant 6),
  * never as expired.
@@ -957,6 +1413,23 @@ private data class NoteReviewResponse(
     val ok: Boolean = false,
     val output: String? = null,
     val creditsRemaining: Int? = null,
+    val error: String? = null,
+    val code: String? = null,
+    val retryAfter: Int? = null,
+)
+
+/** `{ image, purpose }` — purpose "alt" selects the neutral describer. */
+@Serializable
+private data class AltTextRequest(
+    val image: String,
+    val purpose: String,
+)
+
+/** `{ ok, output?, error?, code?, retryAfter? }` — lenient. */
+@Serializable
+private data class AltTextResponse(
+    val ok: Boolean = false,
+    val output: String? = null,
     val error: String? = null,
     val code: String? = null,
     val retryAfter: Int? = null,

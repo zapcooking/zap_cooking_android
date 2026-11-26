@@ -75,14 +75,14 @@ android {
     val debugApplicationIdSuffix = rootProject.extra["debugApplicationIdSuffix"] as String
 
     namespace = "cooking.zap.app"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = baseApplicationId
         minSdk = 26
-        targetSdk = 35
-        versionCode = 90
-        versionName = "1.3.6"
+        targetSdk = 36
+        versionCode = 96
+        versionName = "1.7.0"
         resValue("string", "app_name", "Zap Cooking")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -91,10 +91,14 @@ android {
         }
 
         val breezApiKey = localProps.getProperty("breez.api.key", "")
-        val giphyApiKey = localProps.getProperty("giphy.api.key", "")
+        // gifs.nostr.build API key for the composer's GIF picker — a native
+        // client key, sent as a Bearer header (the integration guide allows
+        // Authorization headers for native clients; the web app proxies for
+        // this reason). Blank = the picker opens but reports search unavailable.
+        val gifsApiKey = secret("gifs.api.key", "GIFS_NOSTR_BUILD_API_KEY") ?: ""
         buildConfigField("String", "BREEZ_API_KEY", "\"$breezApiKey\"")
         buildConfigField("String", "BREEZ_SDK_VERSION", "\"${libs.versions.breez.sdk.spark.get()}\"")
-        buildConfigField("String", "GIPHY_API_KEY", "\"$giphyApiKey\"")
+        buildConfigField("String", "GIFS_NOSTR_BUILD_API_KEY", "\"$gifsApiKey\"")
     }
 
     signingConfigs {
@@ -219,6 +223,10 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.okhttp.mockwebserver)
+    // Host-JVM native secp256k1 for the unit suite ONLY, so tests can sign and
+    // verify for real. The app itself uses the -jni-android artifact below;
+    // this one must never be on a main/release classpath.
+    testImplementation(libs.secp256k1.kmp.jni.jvm)
 
     // Instrumented (connected) tests only — e.g. the live NIP-98 round-trip.
     // Not on the hermetic :app:testDebugUnitTest classpath.
@@ -270,5 +278,5 @@ dependencies {
     implementation(libs.androidx.credentials.play.services.auth)
     implementation(libs.googleid)
     implementation(libs.play.services.auth)
-    implementation("pro.branta:branta:3.2.0")
+    implementation("pro.branta:branta:3.2.1")
 }

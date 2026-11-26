@@ -1,13 +1,23 @@
 package cooking.zap.app.nostr
 
 /**
- * Dev / e2e test recipes that must not surface on the Recipes feed.
+ * Dev / e2e / live-gate recipes that must not surface on the Recipes feed.
  * Coordinates are NIP-01 addressable keys `kind:pubkey:d-tag` (not event ids),
  * so later replaceable revisions stay hidden too.
  *
- * Kept in sync with web `HIDDEN_RECIPE_COORDINATES` in `src/lib/consts.ts`.
+ * `DTAG_PREFIXES` hide regardless of pubkey — a live-write gate that mints
+ * a fresh ephemeral key per run cannot be enumerated as coordinates. The
+ * iOS 2.3 probes all share `ios-2.3-live-publish-`.
+ *
+ * **Duplicated.** Keep `COORDINATES` + `DTAG_PREFIXES` in lockstep with web
+ * `src/lib/consts.ts` and iOS `HiddenRecipes.swift`. There is no shared
+ * package the three platforms read.
  */
 object HiddenRecipes {
+    val DTAG_PREFIXES: List<String> = listOf(
+        "ios-2.3-live-publish-",
+    )
+
     val COORDINATES: Set<String> = setOf(
         "30023:8b739c62ed2a9b76c2836a18a6bc9a480b6f8d902b8f702083dfae20bf6b15b9:zc-pr11-test-bravo",
         "30023:8b739c62ed2a9b76c2836a18a6bc9a480b6f8d902b8f702083dfae20bf6b15b9:zc-pr11-test-alpha",
@@ -30,7 +40,14 @@ object HiddenRecipes {
         "30023:dd7e9c53ae4509aba878370c7285395e5d61b98e8eabdb33afa4deb6b6f68c13:e2e-curry",
     )
 
-    fun isHidden(coordinate: String): Boolean = coordinate in COORDINATES
+    fun isHidden(coordinate: String): Boolean {
+        if (coordinate in COORDINATES) return true
+        val first = coordinate.indexOf(':')
+        val second = if (first >= 0) coordinate.indexOf(':', startIndex = first + 1) else -1
+        if (second < 0) return false
+        val dTag = coordinate.substring(second + 1)
+        return DTAG_PREFIXES.any { dTag.startsWith(it) }
+    }
 
     fun isHidden(kind: Int, pubkey: String, dTag: String): Boolean =
         isHidden("$kind:$pubkey:$dTag")

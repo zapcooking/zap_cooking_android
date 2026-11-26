@@ -106,6 +106,7 @@ fun ThreadScreen(
     onRelayClick: ((String) -> Unit)? = null,
     onArticleClick: ((Int, String, String) -> Unit)? = null,
     onPayInvoice: (suspend (String) -> Boolean)? = null,
+    onBroadcast: ((NostrEvent) -> Unit)? = null,
     translationRepo: TranslationRepository? = null,
     autoTranslate: Boolean = false,
     resolvedEmojis: Map<String, String> = emptyMap(),
@@ -139,10 +140,6 @@ fun ThreadScreen(
     // capture the top visible item + its scroll offset, then snap back to it once the subtree is
     // inserted so the screen keeps its exact position.
     var restoreAnchor by remember { mutableStateOf<Pair<Any, Int>?>(null) }
-
-    // The sticky reply bar targets whichever note is centered in the viewport, not always the root.
-    var focusedReplyEvent by remember { mutableStateOf<NostrEvent?>(null) }
-    val threadState = rememberUpdatedState(flatThread)
 
     LaunchedEffect(listState.isScrollInProgress) {
         if (listState.isScrollInProgress) {
@@ -185,12 +182,6 @@ fun ThreadScreen(
         restoreAnchor = null
     }
 
-    LaunchedEffect(listState) {
-        snapshotFlow { listState.firstVisibleItemIndex }.collect { idx ->
-            focusedReplyEvent = (threadState.value.getOrNull(idx) as? ThreadItem.Post)?.event
-        }
-    }
-
     val reactionVersion by eventRepo.reactionVersion.collectAsState()
     val zapVersion by eventRepo.zapVersion.collectAsState()
     val replyCountVersion by eventRepo.replyCountVersion.collectAsState()
@@ -211,6 +202,7 @@ fun ThreadScreen(
             onQuote = onQuote,
             onZap = onZap,
             onZapInstant = onZapInstant,
+            onBroadcast = onBroadcast,
             onProfileClick = onProfileClick,
             onNoteClick = { eventId -> onQuotedNoteClick?.invoke(eventId) },
             onAddToList = onAddToList,
@@ -269,7 +261,10 @@ fun ThreadScreen(
             )
         },
         bottomBar = {
-            val replyTarget = focusedReplyEvent ?: focalEvent
+            // Always targets the note this thread was opened on — never
+            // whatever is scrolled into view. To reply to a specific reply,
+            // tap that note's reply icon.
+            val replyTarget = viewModel.composerDefaultParent ?: focalEvent
             ThreadReplyBar(
                 enabled = replyTarget != null,
                 onClick = { replyTarget?.let { onReply(it) } }
@@ -481,19 +476,9 @@ fun ThreadScreen(
                     val hasReplies = flatThread.any { it is ThreadItem.Post && it.depth > 0 }
                     if (!isLoading && flatThread.isNotEmpty() && !hasReplies && spamThread.isEmpty()) {
                         item(key = "no_replies") {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(8.dp),
-                                modifier = androidx.compose.ui.Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 32.dp)
-                            ) {
-                                Text(
-                                    stringResource(R.string.thread_no_replies),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f)
-                                )
-                            }
+                            // The Zc mark in one quiet grey — a dead end
+                            // should whisper (ANDROID_PORT_NO_REPLIES_MARK.md).
+                            cooking.zap.app.ui.component.NoRepliesEmptyState()
                         }
                     }
 

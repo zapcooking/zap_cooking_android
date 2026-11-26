@@ -1,5 +1,11 @@
 package cooking.zap.app.nostr
 
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -46,5 +52,49 @@ class ClientMessageReqFrameTest {
         assertTrue(json.containsKey("#l"))
         assertTrue(!json.containsKey("lTags"))
         assertTrue(!json.containsKey("l"))
+    }
+
+    /**
+     * The mixed-thread REQ: `#e` (NIP-10 replies) and `#E` (NIP-22 comment
+     * roots) must ride as SIBLING filter objects in one REQ — relay-side OR.
+     * Folding them into one filter would AND the conditions and match nothing
+     * new, and dropping `#E` strands every comment-to-comment branch (relay-
+     * verified on a four-deep chain: `#e` returns 1 event, `#E` returns 4).
+     */
+    @Test
+    fun threadReplyReq_emitsHashEAndCapitalHashEAsSiblingFilters() {
+        val targets = listOf("rootid", "focalid")
+        val replyFilter = Filter(kinds = listOf(1, 5, 1111), eTags = targets, limit = 500)
+        val commentRootFilter = Filter(kinds = listOf(1111), capitalETags = targets, limit = 500)
+
+        val frame = ClientMessage.req("thread-replies", listOf(replyFilter, commentRootFilter))
+        val arr = Json.parseToJsonElement(frame).jsonArray
+
+        assertEquals("REQ", arr[0].jsonPrimitive.content)
+        assertEquals("subId plus two sibling filter objects", 4, arr.size)
+        val replyObj = arr[2].jsonObject
+        val commentObj = arr[3].jsonObject
+
+        // Each tag name appears in exactly one filter object — never merged.
+        assertTrue(replyObj.containsKey("#e"))
+        assertTrue(!replyObj.containsKey("#E"))
+        assertTrue(commentObj.containsKey("#E"))
+        assertTrue(!commentObj.containsKey("#e"))
+
+        assertEquals(targets, replyObj["#e"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertEquals(targets, commentObj["#E"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertEquals(listOf(1, 5, 1111), replyObj["kinds"]!!.jsonArray.map { it.jsonPrimitive.int })
+        assertEquals(listOf(1111), commentObj["kinds"]!!.jsonArray.map { it.jsonPrimitive.int })
+        assertEquals(500L, replyObj["limit"]!!.jsonPrimitive.long)
+        assertEquals(500L, commentObj["limit"]!!.jsonPrimitive.long)
+    }
+
+    /** A `#E`-only filter serializes under the uppercase key, not a folded one. */
+    @Test
+    fun filterToJsonObject_capitalETagsKeyIsCapitalHashE() {
+        val json = Filter(kinds = listOf(1111), capitalETags = listOf("rootid")).toJsonObject()
+        assertEquals("""["rootid"]""", json["#E"].toString())
+        assertTrue(!json.containsKey("#e"))
+        assertTrue(!json.containsKey("capitalETags"))
     }
 }

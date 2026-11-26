@@ -5,6 +5,7 @@ import android.util.LruCache
 import cooking.zap.app.nostr.FoodHashtags
 import cooking.zap.app.nostr.Nip09
 import cooking.zap.app.nostr.Nip10
+import cooking.zap.app.nostr.Nip22
 import cooking.zap.app.nostr.Nip30
 import cooking.zap.app.nostr.Bolt11
 import cooking.zap.app.nostr.Nip57
@@ -392,16 +393,18 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
             if (pendingQuoteRequests.get(event.id) != null) _quotedEventVersion.value++
             return
         }
-        if ((event.kind == 1 || event.kind == 30023 || event.kind == 20 || event.kind == 21 || event.kind == 22 || event.kind == Nip69.KIND_ZAP_POLL) && muteRepo?.containsMutedWord(event.content) == true) return
-        if (event.kind == 1) {
-            val threadRoot = Nip10.getRootId(event) ?: Nip10.getReplyTarget(event) ?: event.id
+        if ((event.kind == 1 || event.kind == Nip22.KIND_COMMENT || event.kind == 30023 || event.kind == 20 || event.kind == 21 || event.kind == 22 || event.kind == Nip69.KIND_ZAP_POLL) && muteRepo?.containsMutedWord(event.content) == true) return
+        if (event.kind == 1 || event.kind == Nip22.KIND_COMMENT) {
+            // NIP-22 replies-to-comments reference the thread root only via
+            // uppercase E scope — prefer it over the lowercase-e parent.
+            val threadRoot = Nip22.rootEventId(event) ?: Nip10.getRootId(event) ?: Nip10.getReplyTarget(event) ?: event.id
             if (muteRepo?.isThreadMuted(threadRoot) == true) return
         }
         if (deletedEventsRepo?.isDeleted(event.id) == true) return
         if (isWotFiltered(event.pubkey, event.kind)) return
         // Track liveness: only count followed authors with recent active-content kinds,
         // so historical fetches, profile metadata, and strangers don't inflate the online count.
-        if (event.kind == 1 || event.kind == 6 || event.kind == 7 || event.kind == 30023 || event.kind == 20 || event.kind == 21 || event.kind == 22) {
+        if (event.kind == 1 || event.kind == 6 || event.kind == 7 || event.kind == Nip22.KIND_COMMENT || event.kind == 30023 || event.kind == 20 || event.kind == 21 || event.kind == 22) {
             val eventTimeMs = event.created_at * 1000L
             val cutoff = System.currentTimeMillis() - 10 * 60 * 1000L
             if (eventTimeMs >= cutoff && (contactRepo?.isFollowing(event.pubkey) == true || event.pubkey == currentUserPubkey)) {
@@ -432,6 +435,10 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
                 // Only show root notes in feed, not replies
                 val isReply = Nip10.isReply(event)
                 if (!isReply) binaryInsert(event, fromFeed = true)
+            }
+            Nip22.KIND_COMMENT -> {
+                // NIP-22 comments never appear in feeds — cached only, rendered in
+                // thread/article views and counted as replies.
             }
             30023 -> {
                 // A blanked replacement (["deleted","true"]) is how an author
@@ -683,6 +690,25 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
         return userPollVotes.get(pollId) ?: emptyList()
     }
 
+    /**
+     * Per-choice voter lists for the details drawer, newest vote first so the
+     * freshest voters surface at the top of each choice. Built from the
+     * latest-wins voter state, so each voter appears under their current choice
+     * only — a revote moves them rather than counting twice.
+     */
+    fun getPollVoters(pollId: String): Map<String, List<String>> {
+        val voters = pollVoters.get(pollId) ?: return emptyMap()
+        val out = mutableMapOf<String, MutableList<String>>()
+        voters.entries
+            .sortedByDescending { it.value.first }
+            .forEach { entry ->
+                for (optionId in entry.value.second) {
+                    out.getOrPut(optionId) { mutableListOf() }.add(entry.key)
+                }
+            }
+        return out
+    }
+
     private fun addZapPollVote(zapReceipt: NostrEvent, pollId: String, sats: Long, zapperPubkey: String?) {
         val optionIndex = Nip69.getZapPollOptionFromZapReceipt(zapReceipt) ?: return
         val pubkey = zapperPubkey ?: return
@@ -777,7 +803,7 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
     fun getRecentEventIdsByAuthor(pubkey: String, limit: Int = 50): List<String> {
         return eventCache.values
             .asSequence()
-            .filter { it.kind == 1 && it.pubkey == pubkey }
+            .filter { (it.kind == 1 || it.kind == Nip22.KIND_COMMENT) && it.pubkey == pubkey }
             .sortedByDescending { it.created_at }
             .take(limit)
             .map { it.id }
@@ -804,8 +830,8 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
         if (eventCache.containsKey(event.id)) return
         seenEventIds.add(event.id)
         eventCache[event.id] = event
-        // Don't persist future-dated notes — scheduled posts fetched from the scheduler
-        // relay would poison the ObjectBox cache and the feed's since filter on next boot.
+        // Don't persist future-dated notes — they would poison the ObjectBox cache and the
+        // feed's since filter on next boot.
         if (event.created_at <= System.currentTimeMillis() / 1000 + 30) {
             eventPersistence?.persistEvent(event)
         }
@@ -923,13 +949,14 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
      * (kind 0) are parsed so avatars/names are available immediately. Call rebuildFeedFromCache()
      * after this to populate feedList from the seeded eventCache.
      *
-     * Only kinds 0 and 1 are added to seenEventIds. Engagement events (kind 6, 7, 9735)
+     * Only display kinds (profiles, notes, comments, gallery, polls, articles)
+     * are added to seenEventIds. Engagement events (kind 6, 7, 9735)
      * are intentionally excluded so the engagement subscription can fetch them fresh from
      * relays without being deduped — their counts/caches are not populated here.
      */
     fun seedFromObjectBox(events: List<NostrEvent>) {
         for (event in events) {
-            if (event.kind != 0 && event.kind != 1 && event.kind != 20 && event.kind != 21 && event.kind != 22 && event.kind != 1068 && event.kind != 6969 && event.kind != 30023) continue
+            if (event.kind != 0 && event.kind != 1 && event.kind != Nip22.KIND_COMMENT && event.kind != 20 && event.kind != 21 && event.kind != 22 && event.kind != 1068 && event.kind != 6969 && event.kind != 30023) continue
             if (muteRepo?.isBlocked(event.pubkey) == true) continue
             if (!seenEventIds.add(event.id)) continue
             eventCache[event.id] = event
@@ -1148,6 +1175,40 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
             }
         }
         return result
+    }
+
+    /**
+     * Cached kind-1111 comments whose uppercase `E` root names [rootId] — the
+     * persisted half of the thread cache-seed. The reply-graph BFS in
+     * [getCachedThreadEvents] can't see a comment branch that hangs off a
+     * mid-thread note, but every nested comment still names the conversation
+     * root in `E`, so matching on the parsed root tag reaches the whole
+     * comment subtree.
+     *
+     * In-memory cache and persistence are **merged by event id**, not
+     * either-or: on a cold open [getEvent] has already pulled the seed comment
+     * into the cache, so an "if cache is non-empty, stop" shortcut would hide
+     * the whole persisted chain behind that one event. Persistence is queried
+     * by the root itself ([EventPersistence.getEventsByKindAndRootETag]) — a
+     * global newest-N kind scan would drop an older thread on the floor — and
+     * the per-thread [limit] applies after the merge, newest first. Cache
+     * entries win on id collision (fresher than the persisted copy).
+     * Best-effort: never throws.
+     */
+    fun getCachedCommentsRootedOn(rootId: String, limit: Int = 500): List<NostrEvent> {
+        return try {
+            val fromCache = eventCache.values.asSequence()
+                .filter { Nip22.isComment(it) && Nip22.rootEventId(it) == rootId }
+                .toList()
+            val persistence = eventPersistence
+                ?: return fromCache.sortedByDescending { it.created_at }.take(limit)
+            val fromPersistence = persistence
+                .getEventsByKindAndRootETag(Nip22.KIND_COMMENT, rootId, limit = limit)
+                .filter { Nip22.rootEventId(it) == rootId }
+            mergeCommentsNewestFirst(fromPersistence, fromCache, limit)
+        } catch (t: Throwable) {
+            emptyList()
+        }
     }
 
     fun addEventRelay(eventId: String, relayUrl: String) {
@@ -1832,4 +1893,28 @@ internal fun newestAddressable(
         newest = if (newest == null) event else preferNewer(newest, event)
     }
     return newest
+}
+
+/**
+ * The thread cache-seed's **merge**: persisted kind-1111 comments and the
+ * in-memory cache unioned by event id, newest first, capped at [limit].
+ *
+ * Split out of [EventRepository.getCachedCommentsRootedOn] as a pure function
+ * so the merge is unit-testable without ObjectBox (the persistence backend
+ * needs an Android runtime). The defect it pins: the old code returned the
+ * cache contents alone when non-empty — and on a cold open the seed comment
+ * pulled by [EventRepository.getEvent] had already made it non-empty, hiding
+ * the whole persisted chain behind one event. The cache copy wins an id
+ * collision (fresher than the persisted one); persistence entries listed
+ * first means the collision overwrite is the only write the cache does.
+ */
+internal fun mergeCommentsNewestFirst(
+    persisted: List<NostrEvent>,
+    cached: List<NostrEvent>,
+    limit: Int,
+): List<NostrEvent> {
+    val merged = LinkedHashMap<String, NostrEvent>(persisted.size + cached.size)
+    for (event in persisted) merged[event.id] = event
+    for (event in cached) merged[event.id] = event
+    return merged.values.sortedByDescending { it.created_at }.take(limit)
 }

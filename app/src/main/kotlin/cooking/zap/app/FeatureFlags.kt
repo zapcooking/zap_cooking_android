@@ -17,4 +17,29 @@ object FeatureFlags {
      * post-launch) — do not delete it or inline its call sites.
      */
     const val NOTE_REVIEW_ENABLED = true
+
+    /**
+     * Plan with Cheffy (meal-planner port Phase 5). Entry points in the
+     * planner header and empty banner. Enabled 2026-08-26 after the A14
+     * device checklist passed — see #236 for the full results.
+     */
+    const val CHEFFY_MEAL_PLAN_ENABLED = true
+
+    /**
+     * "Generate with AI (Cook+)" in the composer's alt editor — ask-photo
+     * with `purpose: "alt"` (docs/accessibility/alt-text-imeta-handoff.md
+     * §4). Membership and rate limits are enforced server-side and fail
+     * closed; this flag only hides the entry point. Kill-switch precedent:
+     * NOTE_REVIEW_ENABLED — do not delete it or inline its call sites.
+     */
+    const val ALT_TEXT_AI_ENABLED = true
+
+    /**
+     * NIP-42 login to the curated feed relay (`wss://feed.zap.cooking`, build
+     * spec §1 "Fresh feed relay"). Off: Fresh is free tier only, and a login
+     * tells the relay who is reading. Consulted through
+     * `FeedRelay.loginAllowed`, never directly. Turning it on is a product
+     * decision (Cook+ topic feeds and history), not a bug fix.
+     */
+    const val FEED_RELAY_LOGIN_ENABLED = false
 }

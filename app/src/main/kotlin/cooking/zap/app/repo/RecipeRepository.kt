@@ -365,6 +365,7 @@ class RecipeRepository(
      * top relays where recipes may not live. Returns null if not found.
      */
     suspend fun requestRecipe(author: String, dTag: String): RecipeParser.Recipe? {
+        if (HiddenRecipes.isHidden(30023, author, dTag)) return null
         findRecipeEvent(author, dTag)?.let { cached ->
             return RecipeFormats.forEvent(cached)?.parse(cached)
         }
@@ -409,6 +410,7 @@ class RecipeRepository(
         val normalizedDTag = dTag.trim()
         if (normalizedAuthor.isBlank() || normalizedDTag.isBlank()) return null
         if (RecipeFormats.active.none { it.kind == kind }) return null
+        if (HiddenRecipes.isHidden(kind, normalizedAuthor, normalizedDTag)) return null
 
         eventRepo.findAddressableEvent(kind, normalizedAuthor, normalizedDTag)?.let { cached ->
             if (RecipeFormats.forEvent(cached) != null &&
@@ -420,7 +422,7 @@ class RecipeRepository(
         val persistence = eventRepo.eventPersistence ?: return null
         val fromDb = persistence.getEventsByAuthorAndKind(normalizedAuthor, kind, limit = 200)
             .filter { eventHasDTag(it, normalizedDTag) }
-            .withoutDeleted()
+            .withoutDeleted().withoutHidden()
         return dedupeNewestPerCoordinate(fromDb).firstOrNull()
     }
 
@@ -433,6 +435,7 @@ class RecipeRepository(
         val normalizedDTag = dTag.trim()
         if (normalizedAuthor.isBlank() || normalizedDTag.isBlank()) return null
         if (RecipeFormats.active.none { it.kind == kind }) return null
+        if (HiddenRecipes.isHidden(kind, normalizedAuthor, normalizedDTag)) return null
 
         val cached = findRecipeEventByCoordinate(kind, normalizedAuthor, normalizedDTag)
         if (cached != null) return cached
@@ -486,6 +489,7 @@ class RecipeRepository(
      * format. Identical to a single NIP-23 cache lookup while one format is active.
      */
     fun findRecipeEvent(author: String, dTag: String): NostrEvent? {
+        if (HiddenRecipes.isHidden(30023, author, dTag)) return null
         val cached = RecipeFormats.active.mapNotNull { eventRepo.findAddressableEvent(it.kind, author, dTag) }
         return dedupeAcrossFormats(cached) { RecipeFormats.rankOf(it) }.firstOrNull()
     }
@@ -510,7 +514,7 @@ class RecipeRepository(
         val persistence = eventRepo.eventPersistence ?: return@withContext emptyList()
         val events = RecipeFormats.active
             .flatMap { persistence.getEventsByKind(it.kind, limit) }
-            .withoutDeleted()
+            .withoutDeleted().withoutHidden()
         dedupeAcrossFormats(events) { RecipeFormats.rankOf(it) }
             .mapNotNull { RecipeFormats.forEvent(it)?.parse(it) }
             .filter { recipe ->
@@ -809,11 +813,15 @@ class RecipeRepository(
         return filter { !deleted.isEventDeleted(it) }
     }
 
+    /** HiddenRecipes (exact coord + d-tag prefix) so search / tag / authored cache inherit the same hide as acceptEvent. */
+    private fun List<NostrEvent>.withoutHidden(): List<NostrEvent> =
+        filter { !HiddenRecipes.isHidden(recipeCoordinate(it)) }
+
     private suspend fun cachedAuthoredEvents(author: String, limit: Int = 2_000): List<NostrEvent> {
         val persistence = eventRepo.eventPersistence ?: return emptyList()
         val events = RecipeFormats.active.flatMap {
             persistence.getEventsByAuthorAndKind(author, it.kind, limit)
-        }.withoutDeleted()
+        }.withoutDeleted().withoutHidden()
         return dedupeAcrossFormats(events) { RecipeFormats.rankOf(it) }
             .filter { it.pubkey == author }
     }
@@ -988,7 +996,7 @@ class RecipeRepository(
         val persistence = eventRepo.eventPersistence ?: return emptyList()
         val events = RecipeFormats.active
             .flatMap { persistence.getEventsByKind(it.kind, limit) }
-            .withoutDeleted()
+            .withoutDeleted().withoutHidden()
         return dedupeAcrossFormats(events) { RecipeFormats.rankOf(it) }
             .filter { eventMatchesCategoryTag(it, normalizedTag) }
     }
@@ -1080,7 +1088,7 @@ class RecipeRepository(
         val persistence = eventRepo.eventPersistence ?: return emptyList()
         return RecipeFormats.active
             .flatMap { persistence.getEventsByKind(it.kind, limit) }
-            .withoutDeleted()
+            .withoutDeleted().withoutHidden()
             .filter { RecipeFormats.forEvent(it) != null }
     }
 

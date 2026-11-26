@@ -10,6 +10,9 @@ data class Filter(
     val authors: List<String>? = null,
     val ids: List<String>? = null,
     val eTags: List<String>? = null,
+    /** Uppercase E tags — NIP-22 comment root scope (#E). Must ride in its own
+     *  sibling filter object: inside one filter, #e and #E are ANDed. */
+    val capitalETags: List<String>? = null,
     val pTags: List<String>? = null,
     val dTags: List<String>? = null,
     val hTags: List<String>? = null,
@@ -30,6 +33,7 @@ data class Filter(
         authors?.let { put("authors", buildJsonArray { it.forEach { a -> add(JsonPrimitive(a)) } }) }
         ids?.let { put("ids", buildJsonArray { it.forEach { id -> add(JsonPrimitive(id)) } }) }
         eTags?.let { put("#e", buildJsonArray { it.forEach { e -> add(JsonPrimitive(e)) } }) }
+        capitalETags?.let { put("#E", buildJsonArray { it.forEach { e -> add(JsonPrimitive(e)) } }) }
         pTags?.let { put("#p", buildJsonArray { it.forEach { p -> add(JsonPrimitive(p)) } }) }
         dTags?.let { put("#d", buildJsonArray { it.forEach { d -> add(JsonPrimitive(d)) } }) }
         hTags?.let { put("#h", buildJsonArray { it.forEach { h -> add(JsonPrimitive(h)) } }) }

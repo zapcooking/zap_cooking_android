@@ -30,7 +30,7 @@ than emitting an unsigned artifact — see
 [`ZAPCOOKING_ANDROID_BUILD.md`](ZAPCOOKING_ANDROID_BUILD.md) §"Release
 signing". Debug builds and tests need nothing.
 
-JDK 17 and Android SDK 35 are required. Tests: a hermetic JVM unit suite
+JDK 17 and Android SDK 36 are required. Tests: a hermetic JVM unit suite
 under `app/src/test/` plus integration tests under `app/src/androidTest/`
 (network/device required, excluded from the unit run).
 
@@ -66,3 +66,10 @@ ObjectBox-backed on-device store for fast cold-start. Entities: `EventEntity`, `
 - `StateFlow` for UI state, `SharedFlow` for relay events
 - Default relays (fresh installs, `RelayConfig.DEFAULTS`): `wss://nos.lol`, `wss://relay.primal.net`, `wss://relay.nostr.net`. Members relay: `wss://pantry.zap.cooking` (`RelayConfig.MEMBERS_RELAY`). Discovery/article aggregators are separate sets — `DEFAULT_INDEXER_RELAYS`, `ARTICLES_RELAYS`, `PACK_STANDARD_RELAYS`, `RelayProber.BOOTSTRAP` — and each carries its own membership; they are not a superset of `DEFAULTS`.
 - Navigation routes defined in `Navigation.kt`
+
+## Composers and text fields
+
+Before changing a composer (notes, replies, articles, recipes) or any field whose text is
+published as written, read [`docs/composer-editor-matrix.md`](docs/composer-editor-matrix.md) and run
+[editor-matrix](https://github.com/dmnyc/editor-matrix) before and after the change. A
+composer bug no case caught gets a case there first.

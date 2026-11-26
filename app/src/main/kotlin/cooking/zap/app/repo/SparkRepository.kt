@@ -15,6 +15,8 @@ import breez_sdk_spark.ListUnclaimedDepositsRequest
 import breez_sdk_spark.Network
 import breez_sdk_spark.OnchainConfirmationSpeed
 import breez_sdk_spark.PaymentDetails
+import breez_sdk_spark.PaymentMethod
+import breez_sdk_spark.PaymentRequest
 import breez_sdk_spark.PaymentStatus
 import breez_sdk_spark.PaymentType
 import breez_sdk_spark.PrepareSendPaymentRequest
@@ -52,6 +54,12 @@ class SparkRepository(
 
     companion object {
         private val BREEZ_API_KEY: String get() = BuildConfig.BREEZ_API_KEY
+
+        // Domain Lightning addresses are registered under. `sats.zap.cooking`
+        // is a CNAME to Breez's hosted LNURL server (breez.tips), registered
+        // with Breez against this API key — the same setup the web and iOS
+        // apps use. Passed to the SDK as `config.lnurlDomain` at connect time.
+        private const val LNURL_DOMAIN = "sats.zap.cooking"
 
         // BIP39 English wordlist subset is large; for mnemonic generation we use
         // the SDK's Seed.Mnemonic which validates the mnemonic on connect.
@@ -298,7 +306,7 @@ class SparkRepository(
 
                 val config = defaultConfig(Network.MAINNET)
                 config.apiKey = BREEZ_API_KEY
-                config.supportLnurlVerify = true
+                config.lnurlDomain = LNURL_DOMAIN
 
                 val seed = Seed.Mnemonic(mnemonic, null)
                 val request = ConnectRequest(
@@ -423,7 +431,7 @@ class SparkRepository(
             val instance = sdk ?: return@withContext Result.failure(Exception("Not connected"))
             emitStatus("Preparing payment...")
 
-            val prepareReq = PrepareSendPaymentRequest(paymentRequest = bolt11)
+            val prepareReq = PrepareSendPaymentRequest(paymentRequest = PaymentRequest.Input(bolt11))
             val prepareResponse = instance.prepareSendPayment(prepareReq)
 
             emitStatus("Sending payment...")
@@ -448,7 +456,7 @@ class SparkRepository(
     suspend fun prepareSendPayment(bolt11: String): Result<Pair<Long?, Any>> = withContext(Dispatchers.IO) {
         try {
             val instance = sdk ?: return@withContext Result.failure(Exception("Not connected"))
-            val prepareReq = PrepareSendPaymentRequest(paymentRequest = bolt11)
+            val prepareReq = PrepareSendPaymentRequest(paymentRequest = PaymentRequest.Input(bolt11))
             val prepareResponse = instance.prepareSendPayment(prepareReq)
 
             val feeSats = when (val method = prepareResponse.paymentMethod) {
@@ -506,7 +514,9 @@ class SparkRepository(
                     description = description.ifEmpty { "Zap Cooking wallet" },
                     amountSats = amountSats,
                     expirySecs = expirySecs.toUInt(),
-                    paymentHash = null
+                    paymentHash = null,
+                    receiverIdentityPublicKey = null,
+                    preimage = null
                 )
                 val response = instance.receivePayment(ReceivePaymentRequest(method))
                 emitStatus("Invoice created")
@@ -566,6 +576,36 @@ class SparkRepository(
 
                     val isPending = payment.status == PaymentStatus.PENDING
 
+                    // Non-bitcoin assets. Payment.amount is documented as
+                    // "satoshis OR token base units", so a token payment's
+                    // amount must never reach the sats fields below. Property
+                    // access rather than destructuring keeps this working
+                    // across SDK versions that changed the case's arity.
+                    val tokenDetails = payment.details as? PaymentDetails.Token
+                    var assetTicker: String? = tokenDetails?.metadata?.ticker
+                    var assetAmount: String? = tokenDetails?.let {
+                        TokenAmounts.scale(payment.amount.toString(), it.metadata.decimals.toInt())
+                    }
+                    var assetFee: String? = tokenDetails?.let {
+                        val raw = payment.fees.toString()
+                        if (raw == "0") null else TokenAmounts.scale(raw, it.metadata.decimals.toInt())
+                    }
+                    // `method` is the fallback discriminator - the SDK notes
+                    // the details can be empty. Without metadata there are no
+                    // decimals to scale by, so show base units under a neutral
+                    // label rather than passing them off as sats.
+                    if (assetTicker == null && payment.method == PaymentMethod.TOKEN) {
+                        assetTicker = "tokens"
+                        assetAmount = payment.amount.toString()
+                        assetFee = payment.fees.toString().takeIf { it != "0" }
+                    }
+                    val isToken = assetTicker != null
+                    // Zero for token rows: there is no honest sats value for a
+                    // token transfer. `.toLong()` on a u128 BigInteger also
+                    // wraps silently past Long.MAX_VALUE.
+                    val satsAmount = if (isToken) 0L else payment.amount.toLong()
+                    val satsFees = if (isToken) 0L else payment.fees.toLong()
+
                     WalletTransaction(
                         type = when (payment.paymentType) {
                             PaymentType.SEND -> "outgoing"
@@ -573,13 +613,16 @@ class SparkRepository(
                         },
                         description = description,
                         paymentHash = paymentHash,
-                        amountMsats = payment.amount.toLong() * 1000,
-                        feeMsats = payment.fees.toLong() * 1000,
+                        amountMsats = satsAmount * 1000,
+                        feeMsats = satsFees * 1000,
                         createdAt = payment.timestamp.toLong(),
                         // Unconfirmed/unsettled payments have no settle time yet.
                         settledAt = if (payment.status == PaymentStatus.COMPLETED) payment.timestamp.toLong() else null,
                         pending = isPending,
-                        isOnchain = onchainTxid != null
+                        isOnchain = onchainTxid != null,
+                        assetTicker = assetTicker,
+                        assetAmount = assetAmount,
+                        assetFee = assetFee
                     )
                 }
                 Result.success(transactions)
@@ -601,7 +644,7 @@ class SparkRepository(
         try {
             val instance = sdk ?: return@withContext Result.failure(Exception("Not connected"))
             val response = instance.receivePayment(
-                ReceivePaymentRequest(ReceivePaymentMethod.BitcoinAddress)
+                ReceivePaymentRequest(ReceivePaymentMethod.BitcoinAddress(newAddress = null))
             )
             Result.success(response.paymentRequest)
         } catch (e: Exception) {
@@ -621,7 +664,7 @@ class SparkRepository(
         try {
             val instance = sdk ?: return@withContext Result.failure(Exception("Not connected"))
             val prepareReq = PrepareSendPaymentRequest(
-                paymentRequest = address,
+                paymentRequest = PaymentRequest.Input(address),
                 amount = amountSats.toBigInteger()
             )
             val prepareResponse = instance.prepareSendPayment(prepareReq)

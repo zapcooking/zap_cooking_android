@@ -3,23 +3,24 @@ package cooking.zap.app.viewmodel
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import cooking.zap.app.api.ScheduleFailure
+import cooking.zap.app.api.ScheduledItem
+import cooking.zap.app.api.ZapCookingApi
 import cooking.zap.app.nostr.ClientMessage
 import cooking.zap.app.nostr.Filter
 import cooking.zap.app.nostr.Nip09
 import cooking.zap.app.nostr.Nip37
-import cooking.zap.app.nostr.NostrEvent
 import cooking.zap.app.nostr.NostrSigner
 import cooking.zap.app.relay.RelayPool
 import cooking.zap.app.repo.DeletedEventsRepository
 import cooking.zap.app.repo.LastDraftCache
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
 
 class DraftsViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -30,19 +31,36 @@ class DraftsViewModel(app: Application) : AndroidViewModel(app) {
     private val _drafts = MutableStateFlow<List<Nip37.Draft>>(emptyList())
     val drafts: StateFlow<List<Nip37.Draft>> = _drafts
 
-    private val _scheduledPosts = MutableStateFlow<List<NostrEvent>>(emptyList())
-    val scheduledPosts: StateFlow<List<NostrEvent>> = _scheduledPosts
+    /** Pending soonest first, then failed; see [orderScheduled]. */
+    private val _scheduledPosts = MutableStateFlow<List<ScheduledItem>>(emptyList())
+    val scheduledPosts: StateFlow<List<ScheduledItem>> = _scheduledPosts
 
+    /** First load with nothing to show yet (full-screen spinner). */
     private val _scheduledLoading = MutableStateFlow(false)
     val scheduledLoading: StateFlow<Boolean> = _scheduledLoading
+
+    /** A pull-to-refresh is in flight (the pull indicator). */
+    private val _scheduledRefreshing = MutableStateFlow(false)
+    val scheduledRefreshing: StateFlow<Boolean> = _scheduledRefreshing
+
+    /** Why the last load failed (a string resource), or null. Rows from an earlier load stay visible. */
+    private val _scheduledError = MutableStateFlow<Int?>(null)
+    val scheduledError: StateFlow<Int?> = _scheduledError
+
+    /** Rows whose cancel request has not answered yet. */
+    private val _cancellingIds = MutableStateFlow<Set<String>>(emptySet())
+    val cancellingIds: StateFlow<Set<String>> = _cancellingIds
+
+    /** One-shot messages about a cancel (string resources), for a snackbar. */
+    private val _scheduledMessages = MutableSharedFlow<Int>(extraBufferCapacity = 4)
+    val scheduledMessages: SharedFlow<Int> = _scheduledMessages
+
+    private var scheduledLists = ScheduledLists()
+    private var scheduledLoadGeneration = 0
 
     private var draftsLoaded = false
     private val draftsSubId = "drafts_${System.currentTimeMillis()}"
     private var scheduledJob: Job? = null
-
-    companion object {
-        val SCHEDULER_RELAY = "wss://scheduler.nostrarchives.com"
-    }
 
     fun loadDrafts(relayPool: RelayPool, signer: NostrSigner?, deletedEventsRepo: DeletedEventsRepository? = null) {
         if (draftsLoaded || signer == null) return
@@ -105,73 +123,74 @@ class DraftsViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun loadScheduledPosts(relayPool: RelayPool, signer: NostrSigner?) {
-        if (signer == null) return
+    private fun publishScheduled(lists: ScheduledLists) {
+        scheduledLists = lists
+        _scheduledPosts.value = lists.rows
+        _scheduledError.value = lists.failure?.let(::scheduleListFailureMessageRes)
+    }
 
-        // Cancel previous collector to avoid stacking up collectors on every screen visit
+    /**
+     * Load the scheduled list from the Zap Cooking scheduler API: `?status=pending`, then
+     * `?status=failed` ([loadScheduledLists]). Called on every screen entry and on pull to
+     * refresh ([userInitiated]), so a post scheduled a moment ago in the composer — or on
+     * the web — is there the next time the screen opens. Rows already shown stay visible
+     * while it runs.
+     */
+    fun loadScheduledPosts(api: ZapCookingApi, signer: NostrSigner?, userInitiated: Boolean = false) {
         scheduledJob?.cancel()
+        val generation = ++scheduledLoadGeneration
+        if (signer == null) {
+            publishScheduled(ScheduledLists(failure = ScheduleFailure.SignedOut))
+            _scheduledLoading.value = false
+            _scheduledRefreshing.value = false
+            return
+        }
+        _scheduledLoading.value = _scheduledPosts.value.isEmpty() && !userInitiated
+        _scheduledRefreshing.value = userInitiated
 
-        // Evict any stale relay (disconnected after scheduling, stuck with autoReconnect=false)
-        // so connectEphemeralRelay always creates a fresh connection with a clean auth handshake.
-        relayPool.disconnectRelay(SCHEDULER_RELAY)
-
-        // Only show spinner if we have nothing to display yet — keep existing posts visible while refreshing
-        if (_scheduledPosts.value.isEmpty()) _scheduledLoading.value = true
-
-        val subId = "scheduled_${System.currentTimeMillis()}"
-
-        scheduledJob = viewModelScope.launch(Dispatchers.Default) {
-            relayPool.autoApproveRelayAuth(SCHEDULER_RELAY)
-            relayPool.connectEphemeralRelay(SCHEDULER_RELAY)
-
-            val filter = Filter(
-                kinds = listOf(1),
-                authors = listOf(signer.pubkeyHex),
-                limit = 100
-            )
-
-            // Wait for AUTH — always required on a fresh connection
-            withTimeoutOrNull(5_000) {
-                relayPool.authCompleted.first { it == SCHEDULER_RELAY }
-            }
-            relayPool.sendToRelayOrEphemeral(SCHEDULER_RELAY, ClientMessage.req(subId, filter), skipBadCheck = true)
-
-            // Stop spinner after 10s if relay sends nothing
-            val timeoutJob = launch {
-                delay(10_000)
-                _scheduledLoading.value = false
-            }
-
-            relayPool.relayEvents.collect { relayEvent ->
-                if (relayEvent.relayUrl != SCHEDULER_RELAY) return@collect
-                if (relayEvent.subscriptionId != subId) return@collect
-                val event = relayEvent.event
-                if (event.kind != 1) return@collect
-                if (event.pubkey != signer.pubkeyHex) return@collect
-
-                timeoutJob.cancel()
-                _scheduledLoading.value = false
-                val current = _scheduledPosts.value.toMutableList()
-                if (current.none { it.id == event.id }) {
-                    current.add(event)
-                    _scheduledPosts.value = current.sortedByDescending { it.created_at }
+        scheduledJob = viewModelScope.launch {
+            try {
+                val loaded = loadScheduledLists(
+                    previous = scheduledLists,
+                    list = { status -> api.listScheduled(signer, status) },
+                    emit = { lists ->
+                        // Pending is on screen as soon as it returns; the spinner does not
+                        // wait for the failed call.
+                        if (generation == scheduledLoadGeneration) {
+                            publishScheduled(lists)
+                            _scheduledLoading.value = false
+                        }
+                    },
+                )
+                if (generation == scheduledLoadGeneration) publishScheduled(loaded)
+            } finally {
+                // A newer load owns the flags once it has started.
+                if (generation == scheduledLoadGeneration) {
+                    _scheduledLoading.value = false
+                    _scheduledRefreshing.value = false
                 }
             }
         }
     }
 
-    fun deleteScheduledPost(eventId: String, relayPool: RelayPool, signer: NostrSigner?) {
-        if (signer == null) return
-        _scheduledPosts.value = _scheduledPosts.value.filter { it.id != eventId }
-
-        viewModelScope.launch(Dispatchers.Default) {
+    /**
+     * Cancel a pending scheduled post. The row stays until the server answers
+     * ([cancelOutcome]): it is removed only when the post really is cancelled or no longer
+     * pending, and kept — with the reason — when the cancel did not happen. The list is
+     * refreshed afterwards either way.
+     */
+    fun cancelScheduledPost(id: String, api: ZapCookingApi, signer: NostrSigner?) {
+        if (id in _cancellingIds.value) return
+        _cancellingIds.value = _cancellingIds.value + id
+        viewModelScope.launch {
             try {
-                val tags = Nip09.buildDeletionTags(eventId, 1)
-                val event = signer.signEvent(kind = 5, content = "", tags = tags)
-                relayPool.sendToRelayOrEphemeral(SCHEDULER_RELAY, ClientMessage.event(event), skipBadCheck = true)
-            } catch (_: Exception) {
-                // Best effort
+                val outcome = cancelOutcome(api.cancelScheduled(signer, id))
+                if (outcome.removeRow) publishScheduled(scheduledLists.without(id))
+                outcome.messageRes?.let { _scheduledMessages.tryEmit(it) }
+            } finally {
+                _cancellingIds.value = _cancellingIds.value - id
             }
+            loadScheduledPosts(api, signer)
         }
     }
 
@@ -259,7 +278,12 @@ class DraftsViewModel(app: Application) : AndroidViewModel(app) {
         draftsLoaded = false
         scheduledJob?.cancel()
         scheduledJob = null
+        scheduledLoadGeneration++
+        scheduledLists = ScheduledLists()
         _scheduledPosts.value = emptyList()
         _scheduledLoading.value = false
+        _scheduledRefreshing.value = false
+        _scheduledError.value = null
+        _cancellingIds.value = emptySet()
     }
 }

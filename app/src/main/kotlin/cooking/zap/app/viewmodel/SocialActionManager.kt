@@ -76,6 +76,14 @@ class SocialActionManager(
     private val _zapError = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val zapError: SharedFlow<String> = _zapError
 
+    /**
+     * Relays that accepted a re-broadcast, emitted per [broadcastEvent] call.
+     * 0 means nothing was reachable — the user needs to know that as much as
+     * they need to know it worked.
+     */
+    private val _broadcastResult = MutableSharedFlow<Int>(extraBufferCapacity = 8)
+    val broadcastResult: SharedFlow<Int> = _broadcastResult
+
     private val _reactionSent = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
     val reactionSent: SharedFlow<Unit> = _reactionSent
 
@@ -210,7 +218,15 @@ class SocialActionManager(
     private fun publishMuteList() {
         val s = getSigner() ?: return
         scope.launch {
-            val privateJson = Nip51.buildMuteListContent(muteRepo.getBlockedPubkeys(), muteRepo.getMutedWords())
+            // Threads and hashtags ride along: a list restored from relay
+            // history may hold mutes this app can't create, and dropping them
+            // on rebuild would undo the restore on the next edit.
+            val privateJson = Nip51.buildMuteListContent(
+                muteRepo.getBlockedPubkeys(),
+                muteRepo.getMutedWords(),
+                muteRepo.getMutedThreads(),
+                muteRepo.getMutedHashtags()
+            )
             val encrypted = s.nip44Encrypt(privateJson, s.pubkeyHex)
             val event = s.signEvent(kind = Nip51.KIND_MUTE_LIST, content = encrypted, tags = emptyList())
             relayPool.sendToWriteRelays(ClientMessage.event(event))
@@ -251,10 +267,14 @@ class SocialActionManager(
                 // sendToAllRelays covers read + write in a single pass, so send
                 // once to avoid delivering the same EVENT to write relays twice.
                 // Only if nothing was connected do we reconnect write relays and retry.
-                if (relayPool.sendToAllRelays(msg) == 0 && relayPool.ensureWriteRelaysConnected() > 0) {
-                    relayPool.sendToAllRelays(msg)
+                var sent = relayPool.sendToAllRelays(msg)
+                if (sent == 0 && relayPool.ensureWriteRelaysConnected() > 0) {
+                    sent = relayPool.sendToAllRelays(msg)
                 }
-            } catch (_: Exception) {}
+                _broadcastResult.tryEmit(sent)
+            } catch (_: Exception) {
+                _broadcastResult.tryEmit(0)
+            }
         }
     }
 
@@ -583,7 +603,7 @@ class SocialActionManager(
                 // Also send to the poll's specified relays per NIP-88
                 val pollEvent = eventRepo.getEvent(pollEventId)
                 if (pollEvent != null) {
-                    for (url in Nip88.parsePollRelays(pollEvent)) {
+                    for (url in Nip88.cappedPollRelays(pollEvent)) {
                         relayPool.sendToRelayOrEphemeral(url, msg)
                     }
                 }
