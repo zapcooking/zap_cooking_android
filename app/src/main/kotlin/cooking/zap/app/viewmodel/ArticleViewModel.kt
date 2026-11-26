@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import cooking.zap.app.nostr.ClientMessage
 import cooking.zap.app.nostr.Filter
 import cooking.zap.app.nostr.Nip10
+import cooking.zap.app.nostr.Nip22
 import cooking.zap.app.nostr.Nip57
 import cooking.zap.app.nostr.NostrEvent
 import cooking.zap.app.viewmodel.thread.ThreadFlattener
@@ -217,6 +218,7 @@ class ArticleViewModel : ViewModel() {
     ) {
         // Seed reply counts from already-loaded comments (before engagement subscriptions)
         for (event in commentEvents.values) {
+            if (isIgnoredStrayKind1(event)) continue
             val parentId = Nip10.getReplyTarget(event) ?: articleEventId ?: continue
             eventRepo.addReplyCount(parentId, event.id)
         }
@@ -318,10 +320,23 @@ class ArticleViewModel : ViewModel() {
         }
     }
 
+
+    /**
+     * Kind 1 notes replying to a 1111 comment are main-feed notes, not comment
+     * replies — hidden from the comment tree and never counted. Private rumor
+     * replies are exempt. Ports barrydeen/wisp#667; the `k`-tag path is the
+     * one that can fire today (the comment subs are kind-1-only), the
+     * parent-kind path arms the tree for kind-1111 comment ingest.
+     */
+    private fun isIgnoredStrayKind1(event: NostrEvent): Boolean =
+        event.kind == 1 &&
+            Nip22.isStrayKind1OnComment(event) { id -> commentEvents[id]?.kind }
+
     private fun rebuildTree(articleEventId: String?) {
         val parentToChildren = mutableMapOf<String, MutableList<NostrEvent>>()
 
         for (event in commentEvents.values) {
+            if (isIgnoredStrayKind1(event)) continue
             val replyTarget = Nip10.getReplyTarget(event)
             val parentId = when {
                 replyTarget != null && replyTarget in commentEvents -> replyTarget

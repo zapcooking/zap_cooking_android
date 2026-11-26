@@ -113,6 +113,7 @@ import androidx.compose.ui.window.DialogProperties
 import cooking.zap.app.R
 import cooking.zap.app.ui.theme.WispThemeColors
 import cooking.zap.app.nostr.Bolt11
+import cooking.zap.app.nostr.BlossomUri
 import cooking.zap.app.nostr.Noffer
 import cooking.zap.app.nostr.NofferData
 import cooking.zap.app.nostr.toNpub
@@ -202,15 +203,6 @@ data class NoteActions(
     val onAskCheffy: ((NostrEvent) -> Unit)? = null,
 )
 
-data class MediaMeta(
-    val url: String,
-    val mime: String? = null,
-    val dimension: String? = null,
-    val thumbhash: String? = null,
-    val blurhash: String? = null,
-    val image: String? = null
-)
-
 internal sealed interface ContentSegment {
     data class TextSegment(val text: String) : ContentSegment
     data class ImageSegment(val meta: MediaMeta) : ContentSegment
@@ -247,38 +239,6 @@ private val audioMimeTypes = setOf("audio/mpeg", "audio/wav", "audio/ogg", "audi
 // Matches a bare SHA-256 hex hash as the URL path (no extension)
 private val blossomPathRegex = Regex("""^/[0-9a-f]{64}$""", RegexOption.IGNORE_CASE)
 
-/**
- * Parse NIP-92 imeta tags from a list of tags to build a URL→metadata map.
- * Tag format: ["imeta", "url https://...", "m image/png", "dim 1024x768", "thumbhash ...", "blurhash ...", "image https://...", ...]
- */
-fun parseImetaTags(tags: List<List<String>>): Map<String, MediaMeta> {
-    val map = mutableMapOf<String, MediaMeta>()
-    for (tag in tags) {
-        if (tag.firstOrNull() != "imeta" || tag.size < 2) continue
-        var url: String? = null
-        var mime: String? = null
-        var dim: String? = null
-        var thumb: String? = null
-        var blur: String? = null
-        var image: String? = null
-        for (i in 1 until tag.size) {
-            val entry = tag[i]
-            when {
-                entry.startsWith("url ") -> url = entry.removePrefix("url ")
-                entry.startsWith("m ") -> mime = entry.removePrefix("m ")
-                entry.startsWith("dim ") -> dim = entry.removePrefix("dim ")
-                entry.startsWith("thumbhash ") -> thumb = entry.removePrefix("thumbhash ")
-                entry.startsWith("blurhash ") -> blur = entry.removePrefix("blurhash ")
-                entry.startsWith("image ") -> image = entry.removePrefix("image ")
-            }
-        }
-        if (url != null) {
-            map[url] = MediaMeta(url = url, mime = mime, dimension = dim, thumbhash = thumb, blurhash = blur, image = image)
-        }
-    }
-    return map
-}
-
 private fun classifyByMime(mime: String): String? = when {
     imageMimeTypes.any { mime.startsWith(it) } -> "image"
     videoMimeTypes.any { mime.startsWith(it) } -> "video"
@@ -296,7 +256,7 @@ private fun isBlossomUrl(url: String): Boolean {
     }
 }
 
-private val combinedRegex = Regex("""nostr:(note1|nevent1|npub1|nprofile1|naddr1)[a-z0-9]+|(?<!\w)(npub1[a-z0-9]{58})(?!\w|\.[a-zA-Z])|(?:https?|wss?)://\S+|(?<![\w@])((?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+(?:com|net|org|io|dev|app|pro|ai|co|me|info|xyz|cc|tv|to|gg|sh|im|is|it|rs|ly|site|online|store|tech|cloud|social|world|earth|space|lol|wtf|family|life|art|design|blog|news|live|video|media|chat|games|money|finance|agency|studio|build|run|codes|systems|network|zone|pub|blue|limo|fyi|wiki|page|link|click|exchange|markets|fun|club|today)(?:/\S*)?)(?!\w)|(?<!\w)#([\p{L}0-9_][\p{L}\p{M}0-9_-]*)|(?<!\w)((?:note1|nevent1|nprofile1|naddr1)[a-z0-9]{10,})(?!\w)""", RegexOption.IGNORE_CASE)
+private val combinedRegex = Regex("""nostr:(note1|nevent1|npub1|nprofile1|naddr1)[a-z0-9]+|(?<!\w)(npub1[a-z0-9]{58})(?!\w|\.[a-zA-Z])|(?:https?|wss?)://\S+|blossom:\S+|(?<![\p{L}\p{M}\p{Nd}_@.])((?:[\p{L}\p{M}0-9](?:[\p{L}\p{M}0-9-]*[\p{L}\p{M}0-9])?\.)+(?:${IANA_TLD_ALTERNATION})(?:/\S*)?)(?![\p{L}\p{M}\p{Nd}_])|(?<!\w)#([\p{L}0-9_][\p{L}\p{M}0-9_-]*)|(?<!\w)((?:note1|nevent1|nprofile1|naddr1)[a-z0-9]{10,})(?!\w)""", RegexOption.IGNORE_CASE)
 
 private val emojiShortcodeRegex = Regex(""":([a-zA-Z0-9_-]+):""")
 
@@ -333,27 +293,17 @@ internal fun parseContent(content: String, emojiMap: Map<String, String> = empty
         if (!hashtagCapture.isNullOrEmpty() && token.startsWith("#")) {
             segments.add(ContentSegment.HashtagSegment(hashtagCapture))
         } else if (!bareDomainCapture.isNullOrEmpty() && !token.startsWith("http")) {
-            val url = "https://$bareDomainCapture"
-            val meta = imetaMap[url]
-            val imetaMime = meta?.mime?.let { classifyByMime(it) }
-            val ext = url.substringAfterLast('.').substringBefore('?').lowercase()
-            when {
-                imetaMime == "image" -> segments.add(ContentSegment.ImageSegment(meta!!))
-                imetaMime == "video" -> segments.add(ContentSegment.VideoSegment(meta!!))
-                imetaMime == "audio" -> segments.add(ContentSegment.AudioSegment(meta!!))
-                ext in imageExtensions -> segments.add(ContentSegment.ImageSegment(meta ?: MediaMeta(url)))
-                ext in videoExtensions -> segments.add(ContentSegment.VideoSegment(meta ?: MediaMeta(url)))
-                ext in audioExtensions -> segments.add(ContentSegment.AudioSegment(meta ?: MediaMeta(url)))
-                isBlossomUrl(url) -> segments.add(ContentSegment.UnknownMediaSegment(meta ?: MediaMeta(url)))
-                else -> {
-                    // Compute the (regex-heavy) YouTube parse once and branch on the result.
-                    val yt = parseYouTube(url)
-                    when {
-                        yt != null -> segments.add(ContentSegment.YouTubeSegment(yt.videoId, yt.startSeconds, url))
-                        isStandaloneUrl(content, match.range) -> segments.add(ContentSegment.LinkSegment(url))
-                        else -> segments.add(ContentSegment.InlineLinkSegment(url))
-                    }
-                }
+            // A bare-domain match is a fuzzy inference: always an inline link
+            // with a synthesized scheme — never a preview card, media embed,
+            // or YouTube player. A false positive must cost at most a stray
+            // underline.
+            val trimmedCapture = bareDomainCapture.trimEnd('.', ',', ')', ']', ';', ':', '!', '?')
+            val url = "https://$trimmedCapture"
+            segments.add(ContentSegment.InlineLinkSegment(url))
+            // The regex path `(\S*)` swallows trailing punctuation; re-emit it
+            // as text instead of silently eating it.
+            bareDomainCapture.drop(trimmedCapture.length).takeIf { it.isNotEmpty() }?.let {
+                segments.add(ContentSegment.TextSegment(it))
             }
         } else if (token.startsWith("nostr:")) {
             when (val decoded = Nip19.decodeNostrUri(token)) {
@@ -378,7 +328,11 @@ internal fun parseContent(content: String, emojiMap: Map<String, String> = empty
             val isWebSocket = url.startsWith("wss://") || url.startsWith("ws://")
             val meta = imetaMap[url]
             val imetaMime = meta?.mime?.let { classifyByMime(it) }
-            val ext = url.substringAfterLast('.').substringBefore('?').lowercase()
+            // A `blossom:` URI's query carries dotted server hints, so the
+            // last '.' in the raw string sits inside them — the extension
+            // must come from the parsed reference, not from the tail.
+            val ext = if (url.startsWith(BlossomUri.SCHEME, ignoreCase = true)) BlossomUri.parse(url)?.ext
+                else url.substringAfterLast('.').substringBefore('?').lowercase()
             when {
                 imetaMime == "image" -> segments.add(ContentSegment.ImageSegment(meta!!))
                 imetaMime == "video" -> segments.add(ContentSegment.VideoSegment(meta!!))
@@ -1020,8 +974,8 @@ fun RichContent(
     val allMediaItems = remember(segments) {
         segments.mapNotNull { seg ->
             when (seg) {
-                is ContentSegment.ImageSegment -> MediaPagerItem.Image(seg.meta.url)
-                is ContentSegment.UnknownMediaSegment -> MediaPagerItem.Image(seg.meta.url)
+                is ContentSegment.ImageSegment -> MediaPagerItem.Image(seg.meta.url, seg.meta.alt)
+                is ContentSegment.UnknownMediaSegment -> MediaPagerItem.Image(seg.meta.url, seg.meta.alt)
                 is ContentSegment.VideoSegment -> MediaPagerItem.Video(seg.meta.url, posterModel = seg.meta.url)
                 else -> null
             }
@@ -2071,7 +2025,7 @@ private fun ArticleCard(
                     val ratio = remember(meta.dimension) { parseAspectRatio(meta.dimension) }
                     LoadingAsyncImage(
                         model = image,
-                        contentDescription = title,
+                        contentDescription = meta.alt ?: title,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
                             .fillMaxWidth()
@@ -2240,7 +2194,7 @@ private fun LiveStreamCardContent(
                     val blurPainter = rememberMediaPlaceholderPainter(meta.thumbhash, meta.blurhash, meta.dimension)
                     LoadingAsyncImage(
                         model = image,
-                        contentDescription = title,
+                        contentDescription = meta.alt ?: title,
                         contentScale = ContentScale.Crop,
                         blurPainter = blurPainter,
                         modifier = Modifier
@@ -2785,7 +2739,7 @@ private fun ImageWithContextMenu(meta: MediaMeta, onFullScreen: () -> Unit) {
     Box {
         LoadingAsyncImage(
             model = url,
-            contentDescription = "Image",
+            contentDescription = meta.alt ?: "Image",
             contentScale = ContentScale.FillWidth,
             blurPainter = blurPainter,
             onClick = onFullScreen,
@@ -2795,6 +2749,16 @@ private fun ImageWithContextMenu(meta: MediaMeta, onFullScreen: () -> Unit) {
                 .let { if (ratio != null) it.aspectRatio(ratio) else it }
                 .clip(RoundedCornerShape(12.dp)),
         )
+        // Sibling of the image tap target (never nested) so assistive tech
+        // gets two clean focus stops: the described image, then the badge.
+        if (!meta.alt.isNullOrBlank()) {
+            AltBadgeWithSheet(
+                alt = meta.alt,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(8.dp)
+            )
+        }
         DropdownMenu(
             expanded = showMenu,
             onDismissRequest = { showMenu = false }
@@ -2849,7 +2813,7 @@ internal fun InlineVideoPlayerWithFullscreen(meta: MediaMeta, onFullScreen: (pos
             ) {
                 Icon(
                     imageVector = Icons.Filled.PlayArrow,
-                    contentDescription = "Load video",
+                    contentDescription = meta.alt ?: "Load video",
                     modifier = Modifier.size(48.dp),
                     tint = if (blurPainter != null) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -2951,6 +2915,7 @@ internal fun InlineVideoPlayerWithFullscreen(meta: MediaMeta, onFullScreen: (pos
             }
             override fun onIsPlayingChanged(playing: Boolean) {
                 isPlaying = playing
+                context.updateKeepScreenOn(playing)
                 if (!playing && player.playbackState == Player.STATE_READY) {
                     userPaused = true
                 }
@@ -2972,6 +2937,7 @@ internal fun InlineVideoPlayerWithFullscreen(meta: MediaMeta, onFullScreen: (pos
             resumePositionMs = player.currentPosition
             isPlaying = false
             isBuffering = false
+            context.updateKeepScreenOn(false)
             exoPlayer = null
             // Only release if not handed off to PiP
             if (PipController.pipState.value?.url != url) {
@@ -3304,6 +3270,7 @@ private fun InlineVideoPlayer(url: String, modifier: Modifier = Modifier) {
             }
             override fun onIsPlayingChanged(playing: Boolean) {
                 isPlaying = playing
+                context.updateKeepScreenOn(playing)
                 if (!playing && player.playbackState == Player.STATE_READY) {
                     userPaused = true
                 }
@@ -3325,6 +3292,7 @@ private fun InlineVideoPlayer(url: String, modifier: Modifier = Modifier) {
             resumePositionMs = player.currentPosition
             isPlaying = false
             isBuffering = false
+            context.updateKeepScreenOn(false)
             exoPlayer = null
             if (PipController.pipState.value?.url != url) {
                 player.release()
@@ -3618,13 +3586,74 @@ private suspend fun fetchOgData(url: String): OgData? = withContext(Dispatchers.
     }
 }
 
-private fun unescapeHtml(s: String): String = s
-    .replace("&amp;", "&")
-    .replace("&lt;", "<")
-    .replace("&gt;", ">")
-    .replace("&quot;", "\"")
-    .replace("&#39;", "'")
-    .replace("&#x27;", "'")
+// Decode HTML character references in OG text: common named entities plus
+// decimal (&#39;, &#039;) and hex (&#x27;) numeric references. Single
+// left-to-right pass, so escaped source text like "&amp;#039;" decodes to
+// the literal "&#039;" rather than double-decoding to "'".
+internal fun unescapeHtml(s: String): String {
+    if (!s.contains('&')) return s
+    val named = mapOf(
+        "amp" to "&", "lt" to "<", "gt" to ">", "quot" to "\"", "apos" to "'",
+        "nbsp" to "\u00A0", "mdash" to "\u2014", "ndash" to "\u2013",
+        "hellip" to "\u2026", "lsquo" to "\u2018", "rsquo" to "\u2019",
+        "ldquo" to "\u201C", "rdquo" to "\u201D",
+    )
+    val out = StringBuilder(s.length)
+    var i = 0
+    while (i < s.length) {
+        val c = s[i]
+        if (c != '&') {
+            out.append(c)
+            i++
+            continue
+        }
+        // A character reference is '&' + body + ';'; bound the body at 10
+        // characters (`&#x10FFFF;` and friends all fit well inside).
+        val limit = minOf(i + 11, s.length)
+        var body: String? = null
+        var end = i + 1
+        while (end < limit) {
+            if (s[end] == ';') {
+                body = s.substring(i + 1, end)
+                break
+            }
+            end++
+        }
+        val replacement = body?.let { decodeEntity(it, named) }
+        if (body != null && replacement != null) {
+            out.append(replacement)
+            i = end + 1
+        } else {
+            out.append(c)
+            i++
+        }
+    }
+    return out.toString()
+}
+
+private fun decodeEntity(body: String, named: Map<String, String>): String? {
+    named[body]?.let { return it }
+    if (body.startsWith("#")) {
+        val digits = body.substring(1)
+        val code = if (digits.startsWith("x") || digits.startsWith("X")) {
+            digits.substring(1).toIntOrNull(16)
+        } else {
+            digits.toIntOrNull(10)
+        }
+        // Surrogates and values above U+10FFFF can't form a Unicode scalar:
+        // toChars throws for out-of-range values, surrogates are rejected
+        // explicitly. Both pass through as literal source text.
+        if (code != null && code !in 0xD800..0xDFFF) {
+            try {
+                return Character.toChars(code).concatToString()
+            } catch (_: IllegalArgumentException) {
+                return null
+            }
+        }
+    }
+    return null
+}
+
 
 @Composable
 internal fun LinkPreview(url: String) {

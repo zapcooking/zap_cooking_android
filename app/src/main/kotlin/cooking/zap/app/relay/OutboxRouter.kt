@@ -3,6 +3,7 @@ package cooking.zap.app.relay
 import android.util.Log
 import cooking.zap.app.nostr.ClientMessage
 import cooking.zap.app.nostr.Filter
+import cooking.zap.app.nostr.Nip22
 import cooking.zap.app.repo.RelayListRepository
 
 class OutboxRouter(
@@ -305,12 +306,21 @@ class OutboxRouter(
      * Subscribe to replies on a user's read relays (where commenters should publish).
      * Falls back to general relays when no read relays are known.
      */
-    fun subscribeToUserReadRelays(subId: String, pubkey: String, filter: Filter): Set<String> {
+    fun subscribeToUserReadRelays(subId: String, pubkey: String, filter: Filter): Set<String> =
+        subscribeToUserReadRelays(subId, pubkey, listOf(filter))
+
+    /**
+     * Multi-filter variant: all filters ride in ONE REQ frame (relay-side OR
+     * between sibling filter objects). Used by the thread screen, whose NIP-22
+     * comment filter (#E) must never be folded into the reply filter (#e) —
+     * within a single filter the conditions are ANDed.
+     */
+    fun subscribeToUserReadRelays(subId: String, pubkey: String, filters: List<Filter>): Set<String> {
         val targetedRelays = mutableSetOf<String>()
         val readRelays = relayListRepo.getReadRelays(pubkey)
 
         if (readRelays != null) {
-            val msg = ClientMessage.req(subId, filter)
+            val msg = ClientMessage.req(subId, filters)
             for (url in readRelays) {
                 if (relayPool.sendToRelayOrEphemeral(url, msg)) {
                     targetedRelays.add(url)
@@ -320,7 +330,7 @@ class OutboxRouter(
 
         // Fallback: if no targeted relays found, send to all general relays
         if (targetedRelays.isEmpty()) {
-            val msg = ClientMessage.req(subId, filter)
+            val msg = ClientMessage.req(subId, filters)
             relayPool.sendToAll(msg)
             targetedRelays.addAll(relayPool.getRelayUrls())
         }
@@ -486,7 +496,7 @@ class OutboxRouter(
         for ((relayUrl, eventIds) in relayToEventIds) {
             val uniqueIds = eventIds.distinct()
             val filters = uniqueIds.chunked(MAX_ETAGS_PER_FILTER).map { chunk ->
-                Filter(kinds = listOf(1, 5, 6, 7, 1018, 9735), eTags = chunk, limit = 500, since = since)
+                Filter(kinds = listOf(1, Nip22.KIND_COMMENT, 5, 6, 7, 1018, 9735), eTags = chunk, limit = 500, since = since)
             }
             val msg = if (filters.size == 1) ClientMessage.req(prefix, filters[0])
             else ClientMessage.req(prefix, filters)
@@ -499,7 +509,7 @@ class OutboxRouter(
         if (fallbackEventIds.isNotEmpty()) {
             val uniqueIds = fallbackEventIds.distinct()
             val filters = uniqueIds.chunked(MAX_ETAGS_PER_FILTER).map { chunk ->
-                Filter(kinds = listOf(1, 5, 6, 7, 1018, 9735), eTags = chunk, limit = 500, since = since)
+                Filter(kinds = listOf(1, Nip22.KIND_COMMENT, 5, 6, 7, 1018, 9735), eTags = chunk, limit = 500, since = since)
             }
             val msg = if (filters.size == 1) ClientMessage.req(prefix, filters[0])
             else ClientMessage.req(prefix, filters)
@@ -512,7 +522,7 @@ class OutboxRouter(
             val allEventIds = eventsByAuthor.values.flatten().distinct()
             if (allEventIds.isNotEmpty()) {
                 val filters = allEventIds.chunked(MAX_ETAGS_PER_FILTER).map { chunk ->
-                    Filter(kinds = listOf(1, 5, 6, 7, 1018, 9735), eTags = chunk, limit = 500, since = since)
+                    Filter(kinds = listOf(1, Nip22.KIND_COMMENT, 5, 6, 7, 1018, 9735), eTags = chunk, limit = 500, since = since)
                 }
                 val msg = if (filters.size == 1) ClientMessage.req(prefix, filters[0])
                 else ClientMessage.req(prefix, filters)

@@ -1,6 +1,36 @@
 # Changelog
 
-# Changelog
+## [1.7.0]
+
+🛟 Data recovery — Lost follows, mutes, bookmarks, relay lists or profile details to another app overwriting them? Data recovery finds earlier versions of your lists on relays, shows you exactly what a restore would change, and puts them back with one confirmation.
+
+💬 Complete comment threads — Replies to comments now show up in full, however deep the conversation goes, and replying to a comment keeps it in the same thread. Stray notes that only look like replies no longer clutter threads or inflate reply counts.
+
+🏠 Choose your start tab — A new Startup setting under Interface lets you open the app on Feed or Recipes. Feed is now the default.
+
+🎞️ GIFs from nostr.build — The GIF picker now searches gifs.nostr.build, with topic chips to start from, suggestions as you type, and a grid that keeps each GIF's shape. Picked GIFs post as GIFs (no longer converted to video), with their title filled in as alt text. The alt-text editor is also roomier, now opening as a full-width sheet.
+
+🔗 Smarter links — Bare web addresses like zap.cooking are now tappable, including international domains, without swallowing trailing punctuation or mangling email addresses.
+
+🎬 Plus: the screen stays awake while a video plays in your feed, and note details now show what kind of event you're looking at.
+
+
+## [1.6.0]
+
+📝 Drafts you can trust — Posts you've published no longer come back as drafts, and "Draft saved" only appears when something was actually saved. A restored draft now shows "Continuing your last draft" with a Discard option to start fresh.
+
+⏱️ Safer undo countdown — If you leave the composer during the undo countdown and come back, your pending post keeps its own settings: private replies stay private, and gallery posts, scheduled posts, polls and content warnings go out exactly as you set them.
+
+🖼️ Better attachments and alt text — Photos and media now sit as their own tiles on your draft, separate from your text, and can be reordered by dragging. Add image descriptions (alt text) for screen readers, or have Cheffy draft one for you with Cook+.
+
+⚡ Wallet at a glance — A mini-wallet in the sidebar shows your balance (with a hide option), and you'll now be told within seconds if a connected NWC wallet has been revoked or isn't responding.
+
+💱 Accurate payment history — Token transfers made from the same wallet in another app no longer show up as huge sats amounts; they're shown in their own units instead.
+
+🔍 Search in the bottom bar — Search now has its own tab, and the wallet moves to the sidebar, matching the iOS app.
+
+🎨 Plus: a simple System / Light / Dark appearance setting, poll authors can now see their own results and who voted, multiple cooking timers stack neatly instead of squeezing side by side, and a cleaner look for threads with no replies yet.
+
 
 ## [1.5.1]
 

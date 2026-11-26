@@ -21,6 +21,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Repeat
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
@@ -41,6 +43,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import kotlin.math.roundToInt
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -50,6 +53,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.annotation.StringRes
 import cooking.zap.app.R
 import cooking.zap.app.ui.util.AmountFormatter
+import cooking.zap.app.nostr.EventKindLabel
+import cooking.zap.app.nostr.Nip88
 import cooking.zap.app.nostr.NostrEvent
 import cooking.zap.app.nostr.toNpub
 import cooking.zap.app.nostr.ProfileData
@@ -522,6 +527,107 @@ private fun RelayUrlChip(url: String) {
     }
 }
 
+/**
+ * Per-choice voter lists for a NIP-88 poll, shown in the post details drawer.
+ * Choices are ordered by tally descending; tapping one expands it into the full
+ * list of voters who picked it. Mirrors the iOS details panel.
+ */
+@Composable
+fun PollVotesSection(
+    event: NostrEvent,
+    voteCounts: Map<String, Int>,
+    totalVotes: Int,
+    votersByOption: Map<String, List<String>>,
+    resolveProfile: (String) -> ProfileData?,
+    onProfileClick: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val options = remember(event.id) { Nip88.parsePollOptions(event) }
+    if (options.isEmpty() || votersByOption.isEmpty()) return
+    var expandedOptionId by remember(event.id) { mutableStateOf<String?>(null) }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 8.dp)
+    ) {
+        Text(
+            text = stringResource(R.string.poll_votes),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(6.dp))
+        options.sortedByDescending { voteCounts[it.id] ?: 0 }.forEach { option ->
+            val voters = votersByOption[option.id].orEmpty()
+            val count = voteCounts[option.id] ?: 0
+            val percent = if (totalVotes > 0) (count * 100f / totalVotes).roundToInt() else 0
+            val isExpanded = expandedOptionId == option.id
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        expandedOptionId = if (isExpanded) null else option.id
+                    }
+                    .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = option.label,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "$count \u00b7 $percent%",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Icon(
+                    imageVector = if (isExpanded) Icons.Filled.KeyboardArrowUp
+                    else Icons.Filled.KeyboardArrowDown,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            if (isExpanded) {
+                Column(modifier = Modifier.padding(start = 4.dp, bottom = 4.dp)) {
+                    voters.forEach { pubkey ->
+                        val profile = resolveProfile(pubkey)
+                        val displayName = remember(profile, pubkey) {
+                            profile?.displayString
+                                ?: pubkey.toNpub().let { "${it.take(12)}...${it.takeLast(4)}" }
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onProfileClick(pubkey) }
+                                .padding(vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            ProfilePicture(url = profile?.picture, size = 26)
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = displayName,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SeenOnSection(
@@ -615,6 +721,30 @@ fun ClientTagSection(
                 fontWeight = FontWeight.Medium
             )
         }
+    }
+}
+
+/**
+ * The event kind, styled like the other drawer rows so it sits above "Seen on"
+ * as part of the who-made-this pair with "Posted via …" — kind from
+ * [EventKindLabel], client from the `client` tag. Ports wisp-ios `kindSection`.
+ */
+@Composable
+fun EventKindSection(
+    kind: Int,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+    ) {
+        Text(
+            text = EventKindLabel.label(kind),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 

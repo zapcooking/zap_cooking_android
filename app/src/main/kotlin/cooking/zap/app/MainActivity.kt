@@ -16,6 +16,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import cooking.zap.app.repo.InterfacePreferences
@@ -46,10 +47,18 @@ class MainActivity : FragmentActivity() {
         setContent {
             val prefs = remember { getSharedPreferences("wisp_settings", Context.MODE_PRIVATE) }
             val interfacePrefs = remember { InterfacePreferences(this@MainActivity) }
-            var isDarkTheme by rememberSaveable { mutableStateOf(prefs.getBoolean("dark_theme", true)) }
-            var accentColor by remember { mutableStateOf(Color(interfacePrefs.getAccentColor())) }
+            var appearance by remember {
+                mutableStateOf(interfacePrefs.getAppearanceMode())
+            }
+            // `isSystemInDarkTheme()` recomposes when the OS flips, so SYSTEM
+            // tracks it live rather than only at launch.
+            val systemDark = isSystemInDarkTheme()
+            val isDarkTheme = when (appearance) {
+                InterfacePreferences.AppearanceMode.SYSTEM -> systemDark
+                InterfacePreferences.AppearanceMode.LIGHT -> false
+                InterfacePreferences.AppearanceMode.DARK -> true
+            }
             var isLargeText by remember { mutableStateOf(interfacePrefs.isLargeText()) }
-            var themeName by remember { mutableStateOf(interfacePrefs.getTheme()) }
             var mediaSettings by remember {
                 mutableStateOf(MediaSettings(
                     autoLoadMedia = interfacePrefs.isAutoLoadMedia(),
@@ -58,12 +67,8 @@ class MainActivity : FragmentActivity() {
                 ))
             }
 
-            val lightNavScrim = if (themeName == "custom") {
-                0xFFF5F5F5.toInt()
-            } else {
-                Themes.getTheme(themeName).light.surface.toArgb()
-            }
-            LaunchedEffect(isDarkTheme, themeName) {
+            val lightNavScrim = Themes.brand.light.surface.toArgb()
+            LaunchedEffect(isDarkTheme) {
                 enableEdgeToEdge(
                     statusBarStyle = if (isDarkTheme) {
                         SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
@@ -85,22 +90,29 @@ class MainActivity : FragmentActivity() {
                 mediaSettings
             }
 
-            WispTheme(isDarkTheme = isDarkTheme, accentColor = accentColor, isLargeText = isLargeText, themeName = themeName) {
+            WispTheme(isDarkTheme = isDarkTheme, isLargeText = isLargeText) {
                 CompositionLocalProvider(LocalMediaSettings provides effectiveMediaSettings) {
                     WispNavHost(
                         deepLinkUri = deepLinkUri.value,
                         onDeepLinkConsumed = { deepLinkUri.value = null },
                         isDarkTheme = isDarkTheme,
+                        // The drawer shortcut is a two-state flip, so it lands
+                        // on an explicit LIGHT or DARK — leaving SYSTEM behind
+                        // is the point of tapping it. SYSTEM is reachable again
+                        // from Interface settings.
                         onToggleTheme = {
-                            isDarkTheme = !isDarkTheme
-                            prefs.edit().putBoolean("dark_theme", isDarkTheme).apply()
+                            val next = if (isDarkTheme) {
+                                InterfacePreferences.AppearanceMode.LIGHT
+                            } else {
+                                InterfacePreferences.AppearanceMode.DARK
+                            }
+                            appearance = next
+                            interfacePrefs.setAppearanceMode(next)
                         },
-                        accentColor = accentColor,
                         isLargeText = isLargeText,
                         onInterfaceChanged = {
-                            accentColor = Color(interfacePrefs.getAccentColor())
                             isLargeText = interfacePrefs.isLargeText()
-                            themeName = interfacePrefs.getTheme()
+                            appearance = interfacePrefs.getAppearanceMode()
                             mediaSettings = MediaSettings(
                                 autoLoadMedia = interfacePrefs.isAutoLoadMedia(),
                                 videoAutoPlay = interfacePrefs.isVideoAutoPlay(),

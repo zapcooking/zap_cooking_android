@@ -72,8 +72,7 @@ data class WalletTransaction(
     /**
      * Amount already scaled by the asset's decimals, at full precision.
      * Kept as a string because token base units are `U128` and can exceed
-     * `Long`. Detail views show this; rows show
-     * `TokenAmount.compact(assetAmount)`.
+     * `Long`. Detail views show this; rows show [assetAmountCompact].
      */
     val assetAmount: String? = null,
     /**
@@ -97,4 +96,50 @@ data class WalletTransaction(
 
     /** True when this row is one leg of a Bitcoin↔USDB conversion. */
     val isConversion: Boolean get() = conversionFrom != null
+
+    /** Row-sized amount: two decimal places, full precision kept in [assetAmount]. */
+    val assetAmountCompact: String? get() = assetAmount?.let { TokenAmounts.compact(it) }
+}
+
+/**
+ * Formatting for non-bitcoin assets that reach the wallet from another app
+ * sharing the same seed. Pure string / BigDecimal math so it is unit testable
+ * without the SDK.
+ */
+object TokenAmounts {
+    /**
+     * Shift a token's base-unit amount by its decimal places.
+     *
+     * Operates on the decimal string rather than a numeric type on purpose:
+     * base units are u128 and overflow Long, and Double loses cents well
+     * before that. Trailing zeros are dropped so a whole amount reads "150"
+     * rather than "150.000000".
+     */
+    fun scale(baseUnits: String, decimals: Int): String {
+        val digits = baseUnits.trim()
+        if (digits.isEmpty() || !digits.all { it.isDigit() }) return baseUnits
+        if (decimals <= 0) return digits
+
+        val padded = if (digits.length > decimals) digits
+                     else "0".repeat(decimals - digits.length + 1) + digits
+        val whole = padded.substring(0, padded.length - decimals)
+        val fraction = padded.substring(padded.length - decimals).trimEnd('0')
+        return if (fraction.isEmpty()) whole else "$whole.$fraction"
+    }
+
+    /**
+     * Round a scaled amount to two places for the transaction row. USDB is
+     * dollars, and six places is both unreadable at a glance and wrong for
+     * what the number means; the expanded detail keeps full precision.
+     *
+     * Dust that would round away to "0.00" keeps its full precision instead -
+     * that would otherwise read as nothing having arrived.
+     */
+    fun compact(scaled: String, places: Int = 2): String {
+        if (!scaled.contains('.')) return scaled
+        val value = scaled.toBigDecimalOrNull() ?: return scaled
+        val rounded = value.setScale(places, java.math.RoundingMode.HALF_UP)
+        if (rounded.signum() == 0 && value.signum() != 0) return scaled
+        return java.text.DecimalFormat("#,##0.00").format(rounded)
+    }
 }

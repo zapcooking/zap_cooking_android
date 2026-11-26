@@ -63,18 +63,19 @@ private fun darkenColor(color: Color, fraction: Float = 0.6f): Color {
 @Composable
 fun WispTheme(
     isDarkTheme: Boolean = true,
-    accentColor: Color = Color(0xFFFF5722),
     isLargeText: Boolean = false,
-    themeName: String = "custom",
     content: @Composable () -> Unit
 ) {
-    val themePreset = remember(themeName) { Themes.getTheme(themeName) }
-    val isCustomTheme = themeName == "custom"
-
-    val primary = if (isCustomTheme) accentColor else themePreset.dark.primary
-    val secondary = remember(primary) { lightenColor(primary) }
-    val primaryContainerDark = remember(primary) { darkenColor(primary, 0.6f) }
-    val primaryContainerLight = remember(primary) { lightenColor(primary, 0.7f) }
+    // One palette, two cuts. The accent color and the sixteen alternate
+    // schemes are gone along with the picker that chose between them, so
+    // there is nothing left to branch on but light versus dark.
+    val colors = if (isDarkTheme) Themes.brand.dark else Themes.brand.light
+    val primaryContainer = remember(colors.primary, isDarkTheme) {
+        if (isDarkTheme) darkenColor(colors.primary, 0.6f) else lightenColor(colors.primary, 0.7f)
+    }
+    val onPrimaryContainer = remember(colors.primary, isDarkTheme) {
+        if (isDarkTheme) lightenColor(colors.primary, 0.5f) else darkenColor(colors.primary, 0.4f)
+    }
 
     // Zap Cooking brand danger (web src/app.css --color-danger): #dc2626
     // light / #ef4444 dark. Material 3's default `error` renders pinkish in
@@ -82,123 +83,50 @@ fun WispTheme(
     // propagates the brand red to every `MaterialTheme.colorScheme.error`
     // consumer (logout, alerts, destructive labels).
     val dangerColor = if (isDarkTheme) Color(0xFFEF4444) else Color(0xFFDC2626)
+
     val colorScheme = if (isDarkTheme) {
-        if (isCustomTheme) {
-            darkColorScheme(
-                primary = accentColor,
-                onPrimary = Color.White,
-                primaryContainer = primaryContainerDark,
-                onPrimaryContainer = lightenColor(accentColor, 0.5f),
-                secondary = secondary,
-                background = Color(0xFF0A0A0B),
-                surface = Color(0xFF1C1C1E),
-                surfaceVariant = Color(0xFF2C2C2E),
-                onBackground = Color(0xFFE0E0E0),
-                onSurface = Color(0xFFE0E0E0),
-                onSurfaceVariant = Color(0xFF9998A0),
-                outline = Color(0xFF38383A),
-                error = dangerColor,
-                onError = Color.White
-            )
-        } else {
-            val colors = themePreset.dark
-            val presetContainerDark = remember(colors.primary) { darkenColor(colors.primary, 0.6f) }
-            darkColorScheme(
-                primary = colors.primary,
-                onPrimary = Color.White,
-                primaryContainer = presetContainerDark,
-                onPrimaryContainer = lightenColor(colors.primary, 0.5f),
-                secondary = colors.secondary,
-                background = colors.background,
-                surface = colors.surface,
-                surfaceVariant = colors.surfaceVariant,
-                onBackground = colors.onBackground,
-                onSurface = colors.onSurface,
-                onSurfaceVariant = colors.onSurfaceVariant,
-                outline = colors.outline,
-                error = dangerColor,
-                onError = Color.White
-            )
-        }
+        darkColorScheme(
+            primary = colors.primary,
+            onPrimary = Color.White,
+            primaryContainer = primaryContainer,
+            onPrimaryContainer = onPrimaryContainer,
+            secondary = colors.secondary,
+            background = colors.background,
+            surface = colors.surface,
+            surfaceVariant = colors.surfaceVariant,
+            onBackground = colors.onBackground,
+            onSurface = colors.onSurface,
+            onSurfaceVariant = colors.onSurfaceVariant,
+            outline = colors.outline,
+            error = dangerColor,
+            onError = Color.White
+        )
     } else {
-        if (isCustomTheme) {
-            lightColorScheme(
-                primary = accentColor,
-                onPrimary = Color.White,
-                primaryContainer = primaryContainerLight,
-                onPrimaryContainer = darkenColor(accentColor, 0.4f),
-                secondary = secondary,
-                background = Color(0xFFECECEC),
-                surface = Color(0xFFF5F5F5),
-                surfaceVariant = Color(0xFFE0E0E0),
-                onBackground = Color(0xFF1C1B1F),
-                onSurface = Color(0xFF1C1B1F),
-                onSurfaceVariant = Color(0xFF6B6B6B),
-                outline = Color(0xFFCCCCCC),
-                error = dangerColor,
-                onError = Color.White
-            )
-        } else {
-            val colors = themePreset.light
-            val presetContainerLight = remember(colors.primary) { lightenColor(colors.primary, 0.7f) }
-            lightColorScheme(
-                primary = colors.primary,
-                onPrimary = Color.White,
-                primaryContainer = presetContainerLight,
-                onPrimaryContainer = darkenColor(colors.primary, 0.4f),
-                secondary = colors.secondary,
-                background = colors.background,
-                surface = colors.surface,
-                surfaceVariant = colors.surfaceVariant,
-                onBackground = colors.onBackground,
-                onSurface = colors.onSurface,
-                onSurfaceVariant = colors.onSurfaceVariant,
-                outline = colors.outline,
-                error = dangerColor,
-                onError = Color.White
-            )
-        }
+        lightColorScheme(
+            primary = colors.primary,
+            onPrimary = Color.White,
+            primaryContainer = primaryContainer,
+            onPrimaryContainer = onPrimaryContainer,
+            secondary = colors.secondary,
+            background = colors.background,
+            surface = colors.surface,
+            surfaceVariant = colors.surfaceVariant,
+            onBackground = colors.onBackground,
+            onSurface = colors.onSurface,
+            onSurfaceVariant = colors.onSurfaceVariant,
+            outline = colors.outline,
+            error = dangerColor,
+            onError = Color.White
+        )
     }
 
-    val wispColors = if (isDarkTheme) {
-        if (isCustomTheme) {
-            WispColors(
-                backgroundColor = Color(0xFF0A0A0B),
-                zapColor = accentColor,
-                repostColor = Color(0xFF4CAF50),
-                bookmarkColor = accentColor,
-                paidColor = Color(0xFFFFD54F)
-            )
-        } else {
-            val colors = themePreset.dark
-            WispColors(
-                backgroundColor = colors.background,
-                zapColor = colors.zapColor,
-                repostColor = colors.repostColor,
-                bookmarkColor = colors.bookmarkColor,
-                paidColor = colors.paidColor
-            )
-        }
-    } else {
-        if (isCustomTheme) {
-            WispColors(
-                backgroundColor = Color(0xFFECECEC),
-                zapColor = Color(0xFFEC4700),
-                repostColor = Color(0xFF2E7D32),
-                bookmarkColor = Color(0xFFEC4700),
-                paidColor = Color(0xFFC9A000)
-            )
-        } else {
-            val colors = themePreset.light
-            WispColors(
-                backgroundColor = colors.background,
-                zapColor = colors.zapColor,
-                repostColor = colors.repostColor,
-                bookmarkColor = colors.bookmarkColor,
-                paidColor = colors.paidColor
-            )
-        }
-    }
+    val wispColors = WispColors(
+        backgroundColor = colors.background,
+        zapColor = colors.zapColor,
+        repostColor = colors.repostColor,
+        bookmarkColor = colors.bookmarkColor,
+        paidColor = colors.paidColor
+    )
 
     val typography = remember(isLargeText) { buildWispTypography(isLargeText) }
 

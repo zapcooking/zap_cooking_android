@@ -1,0 +1,247 @@
+package cooking.zap.app.ui.component
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.unit.dp
+import coil3.compose.AsyncImage
+import cooking.zap.app.FeatureFlags
+import cooking.zap.app.R
+import cooking.zap.app.api.AltTextResult
+
+/**
+ * Live state of an alt editor's "Generate with AI" request, keyed to one
+ * image URL. Shared by the note and recipe composers' view models.
+ */
+data class AltTextGeneration(
+    val url: String,
+    val running: Boolean,
+    val result: AltTextResult? = null
+)
+
+/**
+ * The composer's alt-text editor (alt-text handoff §3): image preview, a
+ * one-line explainer, a capped multiline field with a remaining-count, and —
+ * gated by [FeatureFlags.ALT_TEXT_AI_ENABLED] — the Cook+ "Generate with AI"
+ * action (§4). The generated description is written into the field as an
+ * editable draft; nothing publishes sight-unseen.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AltTextEditorSheet(
+    url: String,
+    initialAlt: String,
+    generation: AltTextGeneration?,
+    onGenerate: () -> Unit,
+    onConsumeGeneration: () -> Unit,
+    onSave: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var field by remember(url) { mutableStateOf(TextFieldValue(initialAlt)) }
+    var seenGeneration by remember(url) { mutableStateOf(false) }
+
+    // Place a freshly generated description into the field as an editable
+    // draft (never auto-save, never auto-publish). Re-opening the editor with
+    // a stale result in flight doesn't re-apply it: [seenGeneration] tracks
+    // the request this editor instance dispatched.
+    LaunchedEffect(generation?.url, generation?.result) {
+        val gen = generation ?: return@LaunchedEffect
+        if (gen.url != url) return@LaunchedEffect
+        if (gen.running) {
+            seenGeneration = true
+        } else if (seenGeneration && gen.result != null) {
+            if (gen.result is AltTextResult.Success) {
+                // Same sanitize as typed input — the server's text is input
+                // too, and an over-limit draft would show a negative
+                // remaining count and republish over-cap.
+                val capped = sanitizeAltText(gen.result.description).orEmpty()
+                field = TextFieldValue(capped, TextRange(capped.length))
+            }
+            onConsumeGeneration()
+        }
+    }
+
+    fun applyInput(value: TextFieldValue): TextFieldValue {
+        // Hard cap mirrors the web editor: 2000 CODE POINTS (a UTF-16-unit
+        // slice of a string ending in an emoji ships half a surrogate pair).
+        val points = value.text.codePointCount(0, value.text.length)
+        if (points <= ALT_TEXT_MAX_CHARS) return value
+        val cut = value.text.substring(0, value.text.offsetByCodePoints(0, ALT_TEXT_MAX_CHARS))
+        return TextFieldValue(cut, TextRange(cut.length))
+    }
+
+    // A bottom sheet rather than a dialog: the field gets the full width and
+    // the keyboard pushes the sheet up instead of cramping a centered box.
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 16.dp)
+                .imePadding()
+        ) {
+            Text(
+                stringResource(R.string.cd_add_alt_text),
+                style = MaterialTheme.typography.titleMedium
+            )
+            Spacer(Modifier.height(12.dp))
+            AsyncImage(
+                model = url,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(220.dp)
+                    .clip(RoundedCornerShape(12.dp))
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = stringResource(R.string.alt_editor_explainer),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(10.dp))
+            OutlinedTextField(
+                value = field,
+                onValueChange = { field = applyInput(it) },
+                placeholder = { Text(stringResource(R.string.alt_editor_hint)) },
+                minLines = 5,
+                maxLines = 10,
+                modifier = Modifier.fillMaxWidth()
+            )
+            // The outlined field carries its own bottom padding; a small gap
+            // here keeps the visual rhythm even with the 10dp gaps above.
+            Spacer(Modifier.height(2.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = stringResource(
+                        R.string.alt_editor_chars_remaining,
+                        ALT_TEXT_MAX_CHARS - field.text.codePointCount(0, field.text.length)
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.weight(1f))
+                if (FeatureFlags.ALT_TEXT_AI_ENABLED && url.startsWith("http")) {
+                    val running = generation?.url == url && generation.running
+                    TextButton(onClick = onGenerate, enabled = !running) {
+                        Text(stringResource(R.string.alt_generate_with_ai))
+                    }
+                    // Cook+ badge — the action is membership-gated server-side (fails closed).
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer
+                    ) {
+                        Text(
+                            text = stringResource(R.string.alt_cookplus_badge),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                        )
+                    }
+                }
+            }
+            GenerationStatus(url = url, generation = generation)
+            Spacer(Modifier.height(8.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                if (initialAlt.isNotEmpty()) {
+                    TextButton(onClick = { onSave("") }) {
+                        Text(stringResource(R.string.alt_editor_clear))
+                    }
+                }
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = onDismiss) {
+                    Text(stringResource(R.string.btn_cancel))
+                }
+                TextButton(onClick = { onSave(field.text) }) {
+                    Text(stringResource(R.string.btn_save), fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GenerationStatus(url: String, generation: AltTextGeneration?) {
+    // Generation progress on its own line — inline with the row above it gets
+    // crunched inside the editor's width.
+    if (generation?.url == url && generation.running) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 4.dp, top = 2.dp)
+        ) {
+            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+            Text(
+                text = stringResource(R.string.alt_generating),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+
+    val result = generation?.takeIf { it.url == url && !it.running }?.result
+    val errorMessage = when (result) {
+        is AltTextResult.NotMember -> stringResource(R.string.alt_error_upsell)
+        is AltTextResult.RateLimited -> stringResource(R.string.alt_error_rate_limited)
+        is AltTextResult.ImageUnreadable -> stringResource(R.string.alt_error_unreadable)
+        is AltTextResult.SignFailed -> stringResource(R.string.alt_error_sign)
+        is AltTextResult.MembershipUnavailable,
+        is AltTextResult.Error -> stringResource(R.string.alt_error_network)
+        null, is AltTextResult.Success -> null
+    }
+    if (errorMessage != null) {
+        Text(
+            text = errorMessage,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.padding(top = 2.dp)
+        )
+    }
+}

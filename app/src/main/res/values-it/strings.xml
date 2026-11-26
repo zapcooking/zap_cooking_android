@@ -439,9 +439,10 @@
     <string name="settings_large_text">Testo grande</string>
     <string name="settings_increase_text_size">Aumenta la dimensione del testo in tutta l\'app</string>
     <string name="settings_language">Lingua</string>
-    <string name="settings_popular_themes">Temi</string>
-    <string name="settings_choose_color_scheme">Scegli schema colori</string>
-    <string name="settings_accent_color">Colore Accento</string>
+    <string name="settings_appearance">Aspetto</string>
+    <string name="settings_appearance_system">Sistema</string>
+    <string name="settings_appearance_light">Chiaro</string>
+    <string name="settings_appearance_dark">Scuro</string>
     <string name="settings_preview">Anteprima</string>
     <string name="settings_new_notes_button">Pulsante Nuove Note</string>
     <string name="settings_hide_new_notes_button">Nascondi pulsante nuove note</string>
@@ -460,7 +461,7 @@
     <string name="settings_video_autoplay">Autoplay video</string>
     <string name="settings_video_autoplay_description">Riproduci automaticamente i video quando scorrono nella vista</string>
     <string name="settings_hide_live_streams">Nascondi le dirette</string>
-    <string name="settings_hide_live_streams_description">Nascondi la riga delle dirette in cima al feed</string>
+    <string name="settings_hide_live_streams_description">Nascondi la riga delle dirette dal feed e interrompi la scoperta delle dirette. Attivo, nessun contenuto live viene caricato o riprodotto</string>
     <string name="settings_client_tag">Tag Cliente</string>
     <string name="settings_tag_notes">Etichetta le note con Zap Cooking</string>
     <string name="settings_tag_notes_description">Includi un\'etichetta che identifica Zap Cooking come cliente. Questo è visibile agli altri.</string>

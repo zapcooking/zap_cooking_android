@@ -1,10 +1,16 @@
 package cooking.zap.app.ui.component
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.layout.Arrangement
@@ -56,6 +62,7 @@ import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.People
 import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -65,6 +72,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.width
@@ -80,6 +88,7 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -87,6 +96,9 @@ import cooking.zap.app.nostr.Nip05
 import cooking.zap.app.nostr.ProfileData
 import cooking.zap.app.nostr.toNpub
 import cooking.zap.app.repo.AccountInfo
+import cooking.zap.app.repo.CurrencyPreferences
+import cooking.zap.app.repo.WalletBalanceDisplayMode
+import cooking.zap.app.ui.util.AmountFormatter
 import cooking.zap.app.ui.util.LocalCanSign
 
 
@@ -123,7 +135,7 @@ fun WispDrawerContent(
     onSocialGraph: () -> Unit = {},
     onSafety: () -> Unit = {},
     onAbout: () -> Unit = {},
-    onFollowRecovery: () -> Unit = {},
+    onLazarus: () -> Unit = {},
     onPowSettings: () -> Unit = {},
     onCustomEmojis: () -> Unit = {},
     onConsole: () -> Unit = {},
@@ -141,6 +153,11 @@ fun WispDrawerContent(
     userStatus: String? = null,
     onUpdateStatus: ((String) -> Unit)? = null,
     onScanResult: (String) -> Unit = {},
+    // Mini-wallet widget (wisp-ios #474 port). `walletConfigured` is the
+    // active wallet's mode != NONE; `walletBalanceMsats` is null whenever
+    // the balance is unknown (never fetched / connecting / errored).
+    walletConfigured: Boolean = false,
+    walletBalanceMsats: Long? = null,
 ) {
     ModalDrawerSheet(
         drawerContainerColor = MaterialTheme.colorScheme.surface,
@@ -163,36 +180,26 @@ fun WispDrawerContent(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                var crashTapCount by remember { mutableIntStateOf(0) }
-                LaunchedEffect(crashTapCount) {
-                    if (crashTapCount > 0) {
-                        delay(2000)
-                        crashTapCount = 0
-                    }
-                }
-                Box(modifier = Modifier.clickable {
-                    crashTapCount++
-                    if (crashTapCount >= 7) {
-                        throw RuntimeException("Test crash")
-                    }
-                    onProfile()
-                }) {
-                    ProfilePicture(url = profile?.picture, size = 64)
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-                // Icon-only affordance that opens the account switcher modal.
-                // Same action (switch or add an account) regardless of how many
-                // accounts are signed in; shows a "+N" badge counting the other
-                // accounts when more than one is signed in.
+                // Avatar + account count in one capsule: the whole pill is a
+                // single tap target that opens the account switcher (switch
+                // or add an account), with a "+N" badge counting the other
+                // accounts when more than one is signed in. The avatar runs
+                // the full height of the capsule and sits flush with the
+                // leading edge — its circle IS the capsule's left cap. Dark
+                // mode sinks the pill a step below the drawer surface so the
+                // avatar reads as a punch-out; light keeps surfaceVariant.
                 val otherAccountCount = (accounts.size - 1).coerceAtLeast(0)
+                val pillBackground = if (isDarkTheme) Color(0xFF030712)
+                    else MaterialTheme.colorScheme.surfaceVariant
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .clip(CircleShape)
+                        .background(pillBackground)
                         .clickable { showAccountSwitcher = true }
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
                 ) {
+                    ProfilePicture(url = profile?.picture, size = 56)
+                    Spacer(modifier = Modifier.width(8.dp))
                     Icon(
                         Icons.Outlined.People,
                         contentDescription = stringResource(R.string.cd_switch_account),
@@ -200,7 +207,7 @@ fun WispDrawerContent(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     if (otherAccountCount > 0) {
-                        Spacer(modifier = Modifier.width(4.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = "+$otherAccountCount",
                             style = MaterialTheme.typography.labelSmall,
@@ -208,6 +215,7 @@ fun WispDrawerContent(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+                    Spacer(modifier = Modifier.width(14.dp))
                 }
                 Spacer(modifier = Modifier.weight(1f))
                 IconButton(onClick = onToggleTheme) {
@@ -362,6 +370,20 @@ fun WispDrawerContent(
 
         Spacer(modifier = Modifier.height(8.dp))
 
+        // Mini-wallet stripe — replaces the plain Wallet menu row with a
+        // live-balance card (hide/show toggle sharing the dashboard's
+        // per-pubkey hidden state, or a "Set up wallet" CTA). Skipped for
+        // watch-only accounts, mirroring wisp-ios #474 — the same gate the
+        // old Wallet row had.
+        if (canSign) {
+            DrawerMiniWalletRow(
+                pubkey = pubkey,
+                walletConfigured = walletConfigured,
+                balanceMsats = walletBalanceMsats,
+                onOpenWallet = onWallet
+            )
+        }
+
         NavigationDrawerItem(
             icon = { Icon(Icons.Outlined.Person, contentDescription = null) },
             label = { Text(stringResource(R.string.drawer_my_profile)) },
@@ -416,19 +438,8 @@ fun WispDrawerContent(
                 onClick = onMessages,
                 modifier = Modifier.height(48.dp).padding(horizontal = 12.dp)
             )
-            NavigationDrawerItem(
-                icon = {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_wallet_outlined),
-                        contentDescription = null,
-                        modifier = Modifier.size(24.dp)
-                    )
-                },
-                label = { Text(stringResource(R.string.nav_wallet)) },
-                selected = false,
-                onClick = onWallet,
-                modifier = Modifier.height(48.dp).padding(horizontal = 12.dp)
-            )
+            // Wallet lives in the mini-wallet widget near the top of the
+            // drawer now.
         }
         // Recipes, Sous Chef, Cheffy, OnlyFood, and Lists drawer entries were
         // removed from the menu. Their callback params
@@ -549,6 +560,15 @@ fun WispDrawerContent(
                     onClick = onAbout,
                     modifier = Modifier.height(48.dp).padding(start = 36.dp, end = 12.dp)
                 )
+                // Data recovery (Lazarus): relay-history restore for lists a
+                // rogue client clobbered.
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.Outlined.History, contentDescription = null) },
+                    label = { Text(stringResource(R.string.lazarus_title)) },
+                    selected = false,
+                    onClick = onLazarus,
+                    modifier = Modifier.height(48.dp).padding(start = 36.dp, end = 12.dp)
+                )
                 // Advanced — power-user / developer settings, nested one level
                 // deeper so they don't crowd the everyday settings above.
                 NavigationDrawerItem(
@@ -593,13 +613,6 @@ fun WispDrawerContent(
                             label = { Text(stringResource(R.string.drawer_custom_emojis)) },
                             selected = false,
                             onClick = onCustomEmojis,
-                            modifier = Modifier.height(48.dp).padding(start = 56.dp, end = 12.dp)
-                        )
-                        NavigationDrawerItem(
-                            icon = { Icon(Icons.Outlined.History, contentDescription = null) },
-                            label = { Text(stringResource(R.string.drawer_restore_follows)) },
-                            selected = false,
-                            onClick = onFollowRecovery,
                             modifier = Modifier.height(48.dp).padding(start = 56.dp, end = 12.dp)
                         )
                         // Network Status — single entry point for relay
@@ -736,9 +749,27 @@ fun WispDrawerContent(
                 versionContext.packageManager.getPackageInfo(versionContext.packageName, 0).versionName ?: "?"
             } catch (_: Exception) { "?" }
         }
+        // Crash-reporting QA hook: 7 taps within 2s of each other crash the
+        // app on purpose ("Test crash"). The version label is the
+        // conventional multi-tap spot and has no competing action — the
+        // hook's previous home was the drawer avatar, which is now the
+        // account-switch pill's leading cap.
+        var crashTapCount by remember { mutableIntStateOf(0) }
+        LaunchedEffect(crashTapCount) {
+            if (crashTapCount > 0) {
+                delay(2000)
+                crashTapCount = 0
+            }
+        }
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .clickable {
+                    crashTapCount++
+                    if (crashTapCount >= 7) {
+                        throw RuntimeException("Test crash")
+                    }
+                }
                 .padding(horizontal = 16.dp, vertical = 16.dp),
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically
@@ -769,4 +800,154 @@ private fun NudgeDot() {
             .clip(CircleShape)
             .background(MaterialTheme.colorScheme.error)
     )
+}
+
+// ── Mini wallet widget ─────────────────────────────────────────────────────
+
+/**
+ * Compact live-balance stripe replacing the Wallet row in the drawer menu.
+ * Shows the active wallet's balance (compacted to "1.2M"-style once the
+ * grouped number gets long), a hide/show toggle that shares the wallet
+ * dashboard's per-pubkey hidden state, and a "Set up wallet" call-to-action
+ * when no wallet is configured. Tapping the stripe opens the wallet tab.
+ * Port of wisp-ios #474 (SidebarMiniWalletView).
+ */
+@Composable
+private fun DrawerMiniWalletRow(
+    pubkey: String?,
+    walletConfigured: Boolean,
+    balanceMsats: Long?,
+    onOpenWallet: () -> Unit
+) {
+    val context = LocalContext.current
+    val prefs = remember(pubkey) {
+        context.getSharedPreferences("wisp_settings", android.content.Context.MODE_PRIVATE)
+    }
+    // Same key the wallet dashboard's balance display uses, so hiding here
+    // hides there and vice versa. The changes flow re-reads on writes from
+    // either surface — this fork's drawer outlives navigation, so the
+    // stripe can't rely on being recomposed fresh after a dashboard visit.
+    val modeVersion by WalletBalanceDisplayMode.changes.collectAsState()
+    var displayMode by remember(pubkey, modeVersion) {
+        mutableStateOf(WalletBalanceDisplayMode.read(prefs, pubkey))
+    }
+    val displayCurrency by CurrencyPreferences.get(context).currency.collectAsState()
+
+    // Hiding captures the current mode under the restore key; unhiding puts
+    // it back (SATS when nothing was captured), so a FIAT dashboard isn't
+    // reset by the drawer toggle.
+    fun toggleHidden() {
+        if (displayMode == WalletBalanceDisplayMode.HIDDEN) {
+            val saved = pubkey?.let { prefs.getString(WalletBalanceDisplayMode.restoreStorageKey(it), null) }
+            val next = WalletBalanceDisplayMode.values()
+                .firstOrNull { it.name.equals(saved, ignoreCase = true) }
+                ?.takeIf { it != WalletBalanceDisplayMode.HIDDEN }
+                ?: WalletBalanceDisplayMode.SATS
+            displayMode = next
+            WalletBalanceDisplayMode.write(prefs, pubkey, next)
+        } else {
+            pubkey?.let {
+                prefs.edit()
+                    .putString(WalletBalanceDisplayMode.restoreStorageKey(it), displayMode.name.lowercase())
+                    .apply()
+            }
+            displayMode = WalletBalanceDisplayMode.HIDDEN
+            WalletBalanceDisplayMode.write(prefs, pubkey, WalletBalanceDisplayMode.HIDDEN)
+        }
+    }
+
+    val balanceText = when {
+        !walletConfigured -> stringResource(R.string.drawer_set_up_wallet)
+        displayMode == WalletBalanceDisplayMode.HIDDEN -> "* * * * *"
+        balanceMsats == null ->
+            // Never render an unknown balance as "0" — see the matching
+            // comment in WalletScreen's balance card.
+            "…"
+        else -> {
+            val sats = balanceMsats / 1000
+            // The wallet-scoped FIAT display mode renders the converted
+            // amount when a rate is cached; there is no app-wide fiat mode
+            // here (unlike dark wisp), so the unit display is the fallback.
+            val fiat = if (displayMode == WalletBalanceDisplayMode.FIAT) {
+                AmountFormatter.formatFiat(sats, displayCurrency)
+            } else null
+            if (fiat != null) {
+                fiat
+            } else {
+                val number = if (sats >= 1_000_000) AmountFormatter.formatSatsShort(sats)
+                else AmountFormatter.formatSatsOnly(sats)
+                stringResource(R.string.amount_sats_format, number)
+            }
+        }
+    }
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            .clickable(onClick = onOpenWallet)
+            // Same leading inset NavigationDrawerItem content gets (12dp row
+            // padding + 16dp internal start padding) so the icon and label
+            // line up with the rest of the menu; the edge-to-edge background
+            // stripe is what sets the widget apart.
+            .padding(start = 28.dp, end = 16.dp, top = 12.dp, bottom = 12.dp)
+    ) {
+        Icon(
+            painter = painterResource(R.drawable.ic_wallet_outlined),
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(24.dp)
+        )
+        Spacer(Modifier.width(12.dp))
+        // One Text so TalkBack reads the figure as a unit.
+        AnimatedContent(
+            targetState = balanceText,
+            transitionSpec = {
+                (slideInVertically(tween(250)) { it / 4 } + fadeIn(tween(250))) togetherWith
+                    (slideOutVertically(tween(250)) { -it / 4 } + fadeOut(tween(250)))
+            },
+            label = "miniWalletBalance"
+        ) { text ->
+            Text(
+                text = text,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Spacer(Modifier.weight(1f))
+        if (walletConfigured) {
+            // The eye's own clickable consumes the tap so it doesn't fall
+            // through to the stripe's open-wallet action.
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    // 48dp minimum touch target (a11y); the icon stays 18dp.
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .clickable { toggleHidden() }
+            ) {
+                Icon(
+                    imageVector = if (displayMode == WalletBalanceDisplayMode.HIDDEN) Icons.Outlined.Visibility
+                    else Icons.Outlined.VisibilityOff,
+                    contentDescription = stringResource(
+                        if (displayMode == WalletBalanceDisplayMode.HIDDEN) R.string.cd_show_balance
+                        else R.string.cd_hide_balance
+                    ),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        } else {
+            Icon(
+                Icons.Outlined.KeyboardArrowRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+    }
 }

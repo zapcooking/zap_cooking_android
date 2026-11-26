@@ -113,6 +113,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.DropdownMenu
@@ -202,7 +203,7 @@ import cooking.zap.app.viewmodel.WalletViewModel
 import breez_sdk_spark.OnchainConfirmationSpeed
 import cooking.zap.app.repo.SparkRepository
 import cooking.zap.app.repo.StableBalanceState
-import cooking.zap.app.repo.TokenAmount
+import cooking.zap.app.repo.TokenAmounts
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -212,6 +213,28 @@ fun WalletScreen(
 ) {
     val walletState by viewModel.walletState.collectAsState()
     val currentPage by viewModel.currentPage.collectAsState()
+
+    // NWC liveness failure (revoked / unresponsive) — raised as an alert so a
+    // dead wallet surfaces within seconds instead of hanging in silence
+    // (zapcooking_ios#140 parity). Dismissal is UI-local: the underlying
+    // problem stays set so refreshState keeps cheaply re-probing instead
+    // of firing full balance RPCs at a dead wallet; only a PASSED re-probe
+    // clears it. A NEW failure (different problem text) re-alerts.
+    val nwcConnectionProblem by viewModel.nwcConnectionProblem.collectAsState()
+    var problemDismissedText by remember { mutableStateOf<String?>(null) }
+    val standingProblem = nwcConnectionProblem?.takeIf { it != problemDismissedText }
+    if (standingProblem != null) {
+        AlertDialog(
+            onDismissRequest = { problemDismissedText = standingProblem },
+            title = { Text(stringResource(R.string.wallet_nwc_not_responding_title)) },
+            text = { Text(standingProblem) },
+            confirmButton = {
+                TextButton(onClick = { problemDismissedText = standingProblem }) {
+                    Text(stringResource(R.string.btn_ok))
+                }
+            }
+        )
+    }
 
     // Always refresh wallet state when this screen appears
     LaunchedEffect(Unit) {
@@ -352,6 +375,9 @@ fun WalletScreen(
             }
             is WalletState.Connected -> {
                 val balanceMsats = (walletState as WalletState.Connected).balanceMsats
+                LaunchedEffect(walletState) {
+                    viewModel.loadTransactions()
+                }
                 when (currentPage) {
                     is WalletPage.SparkBackup -> {
                         val page = currentPage as WalletPage.SparkBackup
@@ -370,10 +396,6 @@ fun WalletScreen(
                         }
                     }
                     is WalletPage.Home -> {
-                        // Preload recent transactions for the inline footer.
-                        LaunchedEffect(walletState) {
-                            if (walletState is WalletState.Connected) viewModel.loadTransactions()
-                        }
                         val profileKey = viewModel.profileRefreshKey.collectAsState().value
                         WalletHomeContent(
                             balanceMsats = balanceMsats,
@@ -1147,8 +1169,11 @@ private fun WalletHomeContent(
     val prefs = remember { context.getSharedPreferences("wisp_settings", android.content.Context.MODE_PRIVATE) }
     // Tri-state balance display (sats / dollars / hidden) — tap the dashboard
     // balance to cycle. Per-pubkey storage; migrates the legacy global
-    // `balance_hidden` Bool on first read for a given pubkey.
-    var balanceDisplay by remember(pubkey) {
+    // `balance_hidden` Bool on first read for a given pubkey. The changes
+    // flow re-reads on writes from the drawer's mini-wallet toggle — the
+    // drawer can be open over this screen, so the mask must apply live.
+    val displayModeVersion by WalletBalanceDisplayMode.changes.collectAsState()
+    var balanceDisplay by remember(pubkey, displayModeVersion) {
         mutableStateOf(WalletBalanceDisplayMode.read(prefs, pubkey))
     }
     val balanceHidden = balanceDisplay == WalletBalanceDisplayMode.HIDDEN
@@ -1548,70 +1573,66 @@ private fun WalletHomeContent(
         Spacer(Modifier.weight(1f))
 
         // ── Recent transactions inline footer ──────────────────────
-        if (recentTransactions.isNotEmpty()) {
-            Column(
-                modifier = Modifier.fillMaxWidth()
-                    .pointerInput(onTransactions) {
-                        var totalDrag = 0f
-                        detectVerticalDragGestures(
-                            onDragStart = { totalDrag = 0f },
-                            onDragEnd = { totalDrag = 0f },
-                            onDragCancel = { totalDrag = 0f }
-                        ) { change, delta ->
-                            totalDrag += delta
-                            if (totalDrag < -40f) {
-                                totalDrag = 0f
-                                change.consume()
-                                onTransactions()
-                            }
+        Column(
+            modifier = Modifier.fillMaxWidth()
+                .pointerInput(onTransactions) {
+                    var totalDrag = 0f
+                    detectVerticalDragGestures(
+                        onDragStart = { totalDrag = 0f },
+                        onDragEnd = { totalDrag = 0f },
+                        onDragCancel = { totalDrag = 0f }
+                    ) { change, delta ->
+                        totalDrag += delta
+                        if (totalDrag < -40f) {
+                            totalDrag = 0f
+                            change.consume()
+                            onTransactions()
                         }
                     }
+                }
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onTransactions)
+                    .padding(vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(onClick = onTransactions)
-                        .padding(vertical = 6.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+                Text(
+                    stringResource(R.string.wallet_recent).uppercase(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        stringResource(R.string.wallet_recent).uppercase(),
-                        style = MaterialTheme.typography.labelSmall,
+                        stringResource(R.string.wallet_view_all),
+                        style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            stringResource(R.string.wallet_view_all),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Icon(
-                            Icons.Default.KeyboardArrowUp,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
-                }
-                HorizontalDivider(
-                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
-                )
-                // Scale the inline history to the device height (Dark Wisp parity).
-                val screenHeightDp = LocalConfiguration.current.screenHeightDp
-                val txCount = when {
-                    screenHeightDp >= 800 -> 5
-                    screenHeightDp >= 720 -> 4
-                    screenHeightDp >= 640 -> 3
-                    else -> 2
-                }
-                recentTransactions.take(txCount).forEach { tx ->
-                    TransactionRow(tx, profileLookup, balanceDisplay)
+                    Spacer(Modifier.width(4.dp))
+                    Icon(
+                        Icons.Default.KeyboardArrowUp,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp)
+                    )
                 }
             }
-        } else {
-            Spacer(Modifier.height(12.dp))
+            HorizontalDivider(
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
+            )
+            // Scale the inline history to the device height (Dark Wisp parity).
+            val screenHeightDp = LocalConfiguration.current.screenHeightDp
+            val txCount = when {
+                screenHeightDp >= 800 -> 5
+                screenHeightDp >= 720 -> 4
+                screenHeightDp >= 640 -> 3
+                else -> 2
+            }
+            recentTransactions.take(txCount).forEach { tx ->
+                TransactionRow(tx, profileLookup, balanceDisplay)
+            }
         }
     }
 }
@@ -3042,8 +3063,12 @@ private fun TransactionHistoryContent(
     // Mirror the dashboard's tri-state display mode on tx rows so a
     // HIDDEN state masks both the dashboard balance AND every per-row
     // amount + fee. iOS port keeps these in lockstep via the same
-    // per-pubkey storage key (`walletBalanceDisplay_<pubkey>`).
-    val displayMode = remember(pubkey) { WalletBalanceDisplayMode.read(prefs, pubkey) }
+    // per-pubkey storage key (`walletBalanceDisplay_<pubkey>`). The
+    // changes signal re-reads on writes from the drawer's mini-wallet
+    // toggle — the drawer can be open over the Transactions page, so
+    // the mask must apply live here too (same contract as the dashboard).
+    val displayModeVersion by WalletBalanceDisplayMode.changes.collectAsState()
+    val displayMode = remember(pubkey, displayModeVersion) { WalletBalanceDisplayMode.read(prefs, pubkey) }
     Column(
         modifier = modifier.fillMaxSize()
     ) {
@@ -3290,6 +3315,22 @@ private fun TransactionRow(
                         style = MaterialTheme.typography.titleMedium,
                         color = signColor
                     )
+                    // Before the fiat branch: a token row has no sats value,
+                    // and the fiat rate converts sats, so running it here
+                    // would only produce a second wrong number.
+                    tx.isTokenTransfer -> {
+                        Text(
+                            "$sign${tx.assetAmountCompact ?: "?"}",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = signColor
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            tx.assetTicker ?: "",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     amountFiat != null -> Text(
                         "$sign$amountFiat",
                         style = MaterialTheme.typography.titleMedium,
@@ -3297,7 +3338,7 @@ private fun TransactionRow(
                     )
                     assetTicker != null -> {
                         Text(
-                            sign + TokenAmount.compact(tx.assetAmount ?: "?"),
+                            sign + TokenAmounts.compact(tx.assetAmount ?: "?"),
                             style = MaterialTheme.typography.titleMedium,
                             color = signColor
                         )
@@ -3329,7 +3370,7 @@ private fun TransactionRow(
                 Text(
                     stringResource(
                         R.string.wallet_asset_fee,
-                        TokenAmount.compact(assetFee),
+                        TokenAmounts.compact(assetFee),
                         assetTicker
                     ),
                     style = MaterialTheme.typography.labelSmall,
@@ -4760,7 +4801,7 @@ private fun WalletSettingsContent(
                     contentColor = Color.White
                 )
             ) {
-                Text("Delete Wallet")
+                Text("Remove Wallet")
             }
         }
 
@@ -5034,7 +5075,7 @@ private fun LightningAddressSetupContent(
             )
             Spacer(Modifier.width(8.dp))
             Text(
-                "@breez.tips",
+                "@sats.zap.cooking",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -5277,7 +5318,7 @@ private fun DeleteWalletConfirmContent(
             when {
                 isDefault -> stringResource(R.string.wallet_switch_wallet)
                 isNwc -> "Disconnect NWC"
-                else -> "Delete Wallet"
+                else -> "Remove Wallet"
             },
             style = MaterialTheme.typography.headlineMedium,
             color = if (isDefault) MaterialTheme.colorScheme.onSurface else Color(0xFFD32F2F)
@@ -5289,32 +5330,31 @@ private fun DeleteWalletConfirmContent(
             when {
                 isDefault -> stringResource(R.string.wallet_switch_wallet_body)
                 isNwc -> "This will remove the NWC connection string from this device. You can reconnect anytime with a new connection string."
-                else -> "This will permanently delete your wallet from this device. Your funds cannot be recovered without your recovery phrase."
+                else -> "This wallet will be removed from this device. Your funds stay safe, and you can restore it anytime with its recovery phrase."
             },
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
         )
 
+        var acknowledgedBackup by remember { mutableStateOf(false) }
+
         if (!isNwc && !isDefault) {
             Spacer(Modifier.height(8.dp))
 
-            Text(
-                "Make sure you have backed up your recovery phrase before proceeding.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = Color(0xFFD32F2F),
-                textAlign = TextAlign.Center
-            )
-
-            Spacer(Modifier.height(24.dp))
-
-            OutlinedTextField(
-                value = confirmText,
-                onValueChange = { new -> if (!NsecPasteGuard.blockIfNsec(confirmText, new)) onConfirmTextChange(new) },
-                label = { Text("Type DELETE to confirm") },
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                singleLine = true
-            )
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Checkbox(
+                    checked = acknowledgedBackup,
+                    onCheckedChange = { acknowledgedBackup = it }
+                )
+                Text(
+                    "I've written down my recovery phrase or confirmed a relay backup",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
         }
 
         Spacer(Modifier.height(24.dp))
@@ -5322,7 +5362,7 @@ private fun DeleteWalletConfirmContent(
         Button(
             onClick = onDelete,
             modifier = Modifier.fillMaxWidth(),
-            enabled = isNwc || isDefault || confirmText == "DELETE",
+            enabled = isNwc || isDefault || acknowledgedBackup,
             colors = if (isDefault) ButtonDefaults.buttonColors()
                 else ButtonDefaults.buttonColors(
                     containerColor = Color(0xFFD32F2F),
@@ -5333,7 +5373,7 @@ private fun DeleteWalletConfirmContent(
                 when {
                     isDefault -> stringResource(R.string.wallet_switch_wallet)
                     isNwc -> "Disconnect"
-                    else -> "Delete Wallet"
+                    else -> "Remove"
                 }
             )
         }

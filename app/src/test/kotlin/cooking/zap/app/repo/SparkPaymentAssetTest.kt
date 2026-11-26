@@ -57,7 +57,7 @@ class SparkPaymentAssetTest {
             conversions = listOf(SparkConversion(from = bitcoinSide(), to = usdbSide()))
         )
         assertEquals("15866330", asset?.baseUnits)
-        assertEquals("15.86633", TokenAmount.scale(asset!!.baseUnits, asset.decimals))
+        assertEquals("15.86633", TokenAmounts.scale(asset!!.baseUnits, asset.decimals))
     }
 
     @Test
@@ -205,7 +205,7 @@ class SparkPaymentAssetTest {
             createdAt = 0,
             settledAt = null,
             assetTicker = asset.ticker,
-            assetAmount = TokenAmount.scale(asset.baseUnits, asset.decimals),
+            assetAmount = TokenAmounts.scale(asset.baseUnits, asset.decimals),
             conversionFrom = extractConversionFrom(conversions)
         )
 

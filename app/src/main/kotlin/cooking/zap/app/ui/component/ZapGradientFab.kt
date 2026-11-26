@@ -20,18 +20,20 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import cooking.zap.app.R
-import cooking.zap.app.ui.theme.ZapFabGradient
+import androidx.compose.material3.MaterialTheme
 
-// Brand palette (amber-500 → orange-500) lives in ui/theme/BrandColors.kt.
 
 private val FAB_SIZE = 56.dp
 
 /**
- * Circular FAB filled with the Zap Cooking brand gradient.
+ * Circular FAB filled with the theme primary — #FF5722 dark, #EC4700 light —
+ * the same solid brand orange the iOS app's FAB uses, so both apps' FABs read
+ * as the same object. (It used to carry the amber→orange brand gradient; the
+ * name stays to keep call sites stable.)
  *
  * Built from a [Box] rather than Material's [androidx.compose.material3.FloatingActionButton]
  * on purpose: the Material FAB draws its own Surface (tonal + shadow layers), and with a
- * transparent container that surface leaves a visible seam over the gradient. A single
+ * transparent container that surface leaves a visible seam over the fill. A single
  * clipped Box gives a clean circle with no artifacts.
  */
 @Composable
@@ -48,7 +50,7 @@ fun ZapGradientFab(
             .shadow(elevation = 6.dp, shape = CircleShape, clip = false)
             .size(FAB_SIZE)
             .clip(CircleShape)
-            .background(brush = ZapFabGradient)
+            .background(MaterialTheme.colorScheme.primary)
             .clickable(
                 interactionSource = interactionSource,
                 indication = ripple(color = Color.White),

@@ -166,6 +166,33 @@ class EventPersistence(
     }
 
     /**
+     * Persisted events of a [kind] whose serialized tags carry an uppercase `E`
+     * naming [rootId], newest first, bounded by [limit]. Matching on the root
+     * inside the query — kind is `@Index`, the needle narrows the rest — so an
+     * old thread isn't missed just because newer comments pushed it out of a
+     * global newest-N kind scan. Event ids are lowercase hex, so the
+     * no-spaces JSON serialization makes `"E","<id>"` a stable needle; callers
+     * re-verify with the parsed tag (a substring match can't distinguish a
+     * real root-scope tag from an exotic lookalike).
+     */
+    fun getEventsByKindAndRootETag(kind: Int, rootId: String, limit: Int = 500): List<NostrEvent> {
+        if (rootId.isEmpty()) return emptyList()
+        return try {
+            box.query(
+                EventEntity_.kind.equal(kind)
+                    .and(EventEntity_.tags.contains("\"E\",\"$rootId\""))
+            )
+                .order(EventEntity_.createdAt, io.objectbox.query.QueryBuilder.DESCENDING)
+                .build()
+                .use { it.find(0, limit.toLong()) }
+                .mapNotNull { it.toNostrEvent() }
+        } catch (e: Exception) {
+            Log.w("EventPersistence", "getEventsByKindAndRootETag failed: ${e.message}")
+            emptyList()
+        }
+    }
+
+    /**
      * All persisted events across several [kinds], newest first, bounded by [limit].
      * Cheap — `kind` is `@Index`. Used by the OnlyFood cache-first paint to pull
      * persisted kind 1/6/1068 events for the food feed.

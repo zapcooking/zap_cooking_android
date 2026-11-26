@@ -1,6 +1,7 @@
 package cooking.zap.app.repo
 
 import cooking.zap.app.db.EventPersistence
+import cooking.zap.app.nostr.BrainstormSearch
 import cooking.zap.app.nostr.ClientMessage
 import cooking.zap.app.nostr.Filter
 import cooking.zap.app.nostr.ProfileData
@@ -85,8 +86,18 @@ class MentionSearchRepository(
         val capturedLocal = localResults
         relaySearchJob = scope.launch(Dispatchers.IO) {
             val subId = "mention-${System.nanoTime()}"
-            val filter = Filter(kinds = listOf(0), search = query, limit = 10)
-            relayPool.sendToRelayOrEphemeral(SEARCH_RELAY, ClientMessage.req(subId, filter))
+            // One REQ per relay with a per-relay search string: Brainstorm
+            // needs its `observer:` token; other relays must never receive it
+            // (they would match it as literal words and empty the results).
+            val reqByRelay = BrainstormSearch.DEFAULT_RELAYS.mapNotNull { url ->
+                BrainstormSearch.searchQueryString(url, query)?.let { search ->
+                    url to ClientMessage.req(subId, Filter(kinds = listOf(0), search = search, limit = 10))
+                }
+            }
+            if (reqByRelay.isEmpty()) return@launch
+            for ((url, req) in reqByRelay) {
+                relayPool.sendToRelayOrEphemeral(url, req)
+            }
 
             val relayResults = mutableListOf<MentionCandidate>()
             val eventJob = launch {
@@ -114,9 +125,5 @@ class MentionSearchRepository(
         relaySearchJob?.cancel()
         relaySearchJob = null
         _candidates.value = emptyList()
-    }
-
-    private companion object {
-        const val SEARCH_RELAY = "wss://search.nostrarchives.com"
     }
 }

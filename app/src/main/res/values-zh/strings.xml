@@ -439,9 +439,10 @@
     <string name="settings_large_text">大字体</string>
     <string name="settings_increase_text_size">增大整个应用的字体</string>
     <string name="settings_language">语言</string>
-    <string name="settings_popular_themes">主题</string>
-    <string name="settings_choose_color_scheme">选择配色方案</string>
-    <string name="settings_accent_color">强调色</string>
+    <string name="settings_appearance">外观</string>
+    <string name="settings_appearance_system">跟随系统</string>
+    <string name="settings_appearance_light">浅色</string>
+    <string name="settings_appearance_dark">深色</string>
     <string name="settings_preview">预览</string>
     <string name="settings_new_notes_button">新帖子按钮</string>
     <string name="settings_hide_new_notes_button">隐藏新帖子按钮</string>
@@ -460,7 +461,7 @@
     <string name="settings_video_autoplay">视频自动播放</string>
     <string name="settings_video_autoplay_description">当视频滚动到视图中时自动播放</string>
     <string name="settings_hide_live_streams">隐藏直播</string>
-    <string name="settings_hide_live_streams_description">隐藏动态顶部的直播栏</string>
+    <string name="settings_hide_live_streams_description">隐藏动态中的直播栏并停止直播发现。开启后不会加载或播放任何直播内容</string>
     <string name="settings_client_tag">客户端标签</string>
     <string name="settings_tag_notes">用 Zap Cooking 标记帖子</string>
     <string name="settings_tag_notes_description">包含标识 Zap Cooking 为客户端的标签。这对其他人可见。</string>

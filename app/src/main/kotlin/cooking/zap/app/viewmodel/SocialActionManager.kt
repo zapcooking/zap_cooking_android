@@ -218,7 +218,15 @@ class SocialActionManager(
     private fun publishMuteList() {
         val s = getSigner() ?: return
         scope.launch {
-            val privateJson = Nip51.buildMuteListContent(muteRepo.getBlockedPubkeys(), muteRepo.getMutedWords())
+            // Threads and hashtags ride along: a list restored from relay
+            // history may hold mutes this app can't create, and dropping them
+            // on rebuild would undo the restore on the next edit.
+            val privateJson = Nip51.buildMuteListContent(
+                muteRepo.getBlockedPubkeys(),
+                muteRepo.getMutedWords(),
+                muteRepo.getMutedThreads(),
+                muteRepo.getMutedHashtags()
+            )
             val encrypted = s.nip44Encrypt(privateJson, s.pubkeyHex)
             val event = s.signEvent(kind = Nip51.KIND_MUTE_LIST, content = encrypted, tags = emptyList())
             relayPool.sendToWriteRelays(ClientMessage.event(event))
@@ -595,7 +603,7 @@ class SocialActionManager(
                 // Also send to the poll's specified relays per NIP-88
                 val pollEvent = eventRepo.getEvent(pollEventId)
                 if (pollEvent != null) {
-                    for (url in Nip88.parsePollRelays(pollEvent)) {
+                    for (url in Nip88.cappedPollRelays(pollEvent)) {
                         relayPool.sendToRelayOrEphemeral(url, msg)
                     }
                 }

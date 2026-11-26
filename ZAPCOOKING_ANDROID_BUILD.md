@@ -53,6 +53,40 @@ AI (OpenAI-backed, all server-side — the app only calls them):
 - `POST /api/cookbook-intro` — AI intro copy for recipe books (rides
   with the cookbook/recipe-books commerce feature; later phase).
 
+Scheduled posts (**all NIP-98**; contract is `docs/schedule-contract.md`
+in zapcooking/frontend and wins over this summary):
+- `POST /api/schedule` — body `{ event, relay_mode: "all", relays? }`.
+  The event is signed on the device with `created_at` = publish time;
+  the server holds no key and broadcasts it unchanged. `relays` is up to
+  4 of the author's own write relays (omitted when empty).
+- `GET /api/schedule?status=<status>` — the caller's rows, any client's
+  (a post scheduled on web lists here and the reverse). The query string
+  is NOT part of the signed `u` tag.
+- `DELETE /api/schedule/{id}` — cancel a `pending` row; `{id}` is the
+  event id.
+- Client: `ZapCookingApi.signForSchedule` / `scheduleEvent` /
+  `listScheduled` / `cancelScheduled`, results in `api/ScheduleApi.kt`.
+  These sign a **fresh header per request** and bypass
+  `Nip98HeaderCache` (the contract forbids reuse); one retry on 401, one
+  retry without `relays` on `bad_relays`, and a 409 `already_scheduled`
+  whose row is pending/publishing/sent is success. Never mine PoW on a
+  scheduled event, and never re-sign to retry.
+- Composer (`ComposeViewModel`, rules in `viewmodel/ScheduleCompose.kt`):
+  the picker allows 5 minutes to 90 days out and the 3-minute check runs
+  at signing; a scheduled post skips the undo countdown; PoW and a
+  schedule are mutually exclusive; a private reply cannot be scheduled
+  (and is never sent immediately while a time is set). `relays` is the
+  account's own NIP-65 write relays in list order through
+  `ScheduleRelays.pick` — a port of web's `pickScheduleRelays`, sharing
+  its test cases — and is omitted when empty.
+- Scheduled list (`DraftsViewModel`, rules in `viewmodel/ScheduledList.kt`):
+  two calls, `?status=pending` then `?status=failed`; pending is shown
+  as soon as it returns and survives a failed second call. Pending rows
+  sort soonest first. Reloads on every screen entry and on pull to
+  refresh. Cancel waits for the DELETE answer before removing the row.
+- The old `wss://scheduler.nostrarchives.com` relay is gone from the app;
+  posts parked on it were not migrated.
+
 Membership:
 - `GET /api/membership?pubkey=<hex>` — **public batch read** of status
   (no auth). Use for displaying a user's own/others' member state.
@@ -94,10 +128,53 @@ Membership:
 - `profiles`: `purplepag.es`
 - `articles` (kind 30023 = **recipes**): `relay.primal.net`, `nos.lol`,
   `nostr.wine`, `eden.nostr.land`, `relay.noswhere.com`
+- `feed` (**Fresh**): `wss://feed.zap.cooking` — read-only, curated, its
+  own socket, never authenticated. See "Fresh feed relay" below.
 - **Recipes live on the public article relays, not on Pantry.** Adding
   Pantry as the members relay is correct; replacing the aggregators is
   not — it breaks recipe loading. Leave `RelayProber.BOOTSTRAP` and the
   discovery hardcodes alone.
+
+### Fresh feed relay (`wss://feed.zap.cooking`)
+The curated food-and-drink relay behind the Fresh feed. The contract **as
+measured** (free window, paging, `auth-required` floor, topic previews, live
+tail, which kinds it serves) is recorded in the iOS build spec,
+`zapcooking_ios/ZAPCOOKING_IOS_BUILD.md` §2 "Fresh feed relay — contract as
+measured" (probed 2026-11-10/11). iOS is the baseline for this port; re-probe
+before relying on a number. Rules that hold on Android (Seth, 2026-11-25):
+
+- **Free tier only in v1.** No NIP-42 login to this relay:
+  `FeatureFlags.FEED_RELAY_LOGIN_ENABLED = false`, enforced by
+  `FeedRelay.loginAllowed` inside `RelayPool` (the signer wrapper, the
+  challenge collector and `approveAuth`). The relay re-sends its challenge
+  before every `CLOSED auth-required:`, and a login names the reader.
+- It is never a publish target, a relay hint, or a member of another set.
+- Nothing about viewing leaves the device: no view counts, no per-user
+  activity; seen state is device-local.
+- Fresh becomes the landing feed for **new sign-ins only**; existing accounts
+  keep the feed they have. Special cards (recipe box, topic spotlights) are a
+  second wave after the plain feed ships.
+
+**Port status** (one PR per step, in this order):
+
+1. Feed relay never authenticated — done (#311).
+2. Pure logic (posts, spacing, last visit, finish line, topic catalog) — done
+   (#312).
+3. Relay client — `fresh/FreshRelayClient` over the `FreshSocketTransport`
+   seam: its own read-only socket, only `REQ` and `CLOSE` sent, every event
+   verified. Port of iOS #202. Nothing in the app calls it yet.
+4. View model + feed picker entry.
+5. UI.
+6. Default-on for new sign-ins.
+7. Specials (recipe box, topic spotlights).
+
+**Android differences from iOS:**
+
+- `FreshRelayClient.foregrounded()` is called by the view model. The client
+  has no lifecycle dependency and does not observe the app's state itself
+  (iOS observes the foreground notification).
+- Hashtag mutes apply (iOS has none). The caller lowercases them.
+- The hellthread limit is fixed at 25 p-tags (iOS reads a setting).
 
 ---
 
@@ -745,7 +822,7 @@ so every `credentialManager.getCredential()` on this fork failed with
 ### Release signing
 Release builds are signed by Gradle from credentials that live outside
 the repo. Put all four in `local.properties` (already gitignored, and
-already where the Breez and Giphy keys live):
+already where the Breez and gifs.nostr.build keys live):
 
 ```properties
 zapcooking.keystore.path=~/.zapcooking-keys/zap-cooking-release.jks

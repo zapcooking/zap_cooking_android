@@ -3,6 +3,8 @@ package cooking.zap.app
 import android.content.Intent
 import android.os.SystemClock
 import androidx.activity.compose.BackHandler
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
@@ -49,6 +51,7 @@ import cooking.zap.app.nostr.LocalSigner
 import cooking.zap.app.nostr.RemoteSigner
 import cooking.zap.app.nostr.SignResult
 import cooking.zap.app.nostr.SignerIntentBridge
+import cooking.zap.app.repo.InterfacePreferences
 import cooking.zap.app.repo.SigningMode
 import android.content.Context
 import androidx.compose.runtime.rememberCoroutineScope
@@ -69,6 +72,7 @@ import cooking.zap.app.ui.screen.BlossomServersScreen
 import cooking.zap.app.ui.screen.AuthScreen
 import cooking.zap.app.ui.screen.SplashScreen
 import cooking.zap.app.ui.screen.ComposeScreen
+import cooking.zap.app.ui.screen.LazarusScreen
 import cooking.zap.app.ui.screen.ContactPickerScreen
 import cooking.zap.app.ui.screen.DmConversationScreen
 import cooking.zap.app.ui.screen.DmListScreen
@@ -159,6 +163,8 @@ import cooking.zap.app.viewmodel.NotificationsViewModel
 import cooking.zap.app.viewmodel.ConsoleViewModel
 import cooking.zap.app.viewmodel.RelayHealthViewModel
 import cooking.zap.app.viewmodel.DraftsViewModel
+import cooking.zap.app.viewmodel.LazarusViewModel
+import cooking.zap.app.lazarus.LazarusLocalStores
 import cooking.zap.app.viewmodel.SearchViewModel
 import cooking.zap.app.viewmodel.HashtagFeedViewModel
 import cooking.zap.app.viewmodel.OnboardingViewModel
@@ -198,6 +204,17 @@ object Routes {
     const val WALLET = "wallet"
     const val SAFETY = "safety"
     const val ABOUT = "about"
+    const val LAZARUS = "lazarus_recovery"
+
+    /**
+     * The data recovery destination's declared pattern. `kind` is an optional
+     * query argument that opens one kind directly (the profile's Restore opens
+     * the follow list), so plain [LAZARUS] (the drawer's kind list) still
+     * matches this destination.
+     */
+    const val LAZARUS_ROUTE = "lazarus_recovery?kind={kind}"
+
+    fun lazarus(kind: Int): String = "lazarus_recovery?kind=$kind"
     const val SEARCH = "search"
     const val CONSOLE = "console"
     const val KEYS = "keys"
@@ -333,6 +350,17 @@ fun NostrUriData.toRoute(): String? = when (this) {
         if (kind == 30023 && author != null) "article/$kind/$author/$dTag" else null
 }
 
+/**
+ * Where the app opens, from the Open-on Interface setting (Feed by default;
+ * Recipes stays a tap away). Read at each landing, never reactive: changing
+ * the setting applies on the next launch or login, never mid-session.
+ */
+fun startupLandingRoute(context: Context): String =
+    when (InterfacePreferences(context).getStartupTab()) {
+        InterfacePreferences.StartupTab.RECIPES -> Routes.RECIPES
+        InterfacePreferences.StartupTab.FEED -> Routes.FEED
+    }
+
 @Composable
 fun WispNavHost(
     deepLinkUri: String? = null,
@@ -372,18 +400,6 @@ fun WispNavHost(
     val notificationsViewModel: NotificationsViewModel = viewModel()
     val draftsViewModel: DraftsViewModel = viewModel()
     val searchViewModel: SearchViewModel = viewModel()
-    val followRecoveryViewModel: cooking.zap.app.viewmodel.FollowRecoveryViewModel = viewModel(
-        factory = object : androidx.lifecycle.ViewModelProvider.Factory {
-            @Suppress("UNCHECKED_CAST")
-            override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
-                return cooking.zap.app.viewmodel.FollowRecoveryViewModel(
-                    feedViewModel.relayPool,
-                    feedViewModel.contactRepo,
-                    feedViewModel.keyRepo
-                ) as T
-            }
-        }
-    )
     val consoleViewModel: ConsoleViewModel = viewModel()
     val relayHealthViewModel: RelayHealthViewModel = viewModel()
     val onboardingViewModel: OnboardingViewModel = viewModel()
@@ -834,10 +850,30 @@ fun WispNavHost(
     val drawerScope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val onOpenDrawer: () -> Unit = { drawerScope.launch { drawerState.open() } }
+    // Refresh the wallet when the drawer opens, so the mini-wallet's figure
+    // is live rather than only as fresh as the last wallet-tab visit. Keyed
+    // off targetValue, which flips as soon as the drawer starts opening.
+    // Skipped while a connection attempt is already in flight — refreshState()
+    // is NOT idempotent mid-handshake: the not-yet-connected branch would
+    // restart NWC negotiation on every drawer open. Skipped for watch-only
+    // accounts, which can't run a wallet. (Configured wallets still connect
+    // eagerly at ViewModel init — WalletViewModel.init — so this call is a
+    // balance refresh in the common case, not the first connection.)
+    val drawerOpening by remember {
+        derivedStateOf { drawerState.targetValue == DrawerValue.Open }
+    }
+    LaunchedEffect(drawerOpening) {
+        if (drawerOpening && activeSigner != null &&
+            walletViewModel.walletState.value !is cooking.zap.app.viewmodel.WalletState.Connecting) {
+            walletViewModel.refreshState()
+        }
+    }
     // Edge-swipe-to-open is allowed only on the root tabs — never on sub-screens
     // (recipe detail, threads, DM/group rooms, settings, etc.).
     val rootTabRoutes = remember {
-        setOf(Routes.RECIPES, Routes.FEED, Routes.WALLET, Routes.DM_LIST, Routes.NOTIFICATIONS)
+        // SEARCH is a root tab since the bottom-bar parity change — without it
+        // the drawer (Wallet's only entry) can't be edge-swiped open on Search.
+        setOf(Routes.RECIPES, Routes.FEED, Routes.SEARCH, Routes.WALLET, Routes.DM_LIST, Routes.NOTIFICATIONS)
     }
     val drawerPubkey = feedViewModel.getUserPubkey()
     val drawerProfileVersion by feedViewModel.eventRepo.profileVersion.collectAsState()
@@ -847,6 +883,12 @@ fun WispNavHost(
     val drawerStatusVersion by feedViewModel.eventRepo.statusVersion.collectAsState()
     val drawerHasEmbeddedWallet =
         walletViewModel.walletMode.collectAsState().value == cooking.zap.app.repo.WalletMode.SPARK
+    // Mini-wallet widget state (wisp-ios #474). The balance is null whenever
+    // it's unknown so the stripe shows "…" rather than a bogus "0".
+    val drawerWalletConfigured =
+        walletViewModel.walletMode.collectAsState().value != cooking.zap.app.repo.WalletMode.NONE
+    val drawerWalletBalanceMsats =
+        (walletViewModel.walletState.collectAsState().value as? cooking.zap.app.viewmodel.WalletState.Connected)?.balanceMsats
     val closeDrawerAndNavigate: (String) -> Unit = { route ->
         drawerScope.launch { drawerState.close() }
         navController.navigate(route)
@@ -858,7 +900,6 @@ fun WispNavHost(
     val drawerOnlinePubkeys by feedViewModel.eventRepo.onlinePubkeys.collectAsState()
     val drawerGlobalOnlineCount by feedViewModel.globalOnlineCount.collectAsState()
     var showOnlineNowSheet by remember { mutableStateOf(false) }
-    var showFollowRecoverySheet by remember { mutableStateOf(false) }
     var showCookingUtilitiesSheet by remember { mutableStateOf(false) }
 
     // Active account still needs to back up its key — drives the drawer dot + feed banner.
@@ -868,6 +909,12 @@ fun WispNavHost(
         drawerState = drawerState,
         gesturesEnabled = currentRoute in rootTabRoutes,
         drawerContent = {
+            // The drawer composable sits OUTSIDE the NavHost's
+            // LocalCanSign provider, and the composition-local defaults to
+            // true — so a watch-only account would see the signing UI (the
+            // mini-wallet included). Scope the same provider over the
+            // drawer's content explicitly.
+            CompositionLocalProvider(LocalCanSign provides (signingMode != SigningMode.READ_ONLY)) {
             WispDrawerContent(
                 profile = drawerProfile,
                 pubkey = drawerPubkey,
@@ -939,12 +986,7 @@ fun WispNavHost(
                 onSocialGraph = { closeDrawerAndNavigate(Routes.SOCIAL_GRAPH) },
                 onSafety = { closeDrawerAndNavigate(Routes.SAFETY) },
                 onAbout = { closeDrawerAndNavigate(Routes.ABOUT) },
-                onFollowRecovery = {
-                    drawerScope.launch {
-                        drawerState.close()
-                        showFollowRecoverySheet = true
-                    }
-                },
+                onLazarus = { closeDrawerAndNavigate(Routes.LAZARUS) },
                 onCustomEmojis = { closeDrawerAndNavigate(Routes.CUSTOM_EMOJIS) },
                 onKeys = { closeDrawerAndNavigate(Routes.KEYS) },
                 keyBackupNeeded = keyBackupNudge,
@@ -1010,8 +1052,11 @@ fun WispNavHost(
                 onScanResult = { route ->
                     drawerScope.launch { drawerState.close() }
                     navController.navigate(route)
-                }
+                },
+                walletConfigured = drawerWalletConfigured,
+                walletBalanceMsats = drawerWalletBalanceMsats
             )
+            }
         }
     ) {
 
@@ -1026,13 +1071,6 @@ fun WispNavHost(
                 navController.navigate("profile/$pk")
             },
             onDismiss = { showOnlineNowSheet = false },
-        )
-    }
-
-    if (showFollowRecoverySheet) {
-        cooking.zap.app.ui.component.FollowRecoverySheet(
-            viewModel = followRecoveryViewModel,
-            onDismiss = { showFollowRecoverySheet = false }
         )
     }
 
@@ -1094,6 +1132,11 @@ fun WispNavHost(
         }
     }
 
+    // Feed chrome auto-hide: the bottom bar collapses while scrolling the feed
+    // down; every other route always shows it.
+    val barsVisible by feedViewModel.barsVisible.collectAsState()
+    val bottomBarVisible = currentRoute != Routes.FEED || barsVisible
+
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         bottomBar = {
@@ -1105,6 +1148,10 @@ fun WispNavHost(
                 )
                 FloatingAudioPlayer()
                 if (showBottomBar) {
+                    HorizontalDivider(
+                        thickness = 0.5.dp,
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                    )
                     WispBottomBar(
                         currentRoute = currentRoute,
                         hasUnreadHome = newNoteCount > 0,
@@ -1115,6 +1162,7 @@ fun WispNavHost(
                         isReplyAnimating = isReplyAnimating,
                         notifSoundEnabled = notifSoundEnabled,
                         isReadOnly = signingMode == SigningMode.READ_ONLY,
+                        barVisible = bottomBarVisible,
                         onTabSelected = { tab ->
                             if (currentRoute == tab.route) {
                                 scrollToTopTrigger++
@@ -1311,7 +1359,12 @@ fun WispNavHost(
                         }
                         navController.navigate(target)
                     } else {
-                        navController.navigate(Routes.FEED) {
+                        // The Open-on Interface setting (Feed by default) decides
+                        // where the app lands — read here, so changing it applies
+                        // on the next launch or login instead of switching tabs
+                        // under the user mid-session.
+                        val landing = startupLandingRoute(context)
+                        navController.navigate(landing) {
                             popUpTo(Routes.LOADING) { inclusive = true }
                         }
                     }
@@ -1323,7 +1376,7 @@ fun WispNavHost(
             ExistingUserOnboardingScreen(
                 feedViewModel = feedViewModel,
                 onReady = {
-                    navController.navigate(Routes.FEED) {
+                    navController.navigate(startupLandingRoute(context)) {
                         popUpTo(Routes.EXISTING_USER_ONBOARDING) { inclusive = true }
                     }
                 }
@@ -1334,7 +1387,7 @@ fun WispNavHost(
             WatchOnlyOnboardingScreen(
                 feedViewModel = feedViewModel,
                 onReady = {
-                    navController.navigate(Routes.FEED) {
+                    navController.navigate(startupLandingRoute(context)) {
                         popUpTo(Routes.WATCH_ONLY_ONBOARDING) { inclusive = true }
                     }
                 }
@@ -1345,6 +1398,9 @@ fun WispNavHost(
             FeedScreen(
                 viewModel = feedViewModel,
                 onOpenDrawer = onOpenDrawer,
+                // Read-only accounts have no Messages tab, so no DM dot.
+                hasUnreadActivity = hasUnreadNotifications ||
+                    (signingMode != SigningMode.READ_ONLY && hasUnreadDms),
                 scrollToTopTrigger = scrollToTopTrigger,
                 onAskCheffy = { noteReviewTarget = it },
                 onCompose = if (signingMode == SigningMode.READ_ONLY) null else {
@@ -1352,6 +1408,12 @@ fun WispNavHost(
                         replyTarget = null
                         quoteTarget = null
                         composeViewModel.clear()
+                        // OnlyFood compose context (iOS parity): the composer
+                        // offers food-tag pills so the note reaches the feed
+                        // it was written from. Other feeds: plain composer.
+                        composeViewModel.setFoodTagSuggestions(
+                            feedViewModel.feedType.value == FeedType.ONLY_FOOD
+                        )
                         navController.navigate(Routes.COMPOSE)
                     }
                 },
@@ -1393,6 +1455,7 @@ fun WispNavHost(
                     }
                 },
                 onGadgets = { showCookingUtilitiesSheet = true },
+                gadgetsActive = showCookingUtilitiesSheet,
                 onSousChef = { navController.navigate(Routes.SOUS_CHEF) { launchSingleTop = true } },
                 onCheffy = { navController.navigate(Routes.CHEFFY) { launchSingleTop = true } },
                 onNourish = { navController.navigate(Routes.NOURISH) { launchSingleTop = true } },
@@ -1435,10 +1498,13 @@ fun WispNavHost(
             )
         }
 
-        composable(Routes.COMPOSE) {
+        composable(Routes.COMPOSE) { composeEntry ->
             // Initialize PoW toggle from persisted preferences
             LaunchedEffect(Unit) {
                 composeViewModel.initPowState(feedViewModel.powPrefs.isNotePowEnabled())
+                // Publishing a draft tombstones its coordinate locally, so a failed/raced empty
+                // replacement on relays can't bring the published text back as a draft.
+                composeViewModel.attachDeletedEventsRepo(feedViewModel.deletedEventsRepo)
                 // iOS-parity: a fresh top-level composer restores the most recent draft so the
                 // user can continue where they left off. Replies/quotes stay context-specific.
                 if (replyTarget == null && quoteTarget == null) {
@@ -1448,7 +1514,11 @@ fun WispNavHost(
             // Auto-save draft when leaving compose screen (back button, navigation, etc.)
             DisposableEffect(Unit) {
                 onDispose {
-                    if (composeViewModel.content.value.text.isNotBlank()) {
+                    // Attachment slots count as content too — a media-only
+                    // draft must save, not fall into the discard branch.
+                    if (composeViewModel.content.value.text.isNotBlank() ||
+                        composeViewModel.uploadedUrls.value.isNotEmpty()
+                    ) {
                         composeViewModel.saveDraft(feedViewModel.relayPool, replyTarget, activeSigner, quoteTarget)
                     } else {
                         // Emptying a restored top-level draft = discard it: clear the fast-path
@@ -1463,7 +1533,13 @@ fun WispNavHost(
                 relayPool = feedViewModel.relayPool,
                 replyTo = replyTarget,
                 quoteTo = quoteTarget,
-                onBack = { navController.popBackStack() },
+                // Pop only while THIS composer is on top. onBack is also the publish-success
+                // callback, and the undo countdown outlives the screen: fired after a back-out, a
+                // bare popBackStack() would close whatever is on top now — and NavController
+                // doesn't guard the start destination, so on the feed it empties the back stack.
+                onBack = {
+                    if (navController.currentBackStackEntry === composeEntry) navController.popBackStack()
+                },
                 // Same path as the back button: popping triggers the onDispose auto-save above,
                 // so the explicit save icon and back gesture persist the draft identically.
                 onSaveDraft = { navController.popBackStack() },
@@ -1479,10 +1555,47 @@ fun WispNavHost(
             )
         }
 
+        composable(
+            Routes.LAZARUS_ROUTE,
+            arguments = listOf(navArgument("kind") { type = NavType.IntType; defaultValue = -1 })
+        ) { backStackEntry ->
+            val initialKind = backStackEntry.arguments?.getInt("kind")?.takeIf { it >= 0 }
+            // Scoped to this destination: the scan engine's own relay sockets
+            // are released in onCleared when the screen is popped (not on a
+            // configuration change, which would cut a running scan short).
+            val lazarusViewModel: LazarusViewModel = viewModel()
+            val lazarusPubkey = feedViewModel.getUserPubkey()
+            // Re-run on account or signer changes: a scan belongs to the account it ran for
+            LaunchedEffect(lazarusPubkey, activeSigner, signingMode) {
+                lazarusViewModel.init(
+                    stores = LazarusLocalStores(
+                        contactRepo = feedViewModel.contactRepo,
+                        muteRepo = feedViewModel.muteRepo,
+                        bookmarkRepo = feedViewModel.bookmarkRepo,
+                        profileRepo = feedViewModel.profileRepo,
+                        relayListRepo = feedViewModel.relayListRepo,
+                        keyRepo = feedViewModel.keyRepo,
+                        eventRepo = feedViewModel.eventRepo,
+                        relayPool = feedViewModel.relayPool
+                    ),
+                    signer = activeSigner,
+                    canSign = signingMode != null && signingMode != SigningMode.READ_ONLY,
+                    activePubkey = { feedViewModel.getUserPubkey() }
+                )
+                lazarusViewModel.setAccount(lazarusPubkey)
+            }
+            LazarusScreen(
+                viewModel = lazarusViewModel,
+                initialKind = initialKind,
+                onBack = { navController.popBackStack() }
+            )
+        }
+
         composable(Routes.DRAFTS) {
             LaunchedEffect(Unit) {
                 draftsViewModel.loadDrafts(feedViewModel.relayPool, activeSigner, feedViewModel.deletedEventsRepo)
-                draftsViewModel.loadScheduledPosts(feedViewModel.relayPool, activeSigner)
+                // Every entry reloads, so a post scheduled a moment ago is in the list.
+                draftsViewModel.loadScheduledPosts(feedViewModel.zapCookingApi, activeSigner)
             }
             val profileVersion by feedViewModel.eventRepo.profileVersion.collectAsState()
             val userPubkey = feedViewModel.getUserPubkey()
@@ -1525,8 +1638,11 @@ fun WispNavHost(
                 onDeleteDraft = { dTag ->
                     draftsViewModel.deleteDraft(dTag, feedViewModel.relayPool, activeSigner, feedViewModel.deletedEventsRepo)
                 },
-                onDeleteScheduled = { eventId ->
-                    draftsViewModel.deleteScheduledPost(eventId, feedViewModel.relayPool, activeSigner)
+                onCancelScheduled = { eventId ->
+                    draftsViewModel.cancelScheduledPost(eventId, feedViewModel.zapCookingApi, activeSigner)
+                },
+                onRefreshScheduled = {
+                    draftsViewModel.loadScheduledPosts(feedViewModel.zapCookingApi, activeSigner, userInitiated = true)
                 },
                 userProfile = userProfile
             )
@@ -1704,7 +1820,8 @@ fun WispNavHost(
                     feedViewModel.customEmojiRepo.userEmojiList.value?.setReferences?.contains(ref) ?: false
                 },
                 onMuteUser = if (!isOwnProfile) { { feedViewModel.blockUser(pubkey) } } else null,
-                onRestoreFollows = if (isOwnProfile) { { showFollowRecoverySheet = true } } else null,
+                // Own profile only: Data recovery with the follow list preselected
+                onRestoreData = if (isOwnProfile) { { navController.navigate(Routes.lazarus(3)) } } else null,
                 onRecipeClick = { recipeAuthor, recipeDTag ->
                     navController.navigate(Routes.recipe(recipeAuthor, recipeDTag))
                 }
@@ -3552,6 +3669,7 @@ fun WispNavHost(
                     }
                 },
                 onGadgets = { showCookingUtilitiesSheet = true },
+                gadgetsActive = showCookingUtilitiesSheet,
                 onSousChef = { navController.navigate(Routes.SOUS_CHEF) { launchSingleTop = true } },
                 onCheffy = { navController.navigate(Routes.CHEFFY) { launchSingleTop = true } },
                 onNourish = { navController.navigate(Routes.NOURISH) { launchSingleTop = true } },
@@ -3726,6 +3844,7 @@ fun WispNavHost(
             RecipeComposeScreen(
                 viewModel = recipeComposeViewModel,
                 canSign = feedViewModel.signer != null,
+                signer = feedViewModel.signer,
                 onPickImages = { uris ->
                     recipeComposeViewModel.addImages(
                         uris = uris,
@@ -4113,6 +4232,7 @@ fun WispNavHost(
             val liveZapVersion by feedViewModel.eventRepo.zapVersion.collectAsState()
             val liveZapInProgress by feedViewModel.zapInProgress.collectAsState()
             val liveStreamZapTotal by liveStreamViewModel.streamZapTotal.collectAsState()
+            val liveStreamZapTotalUncertain by liveStreamViewModel.streamZapTotalUncertain.collectAsState()
             var liveZapAnimatingIds by remember { mutableStateOf(emptySet<String>()) }
             var liveZapTarget by remember { mutableStateOf<NostrEvent?>(null) }
             var liveZapRecipientOverride by remember { mutableStateOf<String?>(null) }
@@ -4226,6 +4346,7 @@ fun WispNavHost(
                     }
                 },
                 streamZapTotal = liveStreamZapTotal,
+                streamZapTotalUncertain = liveStreamZapTotalUncertain,
                 streamActivityEventId = streamActivityEventId,
                 zapVersion = liveZapVersion,
                 zapAnimatingIds = liveZapAnimatingIds,

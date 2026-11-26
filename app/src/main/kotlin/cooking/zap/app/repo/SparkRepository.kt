@@ -15,8 +15,8 @@ import breez_sdk_spark.ListUnclaimedDepositsRequest
 import breez_sdk_spark.Network
 import breez_sdk_spark.OnchainConfirmationSpeed
 import breez_sdk_spark.PaymentDetails
-import breez_sdk_spark.PaymentRequest
 import breez_sdk_spark.PaymentMethod
+import breez_sdk_spark.PaymentRequest
 import breez_sdk_spark.PaymentStatus
 import breez_sdk_spark.PaymentType
 import breez_sdk_spark.PrepareSendPaymentRequest
@@ -84,6 +84,12 @@ class SparkRepository(
          * misplace the decimal point on the first render.
          */
         const val DEFAULT_USDB_DECIMALS = 6
+
+        // Domain Lightning addresses are registered under. `sats.zap.cooking`
+        // is a CNAME to Breez's hosted LNURL server (breez.tips), registered
+        // with Breez against this API key — the same setup the web and iOS
+        // apps use. Passed to the SDK as `config.lnurlDomain` at connect time.
+        private const val LNURL_DOMAIN = "sats.zap.cooking"
 
         // BIP39 English wordlist subset is large; for mnemonic generation we use
         // the SDK's Seed.Mnemonic which validates the mnemonic on connect.
@@ -356,6 +362,7 @@ class SparkRepository(
                         )
                     )
                 )
+                config.lnurlDomain = LNURL_DOMAIN
 
                 val seed = Seed.Mnemonic(mnemonic, null)
                 val request = ConnectRequest(
@@ -645,7 +652,8 @@ class SparkRepository(
                     amountSats = amountSats,
                     expirySecs = expirySecs.toUInt(),
                     paymentHash = null,
-                    receiverIdentityPublicKey = null
+                    receiverIdentityPublicKey = null,
+                    preimage = null
                 )
                 val response = instance.receivePayment(ReceivePaymentRequest(method))
                 emitStatus("Invoice created")
@@ -723,7 +731,7 @@ class SparkRepository(
                     // token amount and is dropped rather than mislabelled.
                     val assetFee = asset
                         ?.takeIf { it.feeInAsset && payment.fees.signum() != 0 }
-                        ?.let { TokenAmount.scale(payment.fees.toString(), it.decimals) }
+                        ?.let { TokenAmounts.scale(payment.fees.toString(), it.decimals) }
 
                     // Prefer bolt11-decoded hash (matches ZapSender records), fall back to HTLC hash, then payment ID
                     val decoded = lightningDetails?.invoice?.let {
@@ -761,7 +769,7 @@ class SparkRepository(
                         pending = isPending,
                         isOnchain = onchainTxid != null,
                         assetTicker = asset?.ticker,
-                        assetAmount = asset?.let { TokenAmount.scale(it.baseUnits, it.decimals) },
+                        assetAmount = asset?.let { TokenAmounts.scale(it.baseUnits, it.decimals) },
                         assetFee = assetFee,
                         conversionFrom = extractConversionFrom(conversions)
                     )
@@ -943,10 +951,10 @@ data class StableBalanceState(
     val hasBalance: Boolean get() = baseUnits.signum() > 0
 
     /** Scaled to whole units at full precision, e.g. "15.766673". */
-    val amount: String get() = TokenAmount.scale(baseUnits.toString(), decimals)
+    val amount: String get() = TokenAmounts.scale(baseUnits.toString(), decimals)
 
     /** Row-sized form of [amount], e.g. "15.77". */
-    val amountCompact: String get() = TokenAmount.compact(amount)
+    val amountCompact: String get() = TokenAmounts.compact(amount)
 
     /**
      * True when the USD balance should lead the dashboard: either the user

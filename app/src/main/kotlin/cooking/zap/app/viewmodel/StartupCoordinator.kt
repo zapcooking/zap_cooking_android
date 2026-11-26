@@ -4,6 +4,7 @@ import android.util.Log
 import cooking.zap.app.nostr.Blossom
 import cooking.zap.app.nostr.ClientMessage
 import cooking.zap.app.nostr.Filter
+import cooking.zap.app.nostr.Nip22
 import cooking.zap.app.nostr.Nip30
 import cooking.zap.app.nostr.Nip51
 import cooking.zap.app.db.EventPersistence
@@ -105,7 +106,8 @@ class StartupCoordinator(
     private val registerAuthSigner: () -> Unit,
     private val fetchEmojiSets: () -> Unit,
     private val getSigner: () -> NostrSigner?,
-    private val migrateRecipeBookmarks: () -> Unit = {}
+    private val migrateRecipeBookmarks: () -> Unit = {},
+    private val isLiveContentHidden: () -> Boolean = { false }
 ) {
     private var eventProcessingJob: Job? = null
     private var metadataSweepJob: Job? = null
@@ -753,7 +755,7 @@ class StartupCoordinator(
         }
 
         val notifFilter = Filter(
-            kinds = listOf(1, 6, 7, 9735),
+            kinds = listOf(1, Nip22.KIND_COMMENT, 6, 7, 9735),
             pTags = listOf(myPubkey),
             limit = 300
         )
@@ -785,9 +787,9 @@ class StartupCoordinator(
         // engagement subscriptions start.
         val selfNotesSince = eventRepo.getLatestEventTimestamp(myPubkey, 1)
         val selfNotesFilter = if (selfNotesSince != null) {
-            Filter(kinds = listOf(1), authors = listOf(myPubkey), since = selfNotesSince)
+            Filter(kinds = listOf(1, Nip22.KIND_COMMENT), authors = listOf(myPubkey), since = selfNotesSince)
         } else {
-            Filter(kinds = listOf(1), authors = listOf(myPubkey), limit = 200)
+            Filter(kinds = listOf(1, Nip22.KIND_COMMENT), authors = listOf(myPubkey), limit = 200)
         }
         val selfNotesMsg = ClientMessage.req("self-notes", selfNotesFilter)
         relayPool.sendToWriteRelays(selfNotesMsg)
@@ -808,6 +810,10 @@ class StartupCoordinator(
     }
 
     private fun subscribeLiveStreams(myPubkey: String) {
+        // No-op when the "Hide live streams" setting is on — no live content
+        // should load or be discovered at all.
+        if (isLiveContentHidden()) return
+
         // Bypass dedup for live chat subs — the discovery sub and per-stream sub both
         // receive kind 1311 events and must each reach EventRouter independently.
         // Without this, whichever sub wins the dedup race silently drops the other copy.
@@ -821,6 +827,23 @@ class StartupCoordinator(
         val since = System.currentTimeMillis() / 1000 - 3600
         val chatFilter = Filter(kinds = listOf(1311), since = since, limit = 500)
         relayPool.sendToReadRelays(ClientMessage.req("live-chat-discovery", chatFilter))
+    }
+
+    /** Re-run NIP-53 discovery after the "Hide live streams" switch turns off. */
+    fun startLiveDiscovery() {
+        val pk = pubkeyHex ?: getUserPubkey() ?: return
+        subscribeLiveStreams(pk)
+    }
+
+    /**
+     * Stop NIP-53 discovery after the "Hide live streams" switch turns on so
+     * no live content loads while it's off. Discovery state is dropped; an
+     * open stream's chat is kept.
+     */
+    fun stopLiveDiscovery() {
+        subManager.closeSubscription("live-activities")
+        subManager.closeSubscription("live-chat-discovery")
+        liveStreamRepo?.clearDiscovered()
     }
 
     /**
@@ -842,7 +865,7 @@ class StartupCoordinator(
 
         val since = notifRepo.getLatestNotifTimestamp()?.let { it - 5 * 60 }
         val filters = myEventIds.chunked(OutboxRouter.MAX_ETAGS_PER_FILTER).map { chunk ->
-            Filter(kinds = listOf(1), eTags = chunk, limit = 200, since = since)
+            Filter(kinds = listOf(1, Nip22.KIND_COMMENT), eTags = chunk, limit = 200, since = since)
         }
         val replyReqMsg = if (filters.size == 1) ClientMessage.req("notif-replies-etag", filters[0])
         else ClientMessage.req("notif-replies-etag", filters)
