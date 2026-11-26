@@ -155,6 +155,27 @@ before relying on a number. Rules that hold on Android (Seth, 2026-11-25):
   keep the feed they have. Special cards (recipe box, topic spotlights) are a
   second wave after the plain feed ships.
 
+**Port status** (one PR per step, in this order):
+
+1. Feed relay never authenticated — done (#311).
+2. Pure logic (posts, spacing, last visit, finish line, topic catalog) — done
+   (#312).
+3. Relay client — `fresh/FreshRelayClient` over the `FreshSocketTransport`
+   seam: its own read-only socket, only `REQ` and `CLOSE` sent, every event
+   verified. Port of iOS #202. Nothing in the app calls it yet.
+4. View model + feed picker entry.
+5. UI.
+6. Default-on for new sign-ins.
+7. Specials (recipe box, topic spotlights).
+
+**Android differences from iOS:**
+
+- `FreshRelayClient.foregrounded()` is called by the view model. The client
+  has no lifecycle dependency and does not observe the app's state itself
+  (iOS observes the foreground notification).
+- Hashtag mutes apply (iOS has none). The caller lowercases them.
+- The hellthread limit is fixed at 25 p-tags (iOS reads a setting).
+
 ---
 
 ## 2. Distribution & flavors
