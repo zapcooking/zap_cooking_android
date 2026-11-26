@@ -18,3 +18,11 @@ val ZapOrange = Color(0xFFF97316)
  * it wrong for a horizontal stroke; build a sized brush for those.
  */
 val ZapFabGradient = Brush.linearGradient(colors = listOf(ZapAmber, ZapOrange))
+
+/**
+ * Conversion accent — Tailwind sky-400, matching the web wallet's history
+ * rows. Deliberately outside the amber/orange brand pair and away from the
+ * green/red of received/sent: a Bitcoin↔USDB conversion is neither money
+ * arriving nor money leaving, and colouring it like either one misreads.
+ */
+val ConversionSky = Color(0xFF38BDF8)

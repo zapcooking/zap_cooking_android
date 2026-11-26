@@ -53,5 +53,48 @@ data class WalletTransaction(
     /** True while the payment is unconfirmed/unsettled (e.g. an in-flight Lightning payment). */
     val pending: Boolean = false,
     /** True for on-chain Bitcoin deposits/withdrawals (vs Lightning). */
-    val isOnchain: Boolean = false
-)
+    val isOnchain: Boolean = false,
+    /**
+     * Ticker of the asset this row moved, when it wasn't bitcoin — e.g.
+     * "USDB". Null for every sats payment, which is the overwhelming
+     * majority.
+     *
+     * Spark wallets hold tokens alongside sats, and `Payment.amount` is
+     * documented as "satoshis **or token base units**". When this is set the
+     * row is rendered in the asset's own denomination and no fiat rate is
+     * applied — the rate converts satoshis, so applying it to a token amount
+     * would only produce a second wrong number. [amountMsats] stays strictly
+     * satoshi-denominated either way: it holds the bitcoin leg of a
+     * conversion, and zero for a pure token transfer, which has no bitcoin
+     * leg. [feeMsats] is zero on any asset row.
+     */
+    val assetTicker: String? = null,
+    /**
+     * Amount already scaled by the asset's decimals, at full precision.
+     * Kept as a string because token base units are `U128` and can exceed
+     * `Long`. Detail views show this; rows show
+     * `TokenAmount.compact(assetAmount)`.
+     */
+    val assetAmount: String? = null,
+    /**
+     * Fee in the same asset, scaled the same way. Null when the fee is zero
+     * or is not denominated in this asset — see [PaymentAsset.feeInAsset].
+     */
+    val assetFee: String? = null,
+    /**
+     * Asset a conversion started from — "Bitcoin" or "USDB" — when this row
+     * is one leg of a Bitcoin↔USDB swap rather than money entering or
+     * leaving the wallet.
+     *
+     * Drives the "Converted from Bitcoin" label in place of Received/Sent,
+     * and suppresses the +/- sign: a conversion is neither a credit nor a
+     * debit, and both of its legs land in the history.
+     */
+    val conversionFrom: String? = null
+) {
+    /** True when this row moved something other than bitcoin. */
+    val isTokenTransfer: Boolean get() = assetTicker != null
+
+    /** True when this row is one leg of a Bitcoin↔USDB conversion. */
+    val isConversion: Boolean get() = conversionFrom != null
+}

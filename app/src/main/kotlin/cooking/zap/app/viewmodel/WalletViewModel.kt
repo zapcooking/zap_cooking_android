@@ -25,6 +25,7 @@ import cooking.zap.app.repo.BalanceUnit
 import cooking.zap.app.repo.NofferClient
 import cooking.zap.app.repo.NwcRepository
 import cooking.zap.app.repo.SparkRepository
+import cooking.zap.app.repo.StableBalanceState
 import cooking.zap.app.repo.WalletMode
 import cooking.zap.app.repo.WalletModeRepository
 import cooking.zap.app.repo.WalletProvider
@@ -268,6 +269,16 @@ class WalletViewModel(
 
     // Spark identity pubkey — populated from the SDK's GetInfoResponse.
     val sparkIdentityPubkey: StateFlow<String?> = sparkRepo.identityPubkey
+
+    // Opt-in USD balance, held as Spark's USDB stablecoin. Spark-only; NWC
+    // wallets have no equivalent, so the UI gates on the wallet mode.
+    val stableBalance: StateFlow<StableBalanceState> = sparkRepo.stableBalance
+
+    private val _stableBalanceUpdating = MutableStateFlow(false)
+    val stableBalanceUpdating: StateFlow<Boolean> = _stableBalanceUpdating
+
+    private val _stableBalanceError = MutableStateFlow<String?>(null)
+    val stableBalanceError: StateFlow<String?> = _stableBalanceError
 
     // NWC connection metadata for the Wallet Info expandable in settings.
     val nwcConnectionInfo: StateFlow<NwcRepository.ConnectionInfo?> = nwcRepo.connectionInfo
@@ -932,6 +943,37 @@ class WalletViewModel(
                 }
             )
         }
+    }
+
+    /**
+     * Turn the USD balance on or off.
+     *
+     * The conversion itself happens inside the Spark SDK; this only records
+     * the preference and then reloads, because enabling can immediately
+     * convert an existing balance and the dashboard would otherwise keep
+     * showing the pre-toggle figure.
+     */
+    fun setStableBalanceEnabled(enabled: Boolean) {
+        if (_walletMode.value != WalletMode.SPARK) return
+        if (_stableBalanceUpdating.value) return
+        _stableBalanceUpdating.value = true
+        _stableBalanceError.value = null
+        viewModelScope.launch {
+            sparkRepo.setStableBalanceEnabled(enabled).fold(
+                onSuccess = {
+                    refreshBalance()
+                    refreshTransactionsQuietly()
+                },
+                onFailure = { e ->
+                    _stableBalanceError.value = e.message ?: "Unable to update USD balance"
+                }
+            )
+            _stableBalanceUpdating.value = false
+        }
+    }
+
+    fun clearStableBalanceError() {
+        _stableBalanceError.value = null
     }
 
     fun deleteWallet() {

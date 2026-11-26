@@ -164,6 +164,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import cooking.zap.app.ui.theme.ConversionSky
 import cooking.zap.app.ui.theme.WispThemeColors
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -200,6 +201,8 @@ import cooking.zap.app.viewmodel.WalletState
 import cooking.zap.app.viewmodel.WalletViewModel
 import breez_sdk_spark.OnchainConfirmationSpeed
 import cooking.zap.app.repo.SparkRepository
+import cooking.zap.app.repo.StableBalanceState
+import cooking.zap.app.repo.TokenAmount
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -405,6 +408,7 @@ fun WalletScreen(
                             recentTransactions = viewModel.transactions.collectAsState().value,
                             profileLookup = remember(profileKey) { { viewModel.getProfileData(it) } },
                             nwcNodeAlias = viewModel.nwcNodeAlias.collectAsState().value,
+                            stableBalance = viewModel.stableBalance.collectAsState().value,
                             pubkey = viewModel.keyRepo.getPubkeyHex(),
                             modifier = Modifier.padding(padding)
                         )
@@ -466,6 +470,7 @@ fun WalletScreen(
                             },
                             onPay = { viewModel.payInvoice(page.invoice) },
                             onCancel = { viewModel.navigateBack() },
+                            stableBalance = viewModel.stableBalance.collectAsState().value,
                             modifier = Modifier.padding(padding)
                         )
                     }
@@ -543,6 +548,7 @@ fun WalletScreen(
                             recentTransactions = viewModel.transactions.collectAsState().value,
                             profileLookup = remember(profileKey) { { viewModel.getProfileData(it) } },
                             nwcNodeAlias = viewModel.nwcNodeAlias.collectAsState().value,
+                            stableBalance = viewModel.stableBalance.collectAsState().value,
                             pubkey = viewModel.keyRepo.getPubkeyHex(),
                             modifier = Modifier.padding(padding)
                         )
@@ -576,6 +582,9 @@ fun WalletScreen(
                         nwcNodeAlias = viewModel.nwcNodeAlias.collectAsState().value,
                         nwcConnectionInfo = viewModel.nwcConnectionInfo.collectAsState().value,
                         nwcSupportedMethods = viewModel.nwcSupportedMethods.collectAsState().value,
+                        stableBalance = viewModel.stableBalance.collectAsState().value,
+                        stableBalanceUpdating = viewModel.stableBalanceUpdating.collectAsState().value,
+                        onSetStableBalance = { viewModel.setStableBalanceEnabled(it) },
                         modifier = Modifier.padding(padding)
                     )
                     is WalletPage.LightningAddressSetup -> LightningAddressSetupContent(
@@ -716,6 +725,7 @@ fun WalletScreen(
                             recentTransactions = viewModel.transactions.collectAsState().value,
                             profileLookup = remember(profileKey) { { viewModel.getProfileData(it) } },
                             nwcNodeAlias = viewModel.nwcNodeAlias.collectAsState().value,
+                            stableBalance = viewModel.stableBalance.collectAsState().value,
                             pubkey = viewModel.keyRepo.getPubkeyHex(),
                             modifier = Modifier.padding(padding)
                         )
@@ -1123,10 +1133,16 @@ private fun WalletHomeContent(
     recentTransactions: List<WalletTransaction> = emptyList(),
     profileLookup: (String) -> cooking.zap.app.nostr.ProfileData? = { null },
     nwcNodeAlias: String? = null,
+    stableBalance: StableBalanceState = StableBalanceState(),
     pubkey: String? = null,
     modifier: Modifier = Modifier
 ) {
     val balanceSats = balanceMsats / 1000
+    // The USD balance leads the dashboard once the user opts in — or while
+    // they are still holding USDB with the mode off, because those funds are
+    // real and hiding them would read as money having gone missing. Spark-only:
+    // NWC wallets have no stablecoin balance to show.
+    val usdPrimary = walletMode == WalletMode.SPARK && stableBalance.isPrimary
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("wisp_settings", android.content.Context.MODE_PRIVATE) }
     // Tri-state balance display (sats / dollars / hidden) — tap the dashboard
@@ -1360,8 +1376,8 @@ private fun WalletHomeContent(
                 WalletBalanceDisplayMode.write(prefs, pubkey, balanceDisplay)
             }
         ) {
-            when (balanceDisplay) {
-                WalletBalanceDisplayMode.HIDDEN -> {
+            when {
+                balanceDisplay == WalletBalanceDisplayMode.HIDDEN -> {
                     Text(
                         "* * * * *",
                         style = MaterialTheme.typography.displayLarge,
@@ -1374,7 +1390,41 @@ private fun WalletHomeContent(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                WalletBalanceDisplayMode.FIAT -> {
+                // USD leads, with the satoshi balance kept on the second line:
+                // the wallet genuinely holds two separate piles of money, and
+                // they are never summed. The sats/fiat tap still switches the
+                // denomination of that second line.
+                usdPrimary -> {
+                    Text(
+                        "$${stableBalance.amountCompact}",
+                        style = MaterialTheme.typography.displayLarge.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        if (stableBalance.active) {
+                            stringResource(R.string.wallet_usd_balance_active)
+                        } else {
+                            stringResource(R.string.wallet_usd_balance_detected)
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (balanceSats > 0) {
+                        Spacer(Modifier.height(2.dp))
+                        val satsFiat = if (balanceDisplay == WalletBalanceDisplayMode.FIAT) {
+                            AmountFormatter.formatFiat(balanceSats, displayCurrency)
+                        } else {
+                            null
+                        }
+                        Text(
+                            satsFiat ?: "%,d %s".format(balanceSats, stringResource(R.string.wallet_sats)),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                balanceDisplay == WalletBalanceDisplayMode.FIAT -> {
                     val fiat = AmountFormatter.formatFiat(balanceSats, displayCurrency)
                     if (fiat != null) {
                         Text(
@@ -1398,7 +1448,7 @@ private fun WalletHomeContent(
                         )
                     }
                 }
-                WalletBalanceDisplayMode.SATS -> {
+                else -> {
                     Text(
                         "%,d".format(balanceSats),
                         style = MaterialTheme.typography.displayLarge.copy(fontWeight = FontWeight.Bold),
@@ -1902,6 +1952,7 @@ private fun SendConfirmContent(
     networkName: String,
     onPay: () -> Unit,
     onCancel: () -> Unit,
+    stableBalance: StableBalanceState = StableBalanceState(),
     modifier: Modifier = Modifier
 ) {
     val feeSats = (feeState as? FeeState.Estimated)?.feeSats
@@ -1992,6 +2043,26 @@ private fun SendConfirmContent(
                     label = stringResource(R.string.wallet_total_spent),
                     value = if (totalSats != null) AmountFormatter.formatFull(totalSats, ctx) else amountSats?.let { AmountFormatter.formatFull(it, ctx) } ?: "\u2014",
                     bold = true
+                )
+            }
+        }
+
+        // With USD mode on, the sats leaving the wallet are converted out of
+        // USDB at settlement. The quoted fee above covers the Lightning leg
+        // only, so say plainly that a conversion rate applies on top — the
+        // total the user actually pays is not the total shown.
+        if (stableBalance.active) {
+            Spacer(Modifier.height(12.dp))
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text(
+                    stringResource(R.string.wallet_usd_send_disclosure, stableBalance.label),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(12.dp)
                 )
             }
         }
@@ -3082,6 +3153,9 @@ private fun TransactionRow(
     val isFiat = displayMode == WalletBalanceDisplayMode.FIAT
     val displayCurrency by CurrencyPreferences.get(ctx).currency.collectAsState()
     var expanded by remember { mutableStateOf(false) }
+    val conversionLabel = tx.conversionFrom?.let {
+        stringResource(R.string.wallet_converted_from, it)
+    }
 
   Column(modifier = Modifier.fillMaxWidth()) {
     Row(
@@ -3091,8 +3165,9 @@ private fun TransactionRow(
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Avatar or direction icon
-        if (profile?.picture != null) {
+        // Avatar or direction icon. A conversion has no counterparty, so it
+        // always takes the icon branch even if a stale profile lookup hits.
+        if (profile?.picture != null && !tx.isConversion) {
             AsyncImage(
                 model = profile.picture,
                 contentDescription = profile.displayString,
@@ -3101,20 +3176,38 @@ private fun TransactionRow(
                     .clip(CircleShape)
             )
         } else {
+            // A conversion gets its own mark: a two-way arrow in sky, not the
+            // green down-arrow of a receive. Both legs of one swap land in the
+            // history, and either arrow would read as money moving in or out.
             Box(
                 modifier = Modifier
                     .size(40.dp)
                     .background(
-                        if (isIncoming) Color(0xFF2E7D32).copy(alpha = 0.1f)
-                        else MaterialTheme.colorScheme.error.copy(alpha = 0.1f),
+                        when {
+                            tx.isConversion -> ConversionSky.copy(alpha = 0.16f)
+                            isIncoming -> Color(0xFF2E7D32).copy(alpha = 0.1f)
+                            else -> MaterialTheme.colorScheme.error.copy(alpha = 0.1f)
+                        },
                         CircleShape
                     ),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    if (isIncoming) Icons.Default.ArrowDownward else Icons.Default.ArrowUpward,
-                    contentDescription = if (isIncoming) stringResource(R.string.wallet_received) else stringResource(R.string.wallet_sent),
-                    tint = if (isIncoming) Color(0xFF2E7D32) else MaterialTheme.colorScheme.error,
+                    when {
+                        tx.isConversion -> Icons.Default.SwapHoriz
+                        isIncoming -> Icons.Default.ArrowDownward
+                        else -> Icons.Default.ArrowUpward
+                    },
+                    contentDescription = when {
+                        tx.isConversion -> conversionLabel
+                        isIncoming -> stringResource(R.string.wallet_received)
+                        else -> stringResource(R.string.wallet_sent)
+                    },
+                    tint = when {
+                        tx.isConversion -> ConversionSky
+                        isIncoming -> Color(0xFF2E7D32)
+                        else -> MaterialTheme.colorScheme.error
+                    },
                     modifier = Modifier.size(20.dp)
                 )
             }
@@ -3124,14 +3217,19 @@ private fun TransactionRow(
 
         // Name/description + time
         Column(modifier = Modifier.weight(1f)) {
-            val displayLabel = if (profile != null) {
-                profile.displayString
-            } else {
-                // Try to get a meaningful description; skip raw zap request JSON
-                val desc = tx.description?.takeIf {
-                    it.isNotBlank() && it != "null" && !it.trimStart().startsWith("{")
+            // "Converted from Bitcoin" wins over Received/Sent — a conversion
+            // has no counterparty, and calling it a receive invites the reading
+            // that new funds arrived.
+            val displayLabel = when {
+                conversionLabel != null -> conversionLabel
+                profile != null -> profile.displayString
+                else -> {
+                    // Try to get a meaningful description; skip raw zap request JSON
+                    val desc = tx.description?.takeIf {
+                        it.isNotBlank() && it != "null" && !it.trimStart().startsWith("{")
+                    }
+                    desc ?: if (isIncoming) stringResource(R.string.wallet_received) else stringResource(R.string.wallet_sent)
                 }
-                desc ?: if (isIncoming) stringResource(R.string.wallet_received) else stringResource(R.string.wallet_sent)
             }
             Text(
                 displayLabel,
@@ -3166,9 +3264,26 @@ private fun TransactionRow(
         // "show my wallet without showing the numbers" screenshot works.
         Column(horizontalAlignment = Alignment.End) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                val sign = if (isIncoming) "+" else "-"
-                val signColor = if (isIncoming) Color(0xFF2E7D32) else MaterialTheme.colorScheme.error
-                val amountFiat = if (isFiat) AmountFormatter.formatFiat(amountSats, displayCurrency) else null
+                // A conversion is signless: the same money stays in the wallet
+                // in a different denomination, so neither + nor - is true.
+                val sign = when {
+                    tx.isConversion -> ""
+                    isIncoming -> "+"
+                    else -> "-"
+                }
+                val signColor = when {
+                    tx.isConversion -> ConversionSky
+                    isIncoming -> Color(0xFF2E7D32)
+                    else -> MaterialTheme.colorScheme.error
+                }
+                // A token row has no sats value, so there is nothing for the
+                // fiat rate to convert — it falls through to the asset branch.
+                val amountFiat = if (isFiat && !tx.isTokenTransfer) {
+                    AmountFormatter.formatFiat(amountSats, displayCurrency)
+                } else {
+                    null
+                }
+                val assetTicker = tx.assetTicker
                 when {
                     isHidden -> Text(
                         "$sign* * *",
@@ -3180,6 +3295,19 @@ private fun TransactionRow(
                         style = MaterialTheme.typography.titleMedium,
                         color = signColor
                     )
+                    assetTicker != null -> {
+                        Text(
+                            sign + TokenAmount.compact(tx.assetAmount ?: "?"),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = signColor
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            assetTicker,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     else -> {
                         Text(
                             "$sign%,d".format(amountSats),
@@ -3195,7 +3323,19 @@ private fun TransactionRow(
                     }
                 }
             }
-            if (!isIncoming && tx.feeMsats > 0) {
+            val assetFee = tx.assetFee
+            val assetTicker = tx.assetTicker
+            if (!isIncoming && !isHidden && assetFee != null && assetTicker != null) {
+                Text(
+                    stringResource(
+                        R.string.wallet_asset_fee,
+                        TokenAmount.compact(assetFee),
+                        assetTicker
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else if (!isIncoming && tx.feeMsats > 0) {
                 val feeSats = tx.feeMsats / 1000
                 val feeFiat = if (isFiat) AmountFormatter.formatFiat(feeSats, displayCurrency) else null
                 val feeText = when {
@@ -3249,6 +3389,9 @@ private fun TransactionDetailPanel(
     val note = tx.description?.takeIf {
         it.isNotBlank() && it != "null" && !it.trimStart().startsWith("{")
     }
+    // A token transfer's id is its token tx hash, and a conversion never
+    // touched the chain — neither belongs under an on-chain label, and
+    // neither has a block explorer to link to.
     val idLabel = if (tx.isOnchain) "Transaction ID" else "Payment hash"
 
     Column(
@@ -3263,9 +3406,26 @@ private fun TransactionDetailPanel(
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         TxDetailRow("Status", if (tx.pending) "Pending" else "Completed")
-        TxDetailRow("Type", if (tx.isOnchain) "On-chain" else "Lightning")
-        TxDetailRow("Amount", "%,d sats".format(sats))
-        if (tx.feeMsats > 0) TxDetailRow("Network fee", "%,d sats".format(feeSats))
+        val assetTicker = tx.assetTicker
+        TxDetailRow(
+            "Type",
+            when {
+                tx.conversionFrom != null ->
+                    stringResource(R.string.wallet_converted_from, tx.conversionFrom)
+                assetTicker != null -> assetTicker
+                tx.isOnchain -> "On-chain"
+                else -> "Lightning"
+            }
+        )
+        if (assetTicker != null) {
+            // Full precision here — the row rounds to two places for
+            // legibility, but the detail view is where every digit belongs.
+            TxDetailRow("Amount", "${tx.assetAmount ?: "?"} $assetTicker")
+            tx.assetFee?.let { TxDetailRow("Fee", "$it $assetTicker") }
+        } else {
+            TxDetailRow("Amount", "%,d sats".format(sats))
+            if (tx.feeMsats > 0) TxDetailRow("Network fee", "%,d sats".format(feeSats))
+        }
         TxDetailRow("Date", fullDate)
         if (note != null) TxDetailRow("Note", note)
         TxDetailRow(idLabel, tx.paymentHash, mono = true, onCopy = { onCopy(tx.paymentHash) })
@@ -4089,6 +4249,9 @@ private fun WalletSettingsContent(
     nwcNodeAlias: String? = null,
     nwcConnectionInfo: cooking.zap.app.repo.NwcRepository.ConnectionInfo? = null,
     nwcSupportedMethods: List<String> = emptyList(),
+    stableBalance: StableBalanceState = StableBalanceState(),
+    stableBalanceUpdating: Boolean = false,
+    onSetStableBalance: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val clipboardManager = LocalClipboardManager.current
@@ -4201,6 +4364,24 @@ private fun WalletSettingsContent(
                     Text("Set Up Lightning Address")
                 }
             }
+        }
+
+        // ── USD balance (Spark only) ─────────────────────────────
+        // NWC wallets have no stablecoin balance; the Spark SDK owns both
+        // legs of the Bitcoin↔USDB conversion.
+        if (walletMode == WalletMode.SPARK) {
+            Spacer(Modifier.height(24.dp))
+            Text(
+                stringResource(R.string.wallet_usd_balance),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(Modifier.height(12.dp))
+            StableBalanceCard(
+                state = stableBalance,
+                updating = stableBalanceUpdating,
+                onSetEnabled = onSetStableBalance
+            )
         }
 
         // ── Wallet Info expandable (Spark + NWC) ─────────────────
@@ -4648,6 +4829,155 @@ private fun WalletSettingsContent(
 }
 
 // --- Lightning Address Setup ---
+
+/**
+ * The USD balance control: four states, matching the web wallet.
+ *
+ *  - **on** — offer the way back to Bitcoin, and disclose that Bitcoin sends
+ *    will convert out of USDB.
+ *  - **off but holding USDB** — the funds are real and must stay visible;
+ *    offer to resume rather than pretending there is nothing there.
+ *  - **confirming** — enabling moves real money through a conversion, so it
+ *    takes a deliberate second tap and states that rates and fees apply.
+ *  - **off** — the plain offer.
+ */
+@Composable
+private fun StableBalanceCard(
+    state: StableBalanceState,
+    updating: Boolean,
+    onSetEnabled: (Boolean) -> Unit
+) {
+    var confirming by remember { mutableStateOf(false) }
+    // A completed toggle invalidates a pending confirmation.
+    LaunchedEffect(state.active) { if (state.active) confirming = false }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        )
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            when {
+                state.active -> {
+                    StableBalanceHeaderRow(
+                        title = stringResource(R.string.wallet_usd_balance_active),
+                        body = stringResource(R.string.wallet_usd_balance_active_body, state.label),
+                        actionLabel = if (updating) {
+                            stringResource(R.string.wallet_usd_updating)
+                        } else {
+                            stringResource(R.string.wallet_usd_use_bitcoin)
+                        },
+                        actionEnabled = !updating,
+                        onAction = { onSetEnabled(false) }
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        stringResource(R.string.wallet_usd_balance_active_note),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                state.hasBalance -> {
+                    StableBalanceHeaderRow(
+                        title = stringResource(R.string.wallet_usd_balance_detected),
+                        body = stringResource(R.string.wallet_usd_balance_detected_body, state.label),
+                        actionLabel = if (updating) {
+                            stringResource(R.string.wallet_usd_updating)
+                        } else {
+                            stringResource(R.string.wallet_usd_resume)
+                        },
+                        actionEnabled = !updating,
+                        onAction = { onSetEnabled(true) }
+                    )
+                }
+                confirming -> {
+                    Text(
+                        stringResource(R.string.wallet_usd_confirm_title),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        stringResource(R.string.wallet_usd_confirm_body),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = { confirming = false },
+                            modifier = Modifier.weight(1f),
+                            enabled = !updating
+                        ) {
+                            Text(stringResource(R.string.wallet_usd_confirm_not_now))
+                        }
+                        Button(
+                            onClick = { onSetEnabled(true) },
+                            modifier = Modifier.weight(1f),
+                            enabled = !updating,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = WispThemeColors.zapColor
+                            )
+                        ) {
+                            Text(
+                                if (updating) {
+                                    stringResource(R.string.wallet_usd_enabling)
+                                } else {
+                                    stringResource(R.string.wallet_usd_confirm_enable)
+                                }
+                            )
+                        }
+                    }
+                }
+                else -> {
+                    StableBalanceHeaderRow(
+                        title = stringResource(R.string.wallet_usd_balance),
+                        body = stringResource(R.string.wallet_usd_balance_offer),
+                        actionLabel = stringResource(R.string.wallet_usd_enable),
+                        actionEnabled = !updating,
+                        onAction = { confirming = true }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StableBalanceHeaderRow(
+    title: String,
+    body: String,
+    actionLabel: String,
+    actionEnabled: Boolean,
+    onAction: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                body,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        TextButton(onClick = onAction, enabled = actionEnabled) {
+            Text(actionLabel, color = WispThemeColors.zapColor)
+        }
+    }
+}
 
 @Composable
 private fun LightningAddressSetupContent(
