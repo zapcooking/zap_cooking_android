@@ -231,7 +231,7 @@ private fun BlockedBadge(size: Int, modifier: Modifier = Modifier) {
     ) {
         Icon(
             Icons.Default.Block,
-            contentDescription = "Blocked",
+            contentDescription = "Muted",
             tint = MaterialTheme.colorScheme.onError,
             modifier = Modifier.size((badgeSize * 0.65f).dp)
         )

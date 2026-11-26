@@ -105,4 +105,21 @@ class ThreadFlattenerTest {
         assertEquals(0, p[0].depth)
         assertTrue(p.any { it.event.id == "A1" && it.depth == 1 })
     }
+
+    @Test
+    fun mutedReplies_stayInTheTree_flaggedForPlaceholderReveal() {
+        // Muted authors aren't dropped: their rows remain (so their own replies still hang
+        // off them) flagged isMuted — the UI renders each as a collapsed placeholder until
+        // revealed per-row (iOS/web parity).
+        val out = ThreadFlattener.flatten(
+            "R", ev("R"),
+            tree("R" to listOf("A", "B"), "A" to listOf("A1")),
+            mutedIds = setOf("A")
+        )
+        val p = posts(out)
+        assertEquals(listOf("R", "A", "A1", "B"), p.map { it.event.id })
+        assertTrue(p.first { it.event.id == "A" }.isMuted)
+        assertFalse(p.first { it.event.id == "A1" }.isMuted)
+        assertFalse(p.first { it.event.id == "B" }.isMuted)
+    }
 }

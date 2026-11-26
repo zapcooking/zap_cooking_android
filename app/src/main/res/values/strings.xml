@@ -177,8 +177,8 @@
     <string name="btn_follow">Follow</string>
     <string name="btn_unfollow">Unfollow</string>
     <string name="btn_follow_all">Follow All</string>
-    <string name="btn_block">Block</string>
-    <string name="btn_unblock">Unblock</string>
+    <string name="btn_block">Mute User</string>
+    <string name="btn_unblock">Unmute User</string>
     <string name="btn_mute_thread">Mute Thread</string>
     <string name="btn_add_to_list">Add to List</string>
     <string name="btn_ask_cheffy">Ask Cheffy about this dish</string>
@@ -389,7 +389,7 @@
     <string name="cd_add_to_list">Add to List</string>
     <string name="cd_profile_picture">Profile picture</string>
     <string name="cd_following">Following</string>
-    <string name="cd_blocked">Blocked</string>
+    <string name="cd_blocked">Muted</string>
     <string name="cd_dm_relays">DM relays</string>
     <string name="cd_attach_media">Attach media</string>
     <string name="cd_send">Send</string>
@@ -666,6 +666,8 @@
     <string name="thread_hidden_spam">%d hidden replies from likely spam accounts</string>
     <string name="thread_tap_to_show">Show</string>
     <string name="thread_tap_to_hide">Hide</string>
+    <string name="thread_muted_reply">Reply from an account you muted</string>
+    <string name="thread_muted_reply_view">View</string>
     <string name="thread_not_spam">Not spam</string>
     <plurals name="thread_continue">
         <item quantity="one">Show %1$d more reply</item>
@@ -960,8 +962,8 @@
     <string name="profile_follows_you">Follows you</string>
     <string name="profile_npub_copied">npub copied</string>
     <string name="profile_add_to_list">Add to List</string>
-    <string name="profile_block">Block</string>
-    <string name="profile_unblock">Unblock</string>
+    <string name="profile_block">Mute User</string>
+    <string name="profile_unblock">Unmute User</string>
     <string name="profile_no_recipes">No recipes yet</string>
     <string name="profile_no_notes">No notes yet</string>
     <string name="profile_no_replies">No replies yet</string>

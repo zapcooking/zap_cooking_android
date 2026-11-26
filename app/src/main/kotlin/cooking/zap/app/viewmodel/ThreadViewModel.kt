@@ -457,26 +457,33 @@ class ThreadViewModel : ViewModel() {
         val pubkeysToScore = mutableSetOf<String>()
 
         val deletedRepo = eventRepoRef?.deletedEventsRepo
+        val mutedEventIds = mutableSetOf<String>()
         for (event in threadEvents.values) {
             if (event.id == rootId) continue
             if (deletedRepo?.isDeleted(event.id) == true) continue
-            if (muteRepo?.isBlocked(event.pubkey) == true) continue
-            if (Nip10.isStandaloneQuote(event)) continue
-            if (eventRepoRef?.isWotFiltered(event.pubkey, event.kind) == true) continue
+            // Muted replies stay in the tree, flagged for the UI's per-row
+            // placeholder reveal (iOS/web parity) — their own replies still
+            // hang off them. Everything below (quotes, WoT, spam) is skipped
+            // for them: the placeholder wins, as on iOS.
+            val isMuted = muteRepo?.isBlocked(event.pubkey) == true
+            if (!isMuted) {
+                if (Nip10.isStandaloneQuote(event)) continue
+                if (eventRepoRef?.isWotFiltered(event.pubkey, event.kind) == true) continue
 
-            if (spamEnabled && spamClassifier != null &&
-                event.pubkey != currentUserPubkey &&
-                contactRepo?.isFollowing(event.pubkey) != true &&
-                safetyPrefs?.isSpamSafelisted(event.pubkey) != true
-            ) {
-                val noteCount = eventRepoRef?.getCachedEventsByAuthor(event.pubkey, 1, 10)?.size ?: 0
-                val cached = spamAuthorCache?.get(event.pubkey, noteCount)
-                if (cached != null && cached >= 0.7f) {
-                    spamEvents.add(event)
-                    continue
-                }
-                if (cached == null && event.pubkey !in spamScoringPubkeys) {
-                    pubkeysToScore.add(event.pubkey)
+                if (spamEnabled && spamClassifier != null &&
+                    event.pubkey != currentUserPubkey &&
+                    contactRepo?.isFollowing(event.pubkey) != true &&
+                    safetyPrefs?.isSpamSafelisted(event.pubkey) != true
+                ) {
+                    val noteCount = eventRepoRef?.getCachedEventsByAuthor(event.pubkey, 1, 10)?.size ?: 0
+                    val cached = spamAuthorCache?.get(event.pubkey, noteCount)
+                    if (cached != null && cached >= 0.7f) {
+                        spamEvents.add(event)
+                        continue
+                    }
+                    if (cached == null && event.pubkey !in spamScoringPubkeys) {
+                        pubkeysToScore.add(event.pubkey)
+                    }
                 }
             }
 
@@ -485,6 +492,7 @@ class ThreadViewModel : ViewModel() {
                 parentId = rootId
             }
             parentToChildren.getOrPut(parentId) { mutableListOf() }.add(event)
+            if (isMuted) mutedEventIds.add(event.id)
         }
 
         spamEvents.sortBy { it.created_at }
@@ -509,7 +517,8 @@ class ThreadViewModel : ViewModel() {
             expandedIds = expandedIds,
             scrollTargetId = scrollTargetId,
             // Fan-out ("show more replies") cap lands with its UI toggle in Phase 3.
-            maxSiblingsInline = Int.MAX_VALUE
+            maxSiblingsInline = Int.MAX_VALUE,
+            mutedIds = mutedEventIds
         )
         _flatThread.value = flattened
 
