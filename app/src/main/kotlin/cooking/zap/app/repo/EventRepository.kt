@@ -63,6 +63,16 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
     private val _removedEvents = MutableSharedFlow<String>(extraBufferCapacity = 64)
     val removedEvents: SharedFlow<String> = _removedEvents
 
+    /** Emits each event this device signed and sent to relays just now: a note from the
+     *  composer, a recipe from [RecipePublisher]. Never a relay echo, a scheduled post (the
+     *  scheduler publishes that later), a draft, or a private reply. No replay: a collector
+     *  sees only what is published while it is collecting. */
+    private val _publishedEvents = MutableSharedFlow<NostrEvent>(extraBufferCapacity = 64)
+    val publishedEvents: SharedFlow<NostrEvent> = _publishedEvents
+
+    /** Announce [event] on [publishedEvents]. Call only once it has been handed to relays. */
+    fun announcePublished(event: NostrEvent) { _publishedEvents.tryEmit(event) }
+
     // NIP-38: user status cache (pubkey -> status content + timestamp for dedup)
     private val userStatusCache = ConcurrentHashMap<String, String>()
     private val userStatusTimestamps = ConcurrentHashMap<String, Long>()
