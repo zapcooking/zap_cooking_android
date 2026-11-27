@@ -260,6 +260,11 @@ private val combinedRegex = Regex("""nostr:(note1|nevent1|npub1|nprofile1|naddr1
 
 private val emojiShortcodeRegex = Regex(""":([a-zA-Z0-9_-]+):""")
 
+// Legacy NIP-08 mentions: `#[3]` refers to the tag at index 3 of the tags
+// array. Pre-NIP-27 clients (Damus circa 2023, etc.) published mentions
+// this way; those notes still circulate and must resolve.
+private val legacyMentionRegex = Regex("""(?<!\w)#\[(\d+)\]""")
+
 // YouTube URL parsing (parseYouTube / YouTubeRef) lives in YouTubeUrl.kt so it stays
 // JVM-unit-testable, free of this file's Android-dependent top-level initializers.
 
@@ -279,7 +284,7 @@ private fun isStandaloneUrl(content: String, matchRange: IntRange): Boolean {
     return true
 }
 
-internal fun parseContent(content: String, emojiMap: Map<String, String> = emptyMap(), imetaMap: Map<String, MediaMeta> = emptyMap(), trimBlankLines: Boolean = true): List<ContentSegment> {
+internal fun parseContent(content: String, emojiMap: Map<String, String> = emptyMap(), imetaMap: Map<String, MediaMeta> = emptyMap(), trimBlankLines: Boolean = true, tags: List<List<String>> = emptyList()): List<ContentSegment> {
     val segments = mutableListOf<ContentSegment>()
     var lastEnd = 0
 
@@ -365,12 +370,35 @@ internal fun parseContent(content: String, emojiMap: Map<String, String> = empty
         segments.add(ContentSegment.TextSegment(content.substring(lastEnd)))
     }
 
-    // Second pass: split TextSegments that contain :shortcode: where shortcode is in emojiMap
-    val afterEmoji = if (emojiMap.isEmpty()) {
+    // Legacy NIP-08 #[index] mentions.
+    //
+    // Notes published before NIP-27 referenced people and events by tag
+    // position — "Congratulations to #[1] #[2]…" with matching ["p", …]
+    // tags. The combined regex never matches these (the hashtag class
+    // rejects the bracket), so each #[N] sits inside a text segment; split
+    // them out here, resolving against the tags array. Out-of-range or
+    // non-p/e indices stay literal text. Callers without the event's tags
+    // (composer preview, DMs) keep every token literal.
+    val afterLegacy = if (tags.isEmpty()) {
         segments
     } else {
         val result = mutableListOf<ContentSegment>()
         for (segment in segments) {
+            if (segment is ContentSegment.TextSegment) {
+                result.addAll(splitTextForLegacyMentions(segment.text, tags))
+            } else {
+                result.add(segment)
+            }
+        }
+        result
+    }
+
+    // Second pass: split TextSegments that contain :shortcode: where shortcode is in emojiMap
+    val afterEmoji = if (emojiMap.isEmpty()) {
+        afterLegacy
+    } else {
+        val result = mutableListOf<ContentSegment>()
+        for (segment in afterLegacy) {
             if (segment is ContentSegment.TextSegment) {
                 result.addAll(splitTextForEmojis(segment.text, emojiMap))
             } else {
@@ -581,6 +609,50 @@ private fun splitTextForNoffers(text: String): List<ContentSegment> {
         result.add(ContentSegment.TextSegment(text.substring(lastEnd)))
     }
     return result
+}
+
+/// Splits a text run on legacy NIP-08 `#[index]` mentions, resolving each
+/// index against `tags`. Profile mentions render inline like npub mentions;
+/// event mentions render like nostr:note references. Indices that don't land
+/// on a resolvable tag stay as text.
+private fun splitTextForLegacyMentions(text: String, tags: List<List<String>>): List<ContentSegment> {
+    val matches = legacyMentionRegex.findAll(text).toList()
+    if (matches.isEmpty()) return listOf(ContentSegment.TextSegment(text))
+
+    val result = mutableListOf<ContentSegment>()
+    var lastEnd = 0
+    var anyFound = false
+    for (match in matches) {
+        val index = match.groupValues.getOrNull(1)?.toIntOrNull() ?: continue
+        val segment = legacyMentionSegment(index, tags) ?: continue
+        anyFound = true
+        if (match.range.first > lastEnd) {
+            result.add(ContentSegment.TextSegment(text.substring(lastEnd, match.range.first)))
+        }
+        result.add(segment)
+        lastEnd = match.range.last + 1
+    }
+    if (!anyFound) return listOf(ContentSegment.TextSegment(text))
+    if (lastEnd < text.length) result.add(ContentSegment.TextSegment(text.substring(lastEnd)))
+    return result
+}
+
+/// `tags[index]` → segment for a NIP-08 mention: `["p", pubkey, relay?]`
+/// becomes a profile mention, `["e", id, relay?]` an event reference.
+private fun legacyMentionSegment(index: Int, tags: List<List<String>>): ContentSegment? {
+    if (index < 0 || index >= tags.size) return null
+    val tag = tags[index]
+    val hints = if (tag.size > 2 && tag[2].isNotEmpty()) listOf(tag[2]) else emptyList()
+    return when (tag.firstOrNull()) {
+        "p" -> if (tag.size >= 2) ContentSegment.NostrProfileSegment(tag[1], hints) else null
+        "e" -> if (tag.size >= 2) {
+            val author = if (tag.size > 4 && tag[4].isNotEmpty()) tag[4] else null
+            ContentSegment.NostrNoteSegment(tag[1], hints, author)
+        } else {
+            null
+        }
+        else -> null
+    }
 }
 
 private fun splitTextForEmojis(text: String, emojiMap: Map<String, String>): List<ContentSegment> {
@@ -949,6 +1021,7 @@ fun RichContent(
     emojiMap: Map<String, String> = emptyMap(),
     imetaMap: Map<String, MediaMeta> = emptyMap(),
     plainLinks: Boolean = false,
+    eventTags: List<List<String>> = emptyList(),
     eventRepo: EventRepository? = null,
     onProfileClick: ((String) -> Unit)? = null,
     onNoteClick: ((String) -> Unit)? = null,
@@ -961,7 +1034,7 @@ fun RichContent(
     collapsible: Boolean = false,
     collapsedTextMaxHeight: Dp = 500.dp
 ) {
-    val segments = remember(content, emojiMap, imetaMap, plainLinks) { parseContent(content.trimEnd('\n', '\r'), emojiMap, imetaMap, trimBlankLines = !plainLinks) }
+    val segments = remember(content, emojiMap, imetaMap, plainLinks, eventTags) { parseContent(content.trimEnd('\n', '\r'), emojiMap, imetaMap, trimBlankLines = !plainLinks, tags = eventTags) }
     val profileVer = eventRepo?.profileVersion?.collectAsState()?.value ?: 0
     var fullScreenPager by remember { mutableStateOf<Pair<List<MediaPagerItem>, Int>?>(null) }
     val mediaLayoutStyle = LocalMediaSettings.current.mediaLayoutStyle
@@ -1783,6 +1856,7 @@ fun QuotedNote(
                     content = event.content,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurface,
+                    eventTags = event.tags,
                     eventRepo = eventRepo,
                     imetaMap = parseImetaTags(event.tags)
                 )
