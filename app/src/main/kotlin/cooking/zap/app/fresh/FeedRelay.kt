@@ -39,6 +39,17 @@ object FeedRelay {
     }
 
     /**
+     * May [relayUrl] be recorded as where an event came from, or handed out
+     * as a relay hint (an nevent, a tag's relay field, a per-author hint)?
+     * Everything but the feed relay (build spec §1: "never a publish target,
+     * a relay hint, or a member of another set"). It is curated and partly
+     * members-only, so a hint to it sends other clients somewhere most of
+     * them can't read, and a pool socket to it is one more place that could
+     * be asked to log in.
+     */
+    fun mayBeHint(relayUrl: String): Boolean = !isFeedRelay(relayUrl)
+
+    /**
      * May the app answer a NIP-42 challenge from [relayUrl]? Everything but
      * the feed relay: yes. The feed relay: only when login is enabled.
      */

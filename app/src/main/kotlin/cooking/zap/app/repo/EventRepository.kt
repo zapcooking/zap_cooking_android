@@ -2,6 +2,7 @@ package cooking.zap.app.repo
 
 import android.util.Log
 import android.util.LruCache
+import cooking.zap.app.fresh.FeedRelay
 import cooking.zap.app.nostr.FoodHashtags
 import cooking.zap.app.nostr.Nip09
 import cooking.zap.app.nostr.Nip10
@@ -1222,6 +1223,9 @@ class EventRepository(val profileRepo: ProfileRepository? = null, val muteRepo: 
     }
 
     fun addEventRelay(eventId: String, relayUrl: String) {
+        // The feed relay is never a source attribution: what is recorded here
+        // becomes the relay hint of an nevent, a bookmark or a pin.
+        if (!FeedRelay.mayBeHint(relayUrl)) return
         val relays = eventRelays.get(eventId) ?: mutableSetOf<String>().also {
             eventRelays.put(eventId, it)
         }
