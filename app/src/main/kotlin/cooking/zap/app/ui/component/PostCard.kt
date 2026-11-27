@@ -745,6 +745,7 @@ fun PostCard(
                 color = MaterialTheme.colorScheme.onSurface,
                 emojiMap = emojiMap,
                 imetaMap = imetaMap,
+                eventTags = event.tags,
                 eventRepo = eventRepo,
                 onProfileClick = onNavigateToProfile,
                 onNoteClick = onQuotedNoteClick,
@@ -815,6 +816,10 @@ fun PostCard(
                                 color = MaterialTheme.colorScheme.onSurface,
                                 emojiMap = emojiMap,
                                 imetaMap = imetaMap,
+                                // Indices in the translation refer to the
+                                // original event's tags (NIP-08 #[N] mentions
+                                // survive translation as #[N]).
+                                eventTags = event.tags,
                                 eventRepo = eventRepo,
                                 onProfileClick = onNavigateToProfile,
                                 onNoteClick = onQuotedNoteClick,

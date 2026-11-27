@@ -608,6 +608,7 @@ fun GalleryCard(
                 content = event.content,
                 eventRepo = eventRepo,
                 emojiMap = emojiMap,
+                eventTags = event.tags,
                 modifier = Modifier,
                 style = MaterialTheme.typography.bodyMedium.copy(
                     color = MaterialTheme.colorScheme.onSurface
