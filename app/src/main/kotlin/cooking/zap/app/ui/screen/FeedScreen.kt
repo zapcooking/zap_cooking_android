@@ -740,6 +740,7 @@ fun FeedScreen(
                                                 } else stringResource(R.string.tab_list)
                                                 FeedType.TRENDING -> stringResource(R.string.tab_trending)
                                                 FeedType.ONLY_FOOD -> stringResource(R.string.tab_onlyfood)
+                                                FeedType.FRESH -> stringResource(R.string.tab_fresh)
                                             }
                                             Text(
                                                 feedLabel,
@@ -777,6 +778,18 @@ fun FeedScreen(
                                             Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
                                         }} else null
                                     )
+                                    if (cooking.zap.app.FeatureFlags.FRESH_FEED_ENABLED) {
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.tab_fresh)) },
+                                            onClick = {
+                                                showFeedTypeDropdown = false
+                                                viewModel.setFeedType(FeedType.FRESH)
+                                            },
+                                            trailingIcon = if (feedType == FeedType.FRESH) {{
+                                                Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                                            }} else null
+                                        )
+                                    }
                                     DropdownMenuItem(
                                         text = { Text(stringResource(R.string.tab_for_you)) },
                                         onClick = {

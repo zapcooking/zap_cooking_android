@@ -4,6 +4,9 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import cooking.zap.app.fresh.FreshFeedController
+import cooking.zap.app.fresh.FreshFeedState
+import cooking.zap.app.fresh.FreshFeedWiring
 import cooking.zap.app.nostr.NostrEvent
 import cooking.zap.app.nostr.NostrSigner
 import cooking.zap.app.relay.HttpClientFactory
@@ -70,13 +73,21 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
-enum class FeedType { FOR_YOU, FOLLOWS, EXTENDED_FOLLOWS, RELAY, LIST, TRENDING, ONLY_FOOD }
+enum class FeedType {
+    FOR_YOU, FOLLOWS, EXTENDED_FOLLOWS, RELAY, LIST, TRENDING, ONLY_FOOD,
+
+    /** The curated feed relay, on its own socket. Behind `FeatureFlags.FRESH_FEED_ENABLED`. */
+    FRESH,
+}
 
 enum class TrendingMode { NOTES, USERS }
 
@@ -493,10 +504,66 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
         })
     }
 
+    // -- Fresh feed (FeatureFlags.FRESH_FEED_ENABLED; build spec §1 "Fresh feed relay") --
+    //
+    // The controller is made the first time Fresh is shown, for the account
+    // signed in then, and needs only its pubkey: a read-only account loads
+    // Fresh like any other. It reads the feed relay on its own socket; the
+    // shared pool carries only the engagement and profile queries for its rows.
+    private val freshController = MutableStateFlow<FreshFeedController?>(null)
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val freshState: StateFlow<FreshFeedState> = freshController
+        .flatMapLatest { it?.state ?: flowOf(FreshFeedState()) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, FreshFeedState())
+
+    private fun freshForCurrentAccount(): FreshFeedController? {
+        val pubkey = getUserPubkey() ?: return null
+        freshController.value?.let { existing ->
+            if (existing.pubkey == pubkey) return existing
+            existing.close()
+        }
+        return FreshFeedWiring.controller(
+            pubkey = pubkey,
+            eventRepo = eventRepo,
+            muteRepo = muteRepo,
+            deletedEventsRepo = deletedEventsRepo,
+            eventPersistence = eventPersistence,
+            metadataFetcher = metadataFetcher,
+            visitPrefs = getApplication<Application>().getSharedPreferences("fresh_feed", Context.MODE_PRIVATE),
+        ).also { freshController.value = it }
+    }
+
+    init {
+        feedSub.freshHooks = object : FreshFeedHooks {
+            override fun selected() { freshForCurrentAccount()?.activate() }
+            override fun deselected() { freshController.value?.deactivate() }
+            override fun posts(): List<NostrEvent> = freshController.value?.state?.value?.posts ?: emptyList()
+            override fun reset() {
+                freshController.value?.close()
+                freshController.value = null
+            }
+        }
+        viewModelScope.launch {
+            freshState.map { it.posts }.distinctUntilChanged().collect { feedSub.onFreshPostsChanged() }
+        }
+    }
+
+    /** Fresh: put the posts the tail is holding into the list. The view scrolls to the top with it. */
+    fun freshShowPending() { freshController.value?.showPending() }
+    fun freshDismissPendingPill() { freshController.value?.dismissPendingPill() }
+
+    /** Fresh: the row at [rowIndex] of [FreshFeedState.rows] appeared (paging). */
+    fun freshRowAppeared(rowIndex: Int) { freshController.value?.rowAppeared(rowIndex) }
+
     // -- Exposed state --
     val feed: StateFlow<List<NostrEvent>> = combine(
-        feedSub.feedType, eventRepo.feed, eventRepo.relayFeed, feedSub.feedContentFilter
-    ) { type, main, relay, contentFilter ->
+        feedSub.feedType, eventRepo.feed, eventRepo.relayFeed, feedSub.feedContentFilter, freshState
+    ) { type, main, relay, contentFilter, fresh ->
+        if (type == FeedType.FRESH) {
+            val kinds = contentFilter.kinds()
+            return@combine if (kinds == null) fresh.posts else fresh.posts.filter { it.kind in kinds }
+        }
         // ONLY_FOOD is relay-backed (a dedicated #t query), like RELAY/TRENDING.
         // eventRepo.feed already has the content filter baked in (setKindFilter),
         // but relayFeed doesn't go through that path, so the type/notes/gallery/
@@ -566,7 +633,9 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
     val feedType: StateFlow<FeedType> = feedSub.feedType
     val selectedRelay: StateFlow<String?> = feedSub.selectedRelay
     val selectedRelaySet: StateFlow<RelaySet?> = feedSub.selectedRelaySet
-    val isRefreshing: StateFlow<Boolean> = feedSub.isRefreshing
+    val isRefreshing: StateFlow<Boolean> = combine(feedSub.isRefreshing, freshState) { pool, fresh ->
+        pool || fresh.isRefreshing
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val relayFeedStatus: StateFlow<RelayFeedStatus> = feedSub.relayFeedStatus
     val loadingScreenComplete: StateFlow<Boolean> = feedSub.loadingScreenComplete
     val trendingMetric: StateFlow<TrendingMetric> = feedSub.trendingMetric
@@ -708,8 +777,15 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
     }
     /** Called after relay reconnect to re-subscribe notified group channels. */
     var onGroupReconnect: (() -> Unit)? = null
-    fun onAppPause() = startup.onAppPause()
-    fun onAppResume(pausedMs: Long) = startup.onAppResume(pausedMs)
+    fun onAppPause() {
+        freshController.value?.backgrounded()
+        startup.onAppPause()
+    }
+    fun onAppResume(pausedMs: Long) {
+        // Forwarded whatever feed is selected, so Fresh always knows.
+        freshController.value?.foregrounded()
+        startup.onAppResume(pausedMs)
+    }
     fun refreshRelays() = startup.refreshRelays()
     fun refreshDmsAndNotifications() = startup.refreshDmsAndNotifications()
     fun integrateExtendedNetwork() = startup.integrateExtendedNetwork()
@@ -718,9 +794,13 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
     // -- Feed subscription delegates --
     fun setFeedType(type: FeedType) = feedSub.setFeedType(type)
     fun setSelectedRelay(url: String) = feedSub.setSelectedRelay(url)
-    fun refreshFeed() = feedSub.refreshFeed()
+    fun refreshFeed() {
+        if (feedType.value == FeedType.FRESH) freshController.value?.refresh() else feedSub.refreshFeed()
+    }
     fun retryRelayFeed() = feedSub.retryRelayFeed()
-    fun loadMore() = feedSub.loadMore()
+    fun loadMore() {
+        if (feedType.value == FeedType.FRESH) freshController.value?.loadMore() else feedSub.loadMore()
+    }
     fun onVisibleRangeChanged(first: Int, last: Int) = feedSub.onViewportChanged(first, last)
     fun setTrendingMetric(metric: TrendingMetric) = feedSub.setTrendingMetric(metric)
     fun setTrendingTimeframe(timeframe: TrendingTimeframe) = feedSub.setTrendingTimeframe(timeframe)
@@ -1035,6 +1115,7 @@ class FeedViewModel(app: Application) : AndroidViewModel(app) {
 
     override fun onCleared() {
         super.onCleared()
+        freshController.value?.close()
         nwcRepo.disconnect()
         sparkRepo.disconnect()
         relayPool.disconnectAll()

@@ -2,6 +2,7 @@ package cooking.zap.app.viewmodel
 
 import android.content.SharedPreferences
 import android.util.Log
+import cooking.zap.app.FeatureFlags
 import cooking.zap.app.nostr.ClientMessage
 import cooking.zap.app.nostr.Filter
 import cooking.zap.app.nostr.NostrEvent
@@ -182,7 +183,70 @@ class FeedSubscriptionManager(
     private var forYouSupplementaryJob: Job? = null
     private var forYouGeneration = 0L
 
+    /** Fresh's controller, bound by FeedViewModel. Null: Fresh can't be shown. */
+    var freshHooks: FreshFeedHooks? = null
+
+    /**
+     * The author feed's live subscription was closed for Fresh and not
+     * reopened yet. The next author feed picked resubscribes: without this a
+     * switch to Follows is filter-only and would show a feed nothing feeds.
+     */
+    private var mainFeedSuspended = false
+
     fun markLoadingComplete() { _loadingScreenComplete.value = true }
+
+    /** What the selected feed shows: the rows engagement is asked for. */
+    private fun shownFeedEvents(): List<NostrEvent> = when {
+        _feedType.value == FeedType.FRESH -> freshHooks?.posts() ?: emptyList()
+        isRelayBackedFeed() -> eventRepo.relayFeed.value
+        else -> eventRepo.feed.value
+    }
+
+    /**
+     * Fresh was picked: close every pool subscription that feeds a list,
+     * whatever feed was showing (see [FreshFeedSwitch.poolSubscriptionsToClose]),
+     * and move both feed sub ids on so a frame still in flight matches
+     * nothing in `EventRouter`. Notification engagement is asked for again:
+     * it shares the id list and feeds no list.
+     */
+    private fun suspendPoolFeedsForFresh() {
+        feedEoseJob?.cancel()
+        relayFeedEoseJob?.cancel()
+        relayStatusMonitorJob?.cancel()
+        forYouSupplementaryJob?.cancel()
+        forYouGeneration++
+        viewportEngagementJob?.cancel()
+        pollVoteCollectorJob?.cancel()
+        val closing = FreshFeedSwitch.poolSubscriptionsToClose(feedSubId, relayFeedSubId, activeEngagementSubIds)
+        feedGeneration++
+        feedSubId = "feed-$feedGeneration"
+        relayFeedGeneration++
+        relayFeedSubId = "relay-feed-$relayFeedGeneration"
+        for (subId in closing) relayPool.closeOnAllRelays(subId)
+        activeEngagementSubIds.clear()
+        engagedEventIds.clear()
+        eventRepo.countNewNotes = false
+        isLoadingMore = false
+        mainFeedSuspended = true
+        _relayFeedStatus.value = RelayFeedStatus.Idle
+        subscribeNotifEngagement()
+    }
+
+    /**
+     * Fresh's rows changed while it is shown: ask for engagement on the
+     * first rows not asked yet (the viewport tracker covers the rest).
+     */
+    fun onFreshPostsChanged() {
+        if (_feedType.value != FeedType.FRESH) return
+        val posts = shownFeedEvents()
+        if (posts.isEmpty()) return
+        if (engagedEventIds.isEmpty()) {
+            subscribeEngagementForFeed()
+            subscribeNotifEngagement()
+        } else {
+            subscribeEngagementForEvents(posts.take(15))
+        }
+    }
 
     /** Resolve indexer relays: user's search relays (kind 10007) with default fallback. */
     private fun getIndexerRelays(): List<String> {
@@ -210,6 +274,7 @@ class FeedSubscriptionManager(
         type == FeedType.RELAY || type == FeedType.TRENDING || type == FeedType.ONLY_FOOD
 
     fun setFeedType(type: FeedType) {
+        if (!FreshFeedSwitch.selectable(type, FeatureFlags.FRESH_FEED_ENABLED)) return
         val prev = _feedType.value
         Log.d("RLC", "[FeedSub] setFeedType $prev → $type feedSize=${eventRepo.feed.value.size}")
         _feedType.value = type
@@ -223,10 +288,28 @@ class FeedSubscriptionManager(
         if (isRelayBackedFeed(prev) && prev != type) {
             unsubscribeRelayFeed()
         }
+        // Leaving Fresh: its socket closes, and the engagement queries for
+        // its rows go with it.
+        if (prev == FeedType.FRESH && type != FeedType.FRESH) {
+            freshHooks?.deselected()
+            pauseEngagement()
+            engagedEventIds.clear()
+            subscribeNotifEngagement()
+        }
 
         when (type) {
+            FeedType.FRESH -> {
+                if (prev == FeedType.FRESH) return
+                suspendPoolFeedsForFresh()
+                freshHooks?.selected()
+            }
             FeedType.FOR_YOU, FeedType.FOLLOWS, FeedType.EXTENDED_FOLLOWS -> {
-                if (prev == FeedType.LIST) {
+                if (mainFeedSuspended) {
+                    // Coming back from Fresh (directly, or through a
+                    // relay-backed feed): the author feed was closed.
+                    Log.d("RLC", "[FeedSub] setFeedType $prev → $type — author feed was closed for Fresh, resubscribing")
+                    resubscribeFeed()
+                } else if (prev == FeedType.LIST) {
                     Log.d("RLC", "[FeedSub] switching from $prev to $type — rebuilding feed from cache and resubscribing")
                     eventRepo.resetFeedDisplay()
                     eventRepo.rebuildFeedFromCache()
@@ -321,6 +404,16 @@ class FeedSubscriptionManager(
             hasResolvedInitialFeed = true
             val landing = resolveInitialFeedType()
             Log.d("RLC", "[FeedSub] subscribeFeed: resolved landing feed = $landing")
+            if (landing == FeedType.FRESH) {
+                // Fresh loads on its own socket: no pool feed is subscribed,
+                // and the loading screen has nothing on the pool to wait for.
+                mainFeedSuspended = true
+                _initialLoadDone.value = true
+                _initLoadingState.value = InitLoadingState.Done
+                freshHooks?.selected()
+                subscribeNotifEngagement()
+                return
+            }
             if (isRelayBackedFeed(landing)) {
                 // OnlyFood paints from cache first so there's instant content under the
                 // loading indicator (merge fresh on top → clear=false); its EOSE arms
@@ -336,6 +429,14 @@ class FeedSubscriptionManager(
             // Author / List landing: resubscribeFeed() subscribes and arms
             // loading-Done at the feed's own EOSE.
             resubscribeFeed()
+            return
+        }
+        if (_feedType.value == FeedType.FRESH) {
+            // Reconnect while Fresh is shown: no pool feed to bring back,
+            // only the engagement queries for its rows.
+            engagedEventIds.clear()
+            subscribeEngagementForFeed()
+            subscribeNotifEngagement()
             return
         }
         resubscribeFeed()
@@ -368,8 +469,7 @@ class FeedSubscriptionManager(
      */
     private fun resolveInitialFeedType(): FeedType {
         val savedName = prefs.getString(KEY_LAST_FEED_TYPE, null)
-        val savedType = savedName?.let { try { FeedType.valueOf(it) } catch (_: Exception) { null } }
-        var landing = savedType ?: FeedType.ONLY_FOOD
+        var landing = FreshFeedSwitch.landing(savedName, FeatureFlags.FRESH_FEED_ENABLED, default = FeedType.ONLY_FOOD)
 
         when (landing) {
             FeedType.RELAY -> {
@@ -438,6 +538,8 @@ class FeedSubscriptionManager(
 
     fun refreshFeed() {
         val type = _feedType.value
+        // Fresh refreshes on its own socket (FeedViewModel.refreshFeed).
+        if (type == FeedType.FRESH) return
 
         // Author feeds (For You / Follows / Extended / List): leave the legacy
         // timed spinner untouched — a real refresh for these is a later scoped fix.
@@ -478,6 +580,14 @@ class FeedSubscriptionManager(
 
     fun resubscribeFeed() {
         Log.d("RLC", "[FeedSub] resubscribeFeed() feedType=${_feedType.value} connectedCount=${relayPool.connectedCount.value}")
+        if (_feedType.value == FeedType.FRESH) {
+            // Called from many places (follow changes, reconnects, startup
+            // retries). While Fresh is shown none of them may reopen the
+            // author feed; it resubscribes when an author feed is picked.
+            mainFeedSuspended = true
+            return
+        }
+        mainFeedSuspended = false
         val oldSubId = feedSubId
         feedGeneration++
         feedSubId = "feed-$feedGeneration"
@@ -535,7 +645,7 @@ class FeedSubscriptionManager(
                     indexerRelays = indexerRelays, blockedUrls = excludedUrls
                 )
             }
-            FeedType.RELAY, FeedType.TRENDING, FeedType.ONLY_FOOD -> {
+            FeedType.RELAY, FeedType.TRENDING, FeedType.ONLY_FOOD, FeedType.FRESH -> {
                 // RELAY/TRENDING feeds use their own subscribe methods — should not reach here
                 Log.w("RLC", "[FeedSub] resubscribeFeed() called for ${_feedType.value} type, skipping")
                 return
@@ -635,6 +745,7 @@ class FeedSubscriptionManager(
     fun loadMore() {
         if (isLoadingMore) return
         if (_feedType.value == FeedType.TRENDING) return  // trending relay sends full ranked set
+        if (_feedType.value == FeedType.FRESH) return  // Fresh pages on its own socket (FeedViewModel.loadMore)
         isLoadingMore = true
 
         val indexerRelays = getIndexerRelays()
@@ -735,7 +846,7 @@ class FeedSubscriptionManager(
                     indexerRelays = indexerRelays, blockedUrls = excludedUrls
                 )
             }
-            FeedType.TRENDING -> return  // guarded above, but required for exhaustiveness
+            FeedType.TRENDING, FeedType.FRESH -> return  // guarded above, but required for exhaustiveness
         }
 
         // RELAY and ONLY_FOOD both page the isolated relay feed via "relay-loadmore".
@@ -1205,7 +1316,7 @@ class FeedSubscriptionManager(
         activeEngagementSubIds.clear()
         engagedEventIds.clear()
 
-        val feedEvents = if (isRelayBackedFeed()) eventRepo.relayFeed.value else eventRepo.feed.value
+        val feedEvents = shownFeedEvents()
         if (feedEvents.isEmpty()) return
 
         // Subscribe global subs (poll votes, DM zaps) for all feed events
@@ -1339,11 +1450,7 @@ class FeedSubscriptionManager(
         viewportEngagementJob = scope.launch {
             // Debounce to avoid thrashing during fast scrolls
             delay(300)
-            val feedEvents = if (isRelayBackedFeed()) {
-                eventRepo.relayFeed.value
-            } else {
-                eventRepo.feed.value
-            }
+            val feedEvents = shownFeedEvents()
             if (feedEvents.isEmpty()) return@launch
 
             // Expand visible range with prefetch buffer: 5 above, 10 below
@@ -1423,6 +1530,8 @@ class FeedSubscriptionManager(
     fun reset() {
         feedEoseJob?.cancel()
         viewportEngagementJob?.cancel()
+        freshHooks?.reset()
+        mainFeedSuspended = false
         unsubscribeRelayFeed()
         relayPool.closeOnAllRelays(feedSubId)
         for (subId in activeEngagementSubIds) relayPool.closeOnAllRelays(subId)
