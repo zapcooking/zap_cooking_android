@@ -319,6 +319,7 @@
     <string name="tab_list">List</string>
     <string name="tab_hashtags">Hashtags</string>
     <string name="tab_onlyfood">OnlyFood</string>
+    <string name="tab_fresh">Fresh</string>
     <string name="feed_onlyfood_empty">No food posts yet — pull to refresh</string>
     <plurals name="feed_onlyfood_wot_hidden">
         <item quantity="one">%d post was hidden by the food trust filter.</item>

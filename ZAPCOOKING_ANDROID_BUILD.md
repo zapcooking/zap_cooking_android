@@ -162,19 +162,52 @@ before relying on a number. Rules that hold on Android (Seth, 2026-11-25):
    (#312).
 3. Relay client — `fresh/FreshRelayClient` over the `FreshSocketTransport`
    seam: its own read-only socket, only `REQ` and `CLOSE` sent, every event
-   verified. Port of iOS #202. Nothing in the app calls it yet.
-4. View model + feed picker entry.
+   verified. Port of iOS #202 — done (#314).
+4. View model + feed picker entry — `fresh/FreshFeedController` (port of iOS
+   `FreshFeedViewModel` without the special cards), bound to the app in
+   `fresh/FreshFeedWiring` and `FeedViewModel`; `FeedType.FRESH` and its
+   picker entry behind `FeatureFlags.FRESH_FEED_ENABLED` (**off**). Own posts
+   arrive through `EventRepository.publishedEvents` (#315). With the flag on,
+   the existing feed list renders Fresh's posts; the pending count, the
+   divider, the finish line and the recipe row are loaded and exposed
+   (`FeedViewModel.freshState`) and rendered by step 5.
 5. UI.
 6. Default-on for new sign-ins.
 7. Specials (recipe box, topic spotlights).
 
 **Android differences from iOS:**
 
-- `FreshRelayClient.foregrounded()` is called by the view model. The client
-  has no lifecycle dependency and does not observe the app's state itself
-  (iOS observes the foreground notification).
+- `FreshRelayClient.foregrounded()` is called by the controller
+  (`FreshFeedController.foregrounded()`, from `FeedViewModel.onAppResume`).
+  The client has no lifecycle dependency and does not observe the app's state
+  itself (iOS observes the foreground notification).
 - Hashtag mutes apply (iOS has none). The caller lowercases them.
 - The hellthread limit is fixed at 25 p-tags (iOS reads a setting).
+- The reader's rules are read live from `MuteRepository` on every use, so
+  there is no snapshot to lag behind a block and no "hidden since" sets; any
+  mute-list change drops what is shown at once. There is no report action on
+  feed posts, so the two iOS report cases have no Android counterpart.
+- Tail posts wait behind `pendingNewCount` until `showPending()`, as on iOS,
+  with two exceptions that apply at once: an edit of a long-form post already
+  in the list replaces it in place, and the relay's copy of an own post
+  already pinned takes its row (iOS holds both behind the pill). The user's
+  own fresh publish is inserted at once on both.
+- An own post is pinned only if it passes `FreshEventVerifier` and is not
+  marked private. The private marks live in memory, so after a restart the
+  signature check is what keeps the stored unsigned copy of a private reply
+  out (iOS checks for an empty signature).
+- The recipe row takes `FreshPosts.isRecipe` (the tag rule); iOS also
+  requires the recipe template in the content. Pool 60, row 12, as iOS.
+- The feed choice is device-wide (`wisp_feed` / `last_feed_type`), as for
+  every other Android feed; iOS stores it per account. The last-visit mark is
+  per account on both.
+- Selecting Fresh closes every shared-pool subscription that feeds a list
+  (`FreshFeedSwitch.poolSubscriptionsToClose`), whatever feed was showing;
+  only the engagement and profile queries for Fresh's rows use the pool. The
+  author feed resubscribes when an author feed is next picked.
+- The feed relay is refused wherever a relay hint is recorded
+  (`FeedRelay.mayBeHint` in `EventRepository.addEventRelay` and
+  `RelayHintStore.addHint`). Fresh itself records no source relay.
 
 ---
 

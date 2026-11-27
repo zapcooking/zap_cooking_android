@@ -42,4 +42,12 @@ object FeatureFlags {
      * decision (Cook+ topic feeds and history), not a bug fix.
      */
     const val FEED_RELAY_LOGIN_ENABLED = false
+
+    /**
+     * The Fresh feed (`wss://feed.zap.cooking`, build spec §1 "Fresh feed
+     * relay"): the feed picker entry and everything behind it. Off: the
+     * picker has no Fresh entry, a stored Fresh choice falls back to the
+     * default feed, and no socket to the feed relay is ever opened.
+     */
+    const val FRESH_FEED_ENABLED = false
 }

@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
 import android.util.LruCache
+import cooking.zap.app.fresh.FeedRelay
 import cooking.zap.app.nostr.NostrEvent
 import cooking.zap.app.relay.RelayConfig
 
@@ -34,6 +35,9 @@ class RelayHintStore(context: Context) {
     /** Add a single relay hint for a pubkey. */
     fun addHint(pubkey: String, relayUrl: String) {
         if (relayUrl.isBlank() || !RelayConfig.isValidUrl(relayUrl)) return
+        // Whatever names it (a tag in someone's post, a delivering socket),
+        // the feed relay is never a hint.
+        if (!FeedRelay.mayBeHint(relayUrl)) return
         @Suppress("NAME_SHADOWING")
         val relayUrl = relayUrl.trimEnd('/')
         val hints = cache.get(pubkey)
@@ -94,7 +98,7 @@ class RelayHintStore(context: Context) {
             val parts = line.split("\t", limit = 2)
             if (parts.size != 2) continue
             val pubkey = parts[0]
-            val urls = parts[1].split(",").filter { it.isNotBlank() }.toMutableSet()
+            val urls = parts[1].split(",").filter { it.isNotBlank() && FeedRelay.mayBeHint(it) }.toMutableSet()
             if (urls.isEmpty()) continue
             cache.put(pubkey, urls)
             count++
