@@ -299,10 +299,6 @@ class WalletViewModel(
     // NWC connection metadata for the Wallet Info expandable in settings.
     val nwcConnectionInfo: StateFlow<NwcRepository.ConnectionInfo?> = nwcRepo.connectionInfo
 
-    // Delete wallet confirmation
-    private val _deleteConfirmText = MutableStateFlow("")
-    val deleteConfirmText: StateFlow<String> = _deleteConfirmText
-
     // Lightning address availability check
     private val _addressAvailable = MutableStateFlow<Boolean?>(null)
     val addressAvailable: StateFlow<Boolean?> = _addressAvailable
@@ -520,7 +516,6 @@ class WalletViewModel(
         _sendError.value = null
         _receiveAmount.value = ""
         _restoreMnemonic.value = ""
-        _deleteConfirmText.value = ""
         _lightningAddressError.value = null
         _addressAvailable.value = null
     }
@@ -1043,14 +1038,6 @@ class WalletViewModel(
     }
 
     fun deleteWallet() {
-        // Custom (non-default) Spark wallets are irreversible without their
-        // seed phrase, so we require the typed DELETE confirmation. Default
-        // wallets re-derive from the nsec on demand, so a tap is enough.
-        if (_walletMode.value == WalletMode.SPARK
-            && !computeIsDefaultWallet()
-            && _deleteConfirmText.value != "DELETE"
-        ) return
-
         connectJob?.cancel()
         statusCollectJob?.cancel()
         connectionMonitorJob?.cancel()
@@ -1075,7 +1062,6 @@ class WalletViewModel(
         _connectionString.value = ""
         _statusLines.value = emptyList()
         clearWalletDisplayState()
-        _deleteConfirmText.value = ""
         _isDefaultWallet.value = false
 
         // Suppress the auto-create on the next navigateHome — the user
@@ -1142,10 +1128,6 @@ class WalletViewModel(
         _connectionString.value = ""
         _statusLines.value = emptyList()
         clearWalletDisplayState()
-    }
-
-    fun updateDeleteConfirmText(value: String) {
-        _deleteConfirmText.value = value
     }
 
     fun refreshState() {

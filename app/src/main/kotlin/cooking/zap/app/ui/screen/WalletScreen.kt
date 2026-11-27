@@ -626,8 +626,6 @@ fun WalletScreen(
                         modifier = Modifier.padding(padding)
                     )
                     is WalletPage.DeleteWalletConfirm -> DeleteWalletConfirmContent(
-                        confirmText = viewModel.deleteConfirmText.collectAsState().value,
-                        onConfirmTextChange = { viewModel.updateDeleteConfirmText(it) },
                         onDelete = { viewModel.deleteWallet() },
                         onCancel = { viewModel.navigateBack() },
                         walletMode = viewModel.walletMode.collectAsState().value,
@@ -5278,8 +5276,6 @@ private fun LightningAddressQRContent(
 
 @Composable
 private fun DeleteWalletConfirmContent(
-    confirmText: String,
-    onConfirmTextChange: (String) -> Unit,
     onDelete: () -> Unit,
     onCancel: () -> Unit,
     walletMode: WalletMode = WalletMode.SPARK,
