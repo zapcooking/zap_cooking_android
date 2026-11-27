@@ -714,7 +714,13 @@ class SparkRepository(
                         }
                         ?: emptyList()
                     val amountBaseUnits = payment.amount.toString()
-                    val asset = extractPaymentAsset(
+                    // A conversion row reads in the denomination of what the
+                    // conversion produced: "Converted from Bitcoin" arrived
+                    // as USDB (token row), "Converted from USDB" arrived as
+                    // sats (plain sats row). extractPaymentAsset's token side
+                    // is only applied when the token is the destination.
+                    val toBitcoin = conversionDestinedForBitcoin(conversions)
+                    val asset = if (toBitcoin) null else extractPaymentAsset(
                         amountBaseUnits = amountBaseUnits,
                         isTokenMethod = payment.method == PaymentMethod.TOKEN,
                         tokenTicker = tokenDetails?.metadata?.ticker,
@@ -723,12 +729,18 @@ class SparkRepository(
                     )
                     val amountSats = extractPaymentSats(
                         amountBaseUnits = amountBaseUnits,
-                        hasAsset = asset != null,
+                        // A to-bitcoin conversion has no asset row but its
+                        // sats still come from the conversion's bitcoin leg —
+                        // payment.amount may hold the token units that left.
+                        hasAsset = asset != null || toBitcoin,
                         conversions = conversions
                     )
                     // Only a fee the SDK reports in the asset's own units can be
                     // shown against an asset row; anything else is sats against a
-                    // token amount and is dropped rather than mislabelled.
+                    // token amount and is dropped rather than mislabelled. The
+                    // same caution applies to conversions in either direction:
+                    // their fee's denomination isn't stated on payment.fees, so
+                    // conversion rows carry no fee figure at all.
                     val assetFee = asset
                         ?.takeIf { it.feeInAsset && payment.fees.signum() != 0 }
                         ?.let { TokenAmounts.scale(payment.fees.toString(), it.decimals) }
@@ -762,7 +774,12 @@ class SparkRepository(
                         amountMsats = amountSats * 1000,
                         // Fees on an asset row live in [assetFee] or nowhere;
                         // never in the sats field alongside a token amount.
-                        feeMsats = if (asset != null) 0 else payment.fees.toLong() * 1000,
+                        // Conversion rows drop them too — see [assetFee] above.
+                        feeMsats = if (asset != null || conversions.isNotEmpty()) {
+                            0
+                        } else {
+                            payment.fees.toLong() * 1000
+                        },
                         createdAt = payment.timestamp.toLong(),
                         // Unconfirmed/unsettled payments have no settle time yet.
                         settledAt = if (payment.status == PaymentStatus.COMPLETED) payment.timestamp.toLong() else null,

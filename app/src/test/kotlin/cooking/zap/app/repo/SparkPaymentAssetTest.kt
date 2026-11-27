@@ -232,4 +232,31 @@ class SparkPaymentAssetTest {
         assertFalse(tx.isConversion)
         assertFalse(tx.isTokenTransfer)
     }
+
+    @Test
+    fun `a usdb to bitcoin conversion is destined for bitcoin`() {
+        val conversions = listOf(
+            SparkConversion(
+                from = ConversionAssetSide("usdb-token-id", "USDB", 6, "1200000"),
+                to = ConversionAssetSide(null, "BTC", 8, "216300")
+            )
+        )
+        assertTrue(conversionDestinedForBitcoin(conversions))
+    }
+
+    @Test
+    fun `a bitcoin to usdb conversion is not destined for bitcoin`() {
+        val conversions = listOf(
+            SparkConversion(
+                from = ConversionAssetSide(null, "BTC", 8, "216300"),
+                to = ConversionAssetSide("usdb-token-id", "USDB", 6, "1200000")
+            )
+        )
+        assertFalse(conversionDestinedForBitcoin(conversions))
+    }
+
+    @Test
+    fun `no conversions is not destined for bitcoin`() {
+        assertFalse(conversionDestinedForBitcoin(emptyList()))
+    }
 }

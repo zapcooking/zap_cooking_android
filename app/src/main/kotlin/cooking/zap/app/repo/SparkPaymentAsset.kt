@@ -63,6 +63,21 @@ fun conversionSides(conversions: List<SparkConversion>): List<ConversionAssetSid
     conversions.flatMap { listOf(it.from, it.to) }
 
 /**
+ * True when the conversion's destination is bitcoin — the payment ended as
+ * sats, so the row is sats-denominated and the token side of the conversion
+ * is what was *spent*, not what arrived.
+ *
+ * Denominating both legs in the token — the web client's current rule —
+ * makes a USD-mode round-trip read as two identical "1.20 USDB" rows with
+ * the sats leg's outcome invisible.
+ */
+fun conversionDestinedForBitcoin(conversions: List<SparkConversion>): Boolean =
+    conversions.isNotEmpty() && conversions.all {
+        it.to.ticker.equals("BTC", ignoreCase = true) ||
+            it.to.ticker.equals("Bitcoin", ignoreCase = true)
+    }
+
+/**
  * Work out which asset a payment moved, if not bitcoin. Returns null for an
  * ordinary sats payment, which is the overwhelming majority.
  *
