@@ -90,6 +90,8 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.filled.Receipt
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CurrencyBitcoin
@@ -4635,6 +4637,11 @@ private fun WalletSettingsContent(
                 }
 
                 if (relayBackupStatuses.isNotEmpty()) {
+                    // The relay list is recovery-debugging detail — collapsed
+                    // by default behind a one-line summary; expanded it's the
+                    // full per-relay status the delete flow sits under.
+                    val withBackup = relayBackupStatuses.count { it.hasBackup }
+                    var relaysExpanded by remember { mutableStateOf(false) }
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(
@@ -4642,29 +4649,60 @@ private fun WalletSettingsContent(
                         )
                     ) {
                         Column(modifier = Modifier.padding(12.dp)) {
-                            relayBackupStatuses.forEach { info ->
-                                Row(
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { relaysExpanded = !relaysExpanded },
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
                                     modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Box(
+                                        .size(8.dp)
+                                        .background(
+                                            if (withBackup > 0) Color(0xFF4CAF50) else Color(0xFF9E9E9E),
+                                            CircleShape
+                                        )
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    "Backed up to $withBackup of ${relayBackupStatuses.size} relays",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Spacer(Modifier.weight(1f))
+                                Icon(
+                                    if (relaysExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                    contentDescription = if (relaysExpanded) "Hide relays" else "Show relays",
+                                    modifier = Modifier.size(20.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            if (relaysExpanded) {
+                                Spacer(Modifier.height(8.dp))
+                                relayBackupStatuses.forEach { info ->
+                                    Row(
                                         modifier = Modifier
-                                            .size(8.dp)
-                                            .background(
-                                                if (info.hasBackup) Color(0xFF4CAF50) else Color(0xFF9E9E9E),
-                                                CircleShape
-                                            )
-                                    )
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(
-                                        info.relayUrl.removePrefix("wss://").removePrefix("ws://"),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
+                                            .fillMaxWidth()
+                                            .padding(vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(8.dp)
+                                                .background(
+                                                    if (info.hasBackup) Color(0xFF4CAF50) else Color(0xFF9E9E9E),
+                                                    CircleShape
+                                                )
+                                        )
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(
+                                            info.relayUrl.removePrefix("wss://").removePrefix("ws://"),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
                                 }
                             }
                         }
