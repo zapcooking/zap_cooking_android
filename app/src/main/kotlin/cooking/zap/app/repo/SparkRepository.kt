@@ -148,6 +148,12 @@ class SparkRepository(
     private val _transactionsChanged = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
     override val transactionsChanged: SharedFlow<Unit> = _transactionsChanged
 
+    // True from connect() until the first Synced — the payment list trails
+    // the balance while the SDK fills its local table, and UI reads this to
+    // say "still counting" instead of showing stale history silently.
+    private val _isSyncing = MutableStateFlow(false)
+    val isSyncing: StateFlow<Boolean> = _isSyncing
+
     // Identity pubkey from the SDK's GetInfoResponse — exposed for the
     // Wallet Info expandable in settings. Populated on first balance fetch
     // after connect.
@@ -338,6 +344,10 @@ class SparkRepository(
             emitStatus("No mnemonic configured")
             return
         }
+        // The payment list trails the balance: the SDK's first sync fills the
+        // local payments table, and until it lands listPayments returns stale
+        // history. UI surfaces read this to say "still counting".
+        _isSyncing.value = true
 
         scope?.cancel()
         val newScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -384,6 +394,7 @@ class SparkRepository(
                                 // sync that follows its payment: the balance
                                 // and the history row both land here, without
                                 // a manual refresh.
+                                _isSyncing.value = false
                                 refreshBalanceInternal()
                                 _transactionsChanged.tryEmit(Unit)
                             }

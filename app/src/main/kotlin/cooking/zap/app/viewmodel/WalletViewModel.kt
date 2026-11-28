@@ -289,6 +289,7 @@ class WalletViewModel(
     // Opt-in USD balance, held as Spark's USDB stablecoin. Spark-only; NWC
     // wallets have no equivalent, so the UI gates on the wallet mode.
     val stableBalance: StateFlow<StableBalanceState> = sparkRepo.stableBalance
+    val isSyncing: StateFlow<Boolean> = sparkRepo.isSyncing
 
     private val _stableBalanceUpdating = MutableStateFlow(false)
     val stableBalanceUpdating: StateFlow<Boolean> = _stableBalanceUpdating

@@ -432,7 +432,8 @@ fun WalletScreen(
                             recentTransactions = viewModel.transactions.collectAsState().value,
                             profileLookup = remember(profileKey) { { viewModel.getProfileData(it) } },
                             nwcNodeAlias = viewModel.nwcNodeAlias.collectAsState().value,
-                            stableBalance = viewModel.stableBalance.collectAsState().value,
+isSyncing = viewModel.isSyncing.collectAsState().value,
+                    stableBalance = viewModel.stableBalance.collectAsState().value,
                             pubkey = viewModel.keyRepo.getPubkeyHex(),
                             modifier = Modifier.padding(padding)
                         )
@@ -494,7 +495,7 @@ fun WalletScreen(
                             },
                             onPay = { viewModel.payInvoice(page.invoice) },
                             onCancel = { viewModel.navigateBack() },
-                            stableBalance = viewModel.stableBalance.collectAsState().value,
+                    stableBalance = viewModel.stableBalance.collectAsState().value,
                             modifier = Modifier.padding(padding)
                         )
                     }
@@ -572,7 +573,8 @@ fun WalletScreen(
                             recentTransactions = viewModel.transactions.collectAsState().value,
                             profileLookup = remember(profileKey) { { viewModel.getProfileData(it) } },
                             nwcNodeAlias = viewModel.nwcNodeAlias.collectAsState().value,
-                            stableBalance = viewModel.stableBalance.collectAsState().value,
+isSyncing = viewModel.isSyncing.collectAsState().value,
+                    stableBalance = viewModel.stableBalance.collectAsState().value,
                             pubkey = viewModel.keyRepo.getPubkeyHex(),
                             modifier = Modifier.padding(padding)
                         )
@@ -606,7 +608,7 @@ fun WalletScreen(
                         nwcNodeAlias = viewModel.nwcNodeAlias.collectAsState().value,
                         nwcConnectionInfo = viewModel.nwcConnectionInfo.collectAsState().value,
                         nwcSupportedMethods = viewModel.nwcSupportedMethods.collectAsState().value,
-                        stableBalance = viewModel.stableBalance.collectAsState().value,
+                    stableBalance = viewModel.stableBalance.collectAsState().value,
                         stableBalanceUpdating = viewModel.stableBalanceUpdating.collectAsState().value,
                         onSetStableBalance = { viewModel.setStableBalanceEnabled(it) },
                         modifier = Modifier.padding(padding)
@@ -747,7 +749,8 @@ fun WalletScreen(
                             recentTransactions = viewModel.transactions.collectAsState().value,
                             profileLookup = remember(profileKey) { { viewModel.getProfileData(it) } },
                             nwcNodeAlias = viewModel.nwcNodeAlias.collectAsState().value,
-                            stableBalance = viewModel.stableBalance.collectAsState().value,
+isSyncing = viewModel.isSyncing.collectAsState().value,
+                    stableBalance = viewModel.stableBalance.collectAsState().value,
                             pubkey = viewModel.keyRepo.getPubkeyHex(),
                             modifier = Modifier.padding(padding)
                         )
@@ -1153,6 +1156,7 @@ private fun WalletHomeContent(
     lightningAddress: String? = null,
     onSetupAddress: () -> Unit = {},
     recentTransactions: List<WalletTransaction> = emptyList(),
+    isSyncing: Boolean = false,
     profileLookup: (String) -> cooking.zap.app.nostr.ProfileData? = { null },
     nwcNodeAlias: String? = null,
     stableBalance: StableBalanceState = StableBalanceState(),
@@ -1602,11 +1606,29 @@ private fun WalletHomeContent(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    stringResource(R.string.wallet_recent).uppercase(),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        stringResource(R.string.wallet_recent).uppercase(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    // The payment list trails the balance while the SDK's
+                    // first sync fills it — say so instead of silently
+                    // showing history that's about to change.
+                    if (isSyncing) {
+                        Spacer(Modifier.width(8.dp))
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(12.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            "Syncing…",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         stringResource(R.string.wallet_view_all),
