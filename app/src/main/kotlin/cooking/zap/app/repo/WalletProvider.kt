@@ -55,30 +55,47 @@ data class WalletTransaction(
     /** True for on-chain Bitcoin deposits/withdrawals (vs Lightning). */
     val isOnchain: Boolean = false,
     /**
-     * Ticker of the asset this row moved, when it wasn't bitcoin - e.g. "USDB".
-     * Null for every sats payment, which is the overwhelming majority.
+     * Ticker of the asset this row moved, when it wasn't bitcoin — e.g.
+     * "USDB". Null for every sats payment, which is the overwhelming
+     * majority.
      *
-     * Spark wallets can hold tokens alongside sats, and Payment.amount is
-     * documented as "satoshis OR token base units". This app offers no token
-     * conversion, but a wallet restored from the same seed in an app that does
-     * hands us those payments anyway, and reading their base units as sats
-     * turns a 15.77 USDB transfer into "15,766,673 sats".
-     *
-     * When this is set, amountMsats / feeMsats are zero: there is no honest
-     * sats value for a token transfer, so nothing sats-denominated - including
-     * fiat conversion - may be derived from this row.
+     * Spark wallets hold tokens alongside sats, and `Payment.amount` is
+     * documented as "satoshis **or token base units**". When this is set the
+     * row is rendered in the asset's own denomination and no fiat rate is
+     * applied — the rate converts satoshis, so applying it to a token amount
+     * would only produce a second wrong number. [amountMsats] stays strictly
+     * satoshi-denominated either way: it holds the bitcoin leg of a
+     * conversion, and zero for a pure token transfer, which has no bitcoin
+     * leg. [feeMsats] is zero on any asset row.
      */
     val assetTicker: String? = null,
     /**
-     * Amount already scaled by the token's decimals, at full precision. Kept as
-     * a String because token base units are u128 and overflow Long.
+     * Amount already scaled by the asset's decimals, at full precision.
+     * Kept as a string because token base units are `U128` and can exceed
+     * `Long`. Detail views show this; rows show [assetAmountCompact].
      */
     val assetAmount: String? = null,
-    /** Fee in the same asset, scaled the same way. Null when the fee is zero. */
-    val assetFee: String? = null
+    /**
+     * Fee in the same asset, scaled the same way. Null when the fee is zero
+     * or is not denominated in this asset — see [PaymentAsset.feeInAsset].
+     */
+    val assetFee: String? = null,
+    /**
+     * Asset a conversion started from — "Bitcoin" or "USDB" — when this row
+     * is one leg of a Bitcoin↔USDB swap rather than money entering or
+     * leaving the wallet.
+     *
+     * Drives the "Converted from Bitcoin" label in place of Received/Sent,
+     * and suppresses the +/- sign: a conversion is neither a credit nor a
+     * debit, and both of its legs land in the history.
+     */
+    val conversionFrom: String? = null
 ) {
     /** True when this row moved something other than bitcoin. */
     val isTokenTransfer: Boolean get() = assetTicker != null
+
+    /** True when this row is one leg of a Bitcoin↔USDB conversion. */
+    val isConversion: Boolean get() = conversionFrom != null
 
     /** Row-sized amount: two decimal places, full precision kept in [assetAmount]. */
     val assetAmountCompact: String? get() = assetAmount?.let { TokenAmounts.compact(it) }

@@ -26,6 +26,7 @@ import cooking.zap.app.repo.NofferClient
 import cooking.zap.app.repo.NwcLiveness
 import cooking.zap.app.repo.NwcRepository
 import cooking.zap.app.repo.SparkRepository
+import cooking.zap.app.repo.StableBalanceState
 import cooking.zap.app.repo.WalletMode
 import cooking.zap.app.repo.WalletModeRepository
 import cooking.zap.app.repo.WalletProvider
@@ -285,12 +286,19 @@ class WalletViewModel(
     // Spark identity pubkey — populated from the SDK's GetInfoResponse.
     val sparkIdentityPubkey: StateFlow<String?> = sparkRepo.identityPubkey
 
+    // Opt-in USD balance, held as Spark's USDB stablecoin. Spark-only; NWC
+    // wallets have no equivalent, so the UI gates on the wallet mode.
+    val stableBalance: StateFlow<StableBalanceState> = sparkRepo.stableBalance
+    val isSyncing: StateFlow<Boolean> = sparkRepo.isSyncing
+
+    private val _stableBalanceUpdating = MutableStateFlow(false)
+    val stableBalanceUpdating: StateFlow<Boolean> = _stableBalanceUpdating
+
+    private val _stableBalanceError = MutableStateFlow<String?>(null)
+    val stableBalanceError: StateFlow<String?> = _stableBalanceError
+
     // NWC connection metadata for the Wallet Info expandable in settings.
     val nwcConnectionInfo: StateFlow<NwcRepository.ConnectionInfo?> = nwcRepo.connectionInfo
-
-    // Delete wallet confirmation
-    private val _deleteConfirmText = MutableStateFlow("")
-    val deleteConfirmText: StateFlow<String> = _deleteConfirmText
 
     // Lightning address availability check
     private val _addressAvailable = MutableStateFlow<Boolean?>(null)
@@ -509,7 +517,6 @@ class WalletViewModel(
         _sendError.value = null
         _receiveAmount.value = ""
         _restoreMnemonic.value = ""
-        _deleteConfirmText.value = ""
         _lightningAddressError.value = null
         _addressAvailable.value = null
     }
@@ -1000,15 +1007,38 @@ class WalletViewModel(
         }
     }
 
-    fun deleteWallet() {
-        // Custom (non-default) Spark wallets are irreversible without their
-        // seed phrase, so we require the typed DELETE confirmation. Default
-        // wallets re-derive from the nsec on demand, so a tap is enough.
-        if (_walletMode.value == WalletMode.SPARK
-            && !computeIsDefaultWallet()
-            && _deleteConfirmText.value != "DELETE"
-        ) return
+    /**
+     * Turn the USD balance on or off.
+     *
+     * The conversion itself happens inside the Spark SDK; this only records
+     * the preference and then reloads, because enabling can immediately
+     * convert an existing balance and the dashboard would otherwise keep
+     * showing the pre-toggle figure.
+     */
+    fun setStableBalanceEnabled(enabled: Boolean) {
+        if (_walletMode.value != WalletMode.SPARK) return
+        if (_stableBalanceUpdating.value) return
+        _stableBalanceUpdating.value = true
+        _stableBalanceError.value = null
+        viewModelScope.launch {
+            sparkRepo.setStableBalanceEnabled(enabled).fold(
+                onSuccess = {
+                    refreshBalance()
+                    refreshTransactionsQuietly()
+                },
+                onFailure = { e ->
+                    _stableBalanceError.value = e.message ?: "Unable to update USD balance"
+                }
+            )
+            _stableBalanceUpdating.value = false
+        }
+    }
 
+    fun clearStableBalanceError() {
+        _stableBalanceError.value = null
+    }
+
+    fun deleteWallet() {
         connectJob?.cancel()
         statusCollectJob?.cancel()
         connectionMonitorJob?.cancel()
@@ -1033,7 +1063,6 @@ class WalletViewModel(
         _connectionString.value = ""
         _statusLines.value = emptyList()
         clearWalletDisplayState()
-        _deleteConfirmText.value = ""
         _isDefaultWallet.value = false
 
         // Suppress the auto-create on the next navigateHome — the user
@@ -1100,10 +1129,6 @@ class WalletViewModel(
         _connectionString.value = ""
         _statusLines.value = emptyList()
         clearWalletDisplayState()
-    }
-
-    fun updateDeleteConfirmText(value: String) {
-        _deleteConfirmText.value = value
     }
 
     fun refreshState() {

@@ -1262,6 +1262,30 @@
     <string name="wallet_received">Received</string>
     <string name="wallet_sent">Sent</string>
     <string name="wallet_tx_pending">Pending</string>
+
+    <!-- USD balance (Spark USDB). "Converted from" labels the legs of a
+         Bitcoin<->USDB swap, which is neither money arriving nor leaving. -->
+    <string name="wallet_converted_from">Converted from %1$s</string>
+    <string name="wallet_asset_fee">fee: %1$s %2$s</string>
+    <string name="wallet_usd_balance">USD balance</string>
+    <string name="wallet_usd_balance_active">Stable balance active</string>
+    <string name="wallet_usd_balance_active_body">Your main balance is shown in %1$s.</string>
+    <string name="wallet_usd_balance_active_note">Bitcoin payments automatically convert from your USD balance when needed.</string>
+    <string name="wallet_usd_use_bitcoin">Use Bitcoin</string>
+    <string name="wallet_usd_balance_detected">USD balance detected</string>
+    <string name="wallet_usd_balance_detected_body">Your %1$s funds are available. Resume USD mode to use this balance for payments.</string>
+    <string name="wallet_usd_resume">Resume USD</string>
+    <string name="wallet_usd_balance_offer">Protect future wallet value from Bitcoin price movement.</string>
+    <string name="wallet_usd_enable">Enable</string>
+    <string name="wallet_usd_confirm_title">Enable USD balance?</string>
+    <string name="wallet_usd_confirm_body">Eligible incoming Bitcoin converts to USDB. Turning this off converts remaining USDB back to Bitcoin. Conversion rates and fees apply.</string>
+    <string name="wallet_usd_confirm_not_now">Not now</string>
+    <string name="wallet_usd_confirm_enable">Enable USD</string>
+    <string name="wallet_sats_available">%1$s sats available</string>
+    <string name="wallet_usd_holding_format">$%1$s in %2$s</string>
+    <string name="wallet_usd_updating">Updating…</string>
+    <string name="wallet_usd_enabling">Enabling…</string>
+    <string name="wallet_usd_send_disclosure">This payment may convert %1$s to Bitcoin. The final rate and conversion fee are determined by Spark before settlement.</string>
     <string name="wallet_onchain_generating">Generating address…</string>
     <string name="wallet_onchain_try_again">Try again</string>
     <string name="wallet_onchain_payment_sent">Payment Sent</string>

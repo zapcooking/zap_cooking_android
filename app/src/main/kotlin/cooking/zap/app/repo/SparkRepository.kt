@@ -28,6 +28,10 @@ import breez_sdk_spark.Seed
 import breez_sdk_spark.SendPaymentMethod
 import breez_sdk_spark.SendPaymentOptions
 import breez_sdk_spark.SendPaymentRequest
+import breez_sdk_spark.StableBalanceActiveLabel
+import breez_sdk_spark.StableBalanceConfig
+import breez_sdk_spark.StableBalanceToken
+import breez_sdk_spark.UpdateUserSettingsRequest
 import breez_sdk_spark.SyncWalletRequest
 import breez_sdk_spark.connect
 import breez_sdk_spark.defaultConfig
@@ -44,6 +48,7 @@ import kotlinx.coroutines.withContext
 import cooking.zap.app.BuildConfig
 import cooking.zap.app.nostr.Keys
 import java.io.File
+import java.math.BigInteger
 import java.security.SecureRandom
 
 class SparkRepository(
@@ -54,6 +59,31 @@ class SparkRepository(
 
     companion object {
         private val BREEZ_API_KEY: String get() = BuildConfig.BREEZ_API_KEY
+
+        /**
+         * Spark's USDB stablecoin — the asset behind the wallet's opt-in USD
+         * balance. The identifier is the token's own on-network id and is the
+         * same value the web client uses, so a seed shared between the two
+         * lands on the same token.
+         */
+        const val USDB_TOKEN_IDENTIFIER =
+            "btkn1xgrvjwey5ngcagvap2dzzvsy4uk8ua9x69k82dwvt5e7ef9drm9qztux87"
+
+        /**
+         * Label the SDK keys the stable balance under. Written into
+         * [StableBalanceConfig] at connect and read back off
+         * `UserSettings.stableBalanceActiveLabel` to tell whether the user
+         * has USD mode on.
+         */
+        const val USDB_LABEL = "USDB"
+
+        /**
+         * Fallback precision for USDB, used before the token metadata has
+         * arrived (a wallet with a zero USDB balance reports no metadata at
+         * all). USDB is a six-decimal token; getting this wrong would
+         * misplace the decimal point on the first render.
+         */
+        const val DEFAULT_USDB_DECIMALS = 6
 
         // Domain Lightning addresses are registered under. `sats.zap.cooking`
         // is a CNAME to Breez's hosted LNURL server (breez.tips), registered
@@ -88,6 +118,7 @@ class SparkRepository(
         disconnect()
         encPrefs = createEncPrefs(pubkeyHex)
         _balance.value = null
+        _stableBalance.value = StableBalanceState()
     }
 
     private fun createEncPrefs(pubkeyHex: String?) = EncryptedSharedPreferences.create(
@@ -117,6 +148,12 @@ class SparkRepository(
     private val _transactionsChanged = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
     override val transactionsChanged: SharedFlow<Unit> = _transactionsChanged
 
+    // True from connect() until the first Synced — the payment list trails
+    // the balance while the SDK fills its local table, and UI reads this to
+    // say "still counting" instead of showing stale history silently.
+    private val _isSyncing = MutableStateFlow(false)
+    val isSyncing: StateFlow<Boolean> = _isSyncing
+
     // Identity pubkey from the SDK's GetInfoResponse — exposed for the
     // Wallet Info expandable in settings. Populated on first balance fetch
     // after connect.
@@ -125,6 +162,17 @@ class SparkRepository(
 
     private val _unclaimedDeposits = MutableStateFlow<List<DepositInfo>>(emptyList())
     val unclaimedDeposits: StateFlow<List<DepositInfo>> = _unclaimedDeposits
+
+    /**
+     * The wallet's USD (USDB) balance and whether USD mode is switched on.
+     *
+     * Separate from [balance], which stays strictly satoshi-denominated —
+     * `GetInfoResponse.balanceSats` is sats-only and tokens live in their own
+     * `tokenBalances` map. The two are genuinely distinct piles of money and
+     * are never summed.
+     */
+    private val _stableBalance = MutableStateFlow(StableBalanceState())
+    val stableBalance: StateFlow<StableBalanceState> = _stableBalance
 
     private fun emitStatus(msg: String) {
         Log.d(TAG, msg)
@@ -251,6 +299,7 @@ class SparkRepository(
             .remove("seed_backup_acked")
             .apply()
         _balance.value = null
+        _stableBalance.value = StableBalanceState()
         _isConnected.value = false
     }
 
@@ -295,6 +344,10 @@ class SparkRepository(
             emitStatus("No mnemonic configured")
             return
         }
+        // The payment list trails the balance: the SDK's first sync fills the
+        // local payments table, and until it lands listPayments returns stale
+        // history. UI surfaces read this to say "still counting".
+        _isSyncing.value = true
 
         scope?.cancel()
         val newScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -306,6 +359,19 @@ class SparkRepository(
 
                 val config = defaultConfig(Network.MAINNET)
                 config.apiKey = BREEZ_API_KEY
+                // Register USDB so the SDK can run the Bitcoin↔USDB
+                // conversions behind the opt-in USD balance. Declaring the
+                // token does nothing on its own — nothing converts until the
+                // user turns USD mode on via [setStableBalanceEnabled], which
+                // is what sets `UserSettings.stableBalanceActiveLabel`.
+                config.stableBalanceConfig = StableBalanceConfig(
+                    tokens = listOf(
+                        StableBalanceToken(
+                            label = USDB_LABEL,
+                            tokenIdentifier = USDB_TOKEN_IDENTIFIER
+                        )
+                    )
+                )
                 config.lnurlDomain = LNURL_DOMAIN
 
                 val seed = Seed.Mnemonic(mnemonic, null)
@@ -324,6 +390,13 @@ class SparkRepository(
                         when (e) {
                             is SdkEvent.Synced -> {
                                 emitStatus("Synced")
+                                // A stable-balance conversion settles on the
+                                // sync that follows its payment: the balance
+                                // and the history row both land here, without
+                                // a manual refresh.
+                                _isSyncing.value = false
+                                refreshBalanceInternal()
+                                _transactionsChanged.tryEmit(Unit)
                             }
                             is SdkEvent.PaymentSucceeded -> {
                                 emitStatus("Payment succeeded")
@@ -381,6 +454,7 @@ class SparkRepository(
         scope?.cancel()
         scope = null
         _isConnected.value = false
+        _stableBalance.value = StableBalanceState()
 
         // Clean up native SDK on a standalone scope so cancelling our main scope
         // doesn't kill the teardown coroutine
@@ -400,12 +474,13 @@ class SparkRepository(
 
     // --- Balance ---
 
-    private suspend fun refreshBalanceInternal() {
+    private suspend fun refreshBalanceInternal(ensureSynced: Boolean = false) {
         try {
             val instance = sdk ?: return
-            val info = instance.getInfo(GetInfoRequest(ensureSynced = false))
+            val info = instance.getInfo(GetInfoRequest(ensureSynced = ensureSynced))
             _balance.value = info.balanceSats.toLong() * 1000 // convert sats to msats
             _identityPubkey.value = info.identityPubkey
+            refreshStableBalance(instance, info)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to refresh balance", e)
         }
@@ -418,11 +493,90 @@ class SparkRepository(
             val balanceMsats = info.balanceSats.toLong() * 1000
             _balance.value = balanceMsats
             _identityPubkey.value = info.identityPubkey
+            refreshStableBalance(instance, info)
             Result.success(balanceMsats)
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
+
+    // --- USD (USDB) balance ---
+
+    /**
+     * Read the USDB token balance out of a [GetInfoResponse] and pair it with
+     * whether USD mode is currently on.
+     *
+     * The two come from different places: the balance rides along on
+     * `getInfo`, while the on/off state lives in `UserSettings`. A failure to
+     * read the settings keeps the previous flag rather than reporting USD mode
+     * off — flipping the dashboard to sats on a transient error would read as
+     * the user's USD balance having vanished.
+     */
+    private suspend fun refreshStableBalance(
+        instance: breez_sdk_spark.BreezSdk,
+        info: breez_sdk_spark.GetInfoResponse
+    ) {
+        val usdb = info.tokenBalances.values.firstOrNull {
+            it.tokenMetadata.identifier == USDB_TOKEN_IDENTIFIER
+        }
+        val active = try {
+            instance.getUserSettings().stableBalanceActiveLabel == USDB_LABEL
+        } catch (e: Exception) {
+            Log.d(TAG, "Could not read stable balance setting: ${e.message}")
+            _stableBalance.value.active
+        }
+        _stableBalance.value = StableBalanceState(
+            active = active,
+            label = usdb?.tokenMetadata?.ticker?.takeIf { it.isNotBlank() } ?: USDB_LABEL,
+            baseUnits = usdb?.balance ?: BigInteger.ZERO,
+            decimals = usdb?.tokenMetadata?.decimals?.toInt() ?: DEFAULT_USDB_DECIMALS
+        )
+    }
+
+    /**
+     * Turn the USD balance on or off.
+     *
+     * Enabling tells the SDK to convert eligible incoming Bitcoin to USDB;
+     * disabling converts the remaining USDB back to Bitcoin. Both legs run
+     * inside the SDK — the app never quotes a rate or moves a token itself.
+     *
+     * Syncs before re-reading, and re-reads with `ensureSynced` on, because a
+     * conversion that has only just been requested is not yet reflected in a
+     * cached `getInfo`, and showing the pre-toggle figure would look like the
+     * switch had not taken.
+     */
+    suspend fun setStableBalanceEnabled(enabled: Boolean): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            try {
+                val instance = sdk ?: return@withContext Result.failure(Exception("Not connected"))
+                emitStatus(if (enabled) "Enabling USD balance..." else "Converting USD balance to Bitcoin...")
+                instance.updateUserSettings(
+                    UpdateUserSettingsRequest(
+                        // Null leaves a setting untouched; only the stable
+                        // balance label is being changed here.
+                        sparkPrivateModeEnabled = null,
+                        stableBalanceActiveLabel = if (enabled) {
+                            StableBalanceActiveLabel.Set(USDB_LABEL)
+                        } else {
+                            StableBalanceActiveLabel.Unset
+                        }
+                    )
+                )
+                try {
+                    instance.syncWallet(SyncWalletRequest)
+                } catch (e: Exception) {
+                    Log.d(TAG, "Sync after stable balance toggle failed: ${e.message}")
+                }
+                refreshBalanceInternal(ensureSynced = true)
+                _transactionsChanged.tryEmit(Unit)
+                emitStatus(if (enabled) "USD balance enabled" else "USD balance turned off")
+                Result.success(Unit)
+            } catch (e: Exception) {
+                emitStatus("Could not update USD balance: ${e.message}")
+                Log.e(TAG, "setStableBalanceEnabled failed", e)
+                Result.failure(e)
+            }
+        }
 
     // --- Send ---
 
@@ -554,6 +708,7 @@ class SparkRepository(
                 val transactions = response.payments.map { payment ->
                     val details = payment.details
                     val lightningDetails = details as? PaymentDetails.Lightning
+                    val tokenDetails = details as? PaymentDetails.Token
 
                     // On-chain deposits/withdrawals carry just a txid; use it as
                     // the identifier so dedup and the (future) detail drawer work.
@@ -563,48 +718,68 @@ class SparkRepository(
                         else -> null
                     }
 
+                    // A payment can be denominated in something other than sats:
+                    // a direct token transfer, or a stable-balance receive that
+                    // kept its Lightning method while the USDB it produced is
+                    // recorded only on the conversion. See [extractPaymentAsset].
+                    val conversions = payment.conversionDetails?.conversions
+                        ?.map { conversion ->
+                            SparkConversion(
+                                from = conversion.from.toAssetSide(),
+                                to = conversion.to.toAssetSide()
+                            )
+                        }
+                        ?: emptyList()
+                    val amountBaseUnits = payment.amount.toString()
+                    // A conversion row reads in the denomination of what the
+                    // conversion produced: "Converted from Bitcoin" arrived
+                    // as USDB (token row), "Converted from USDB" arrived as
+                    // sats (plain sats row). extractPaymentAsset's token side
+                    // is only applied when the token is the destination.
+                    val toBitcoin = conversionDestinedForBitcoin(conversions)
+                    val asset = if (toBitcoin) null else extractPaymentAsset(
+                        amountBaseUnits = amountBaseUnits,
+                        isTokenMethod = payment.method == PaymentMethod.TOKEN,
+                        tokenTicker = tokenDetails?.metadata?.ticker,
+                        tokenDecimals = tokenDetails?.metadata?.decimals?.toInt(),
+                        conversions = conversions
+                    )
+                    val amountSats = extractPaymentSats(
+                        amountBaseUnits = amountBaseUnits,
+                        // A to-bitcoin conversion has no asset row but its
+                        // sats still come from the conversion's bitcoin leg —
+                        // payment.amount may hold the token units that left.
+                        hasAsset = asset != null || toBitcoin,
+                        conversions = conversions
+                    )
+                    // Only a fee the SDK reports in the asset's own units can be
+                    // shown against an asset row; anything else is sats against a
+                    // token amount and is dropped rather than mislabelled. The
+                    // same caution applies to conversions in either direction:
+                    // their fee's denomination isn't stated on payment.fees, so
+                    // conversion rows carry no fee figure at all.
+                    val assetFee = asset
+                        ?.takeIf { it.feeInAsset && payment.fees.signum() != 0 }
+                        ?.let { TokenAmounts.scale(payment.fees.toString(), it.decimals) }
+
                     // Prefer bolt11-decoded hash (matches ZapSender records), fall back to HTLC hash, then payment ID
                     val decoded = lightningDetails?.invoice?.let {
                         cooking.zap.app.nostr.Bolt11.decode(it)
                     }
                     val htlcHash = lightningDetails?.htlcDetails?.paymentHash?.lowercase()
-                    val paymentHash = onchainTxid ?: decoded?.paymentHash ?: htlcHash ?: payment.id
+                    // A token transfer's own tx hash is the identifier that
+                    // matches what the network shows for it.
+                    val paymentHash = onchainTxid
+                        ?: tokenDetails?.txHash
+                        ?: decoded?.paymentHash
+                        ?: htlcHash
+                        ?: payment.id
                     // Prefer Spark's description, fall back to bolt11 description
                     // (bolt11 tag 13 may contain the kind 9734 zap request JSON)
                     val description = lightningDetails?.description
                         ?: decoded?.description
 
                     val isPending = payment.status == PaymentStatus.PENDING
-
-                    // Non-bitcoin assets. Payment.amount is documented as
-                    // "satoshis OR token base units", so a token payment's
-                    // amount must never reach the sats fields below. Property
-                    // access rather than destructuring keeps this working
-                    // across SDK versions that changed the case's arity.
-                    val tokenDetails = payment.details as? PaymentDetails.Token
-                    var assetTicker: String? = tokenDetails?.metadata?.ticker
-                    var assetAmount: String? = tokenDetails?.let {
-                        TokenAmounts.scale(payment.amount.toString(), it.metadata.decimals.toInt())
-                    }
-                    var assetFee: String? = tokenDetails?.let {
-                        val raw = payment.fees.toString()
-                        if (raw == "0") null else TokenAmounts.scale(raw, it.metadata.decimals.toInt())
-                    }
-                    // `method` is the fallback discriminator - the SDK notes
-                    // the details can be empty. Without metadata there are no
-                    // decimals to scale by, so show base units under a neutral
-                    // label rather than passing them off as sats.
-                    if (assetTicker == null && payment.method == PaymentMethod.TOKEN) {
-                        assetTicker = "tokens"
-                        assetAmount = payment.amount.toString()
-                        assetFee = payment.fees.toString().takeIf { it != "0" }
-                    }
-                    val isToken = assetTicker != null
-                    // Zero for token rows: there is no honest sats value for a
-                    // token transfer. `.toLong()` on a u128 BigInteger also
-                    // wraps silently past Long.MAX_VALUE.
-                    val satsAmount = if (isToken) 0L else payment.amount.toLong()
-                    val satsFees = if (isToken) 0L else payment.fees.toLong()
 
                     WalletTransaction(
                         type = when (payment.paymentType) {
@@ -613,16 +788,24 @@ class SparkRepository(
                         },
                         description = description,
                         paymentHash = paymentHash,
-                        amountMsats = satsAmount * 1000,
-                        feeMsats = satsFees * 1000,
+                        amountMsats = amountSats * 1000,
+                        // Fees on an asset row live in [assetFee] or nowhere;
+                        // never in the sats field alongside a token amount.
+                        // Conversion rows drop them too — see [assetFee] above.
+                        feeMsats = if (asset != null || conversions.isNotEmpty()) {
+                            0
+                        } else {
+                            payment.fees.toLong() * 1000
+                        },
                         createdAt = payment.timestamp.toLong(),
                         // Unconfirmed/unsettled payments have no settle time yet.
                         settledAt = if (payment.status == PaymentStatus.COMPLETED) payment.timestamp.toLong() else null,
                         pending = isPending,
                         isOnchain = onchainTxid != null,
-                        assetTicker = assetTicker,
-                        assetAmount = assetAmount,
-                        assetFee = assetFee
+                        assetTicker = asset?.ticker,
+                        assetAmount = asset?.let { TokenAmounts.scale(it.baseUnits, it.decimals) },
+                        assetFee = assetFee,
+                        conversionFrom = extractConversionFrom(conversions)
                     )
                 }
                 Result.success(transactions)
@@ -781,3 +964,48 @@ class SparkRepository(
         }
     }
 }
+
+/**
+ * The wallet's USD balance, held as Spark's USDB stablecoin.
+ *
+ * [active] is the user's opt-in: when on, the SDK converts eligible incoming
+ * Bitcoin to USDB and converts back on the way out. [baseUnits] can be
+ * non-zero while [active] is off — a user who turned USD mode off mid-flight,
+ * or who has USDB from another app on the same seed, still holds the funds
+ * and must be able to see them.
+ */
+data class StableBalanceState(
+    val active: Boolean = false,
+    val label: String = SparkRepository.USDB_LABEL,
+    /** Unscaled token base units; `U128` on the wire, so never a `Long`. */
+    val baseUnits: BigInteger = BigInteger.ZERO,
+    val decimals: Int = SparkRepository.DEFAULT_USDB_DECIMALS
+) {
+    /** True when there is USDB in the wallet, regardless of [active]. */
+    val hasBalance: Boolean get() = baseUnits.signum() > 0
+
+    /** Scaled to whole units at full precision, e.g. "15.766673". */
+    val amount: String get() = TokenAmounts.scale(baseUnits.toString(), decimals)
+
+    /** Row-sized form of [amount], e.g. "15.77". */
+    val amountCompact: String get() = TokenAmounts.compact(amount)
+
+    /**
+     * True when the USD balance should lead the dashboard: either the user
+     * opted in, or they are holding USDB and need to see it even though the
+     * mode is off.
+     */
+    val isPrimary: Boolean get() = active || hasBalance
+}
+
+/**
+ * Flatten one side of an SDK conversion to the fields the display layer
+ * reads. Only the token side carries an asset identifier, which is what
+ * tells the two legs of a swap apart.
+ */
+private fun breez_sdk_spark.ConversionSide.toAssetSide() = ConversionAssetSide(
+    assetIdentifier = asset.identifier,
+    ticker = asset.ticker,
+    decimals = asset.decimals.toInt(),
+    baseUnits = amount.toString()
+)
