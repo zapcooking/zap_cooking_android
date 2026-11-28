@@ -380,6 +380,12 @@ class SparkRepository(
                         when (e) {
                             is SdkEvent.Synced -> {
                                 emitStatus("Synced")
+                                // A stable-balance conversion settles on the
+                                // sync that follows its payment: the balance
+                                // and the history row both land here, without
+                                // a manual refresh.
+                                refreshBalanceInternal()
+                                _transactionsChanged.tryEmit(Unit)
                             }
                             is SdkEvent.PaymentSucceeded -> {
                                 emitStatus("Payment succeeded")

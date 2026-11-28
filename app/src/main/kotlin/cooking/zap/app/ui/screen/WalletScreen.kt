@@ -1441,7 +1441,10 @@ private fun WalletHomeContent(
                             null
                         }
                         Text(
-                            satsFiat ?: "%,d %s".format(balanceSats, stringResource(R.string.wallet_sats)),
+                            satsFiat ?: stringResource(
+                                R.string.wallet_sats_available,
+                                "%,d".format(balanceSats)
+                            ),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -3176,6 +3179,11 @@ private fun TransactionRow(
     val isFiat = displayMode == WalletBalanceDisplayMode.FIAT
     val displayCurrency by CurrencyPreferences.get(ctx).currency.collectAsState()
     var expanded by remember { mutableStateOf(false) }
+    // A conversion that funded a send DID move money out of the wallet —
+    // the USDB left and the payee got sats — so it renders as the send it
+    // is: outgoing arrow, minus sign, red. Only balance-shape legs (USD-mode
+    // toggles, stable-balance receives) get the neutral sky treatment.
+    val isSendConversion = tx.isConversion && tx.type == "outgoing"
     val conversionLabel = tx.conversionFrom?.let {
         stringResource(R.string.wallet_converted_from, it)
     }
@@ -3189,7 +3197,9 @@ private fun TransactionRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         // Avatar or direction icon. A conversion has no counterparty, so it
-        // always takes the icon branch even if a stale profile lookup hits.
+        // always takes the icon branch even if a stale profile lookup hits —
+        // except a conversion that funded a send: money left for a payee, so
+        // it renders the outgoing arrow like any other send.
         if (profile?.picture != null && !tx.isConversion) {
             AsyncImage(
                 model = profile.picture,
@@ -3199,15 +3209,16 @@ private fun TransactionRow(
                     .clip(CircleShape)
             )
         } else {
-            // A conversion gets its own mark: a two-way arrow in sky, not the
-            // green down-arrow of a receive. Both legs of one swap land in the
-            // history, and either arrow would read as money moving in or out.
+            // A conversion that reshaped the balance gets its own mark: a
+            // two-way arrow in sky, not the green down-arrow of a receive.
+            // Both legs of one swap land in the history, and either arrow
+            // would read as money moving in or out.
             Box(
                 modifier = Modifier
                     .size(40.dp)
                     .background(
                         when {
-                            tx.isConversion -> ConversionSky.copy(alpha = 0.16f)
+                            tx.isConversion && !isSendConversion -> ConversionSky.copy(alpha = 0.16f)
                             isIncoming -> Color(0xFF2E7D32).copy(alpha = 0.1f)
                             else -> MaterialTheme.colorScheme.error.copy(alpha = 0.1f)
                         },
@@ -3217,17 +3228,17 @@ private fun TransactionRow(
             ) {
                 Icon(
                     when {
-                        tx.isConversion -> Icons.Default.SwapHoriz
+                        tx.isConversion && !isSendConversion -> Icons.Default.SwapHoriz
                         isIncoming -> Icons.Default.ArrowDownward
                         else -> Icons.Default.ArrowUpward
                     },
                     contentDescription = when {
-                        tx.isConversion -> conversionLabel
+                        tx.isConversion && !isSendConversion -> conversionLabel
                         isIncoming -> stringResource(R.string.wallet_received)
                         else -> stringResource(R.string.wallet_sent)
                     },
                     tint = when {
-                        tx.isConversion -> ConversionSky
+                        tx.isConversion && !isSendConversion -> ConversionSky
                         isIncoming -> Color(0xFF2E7D32)
                         else -> MaterialTheme.colorScheme.error
                     },
@@ -3244,6 +3255,9 @@ private fun TransactionRow(
             // has no counterparty, and calling it a receive invites the reading
             // that new funds arrived.
             val displayLabel = when {
+                // A conversion that funded a send reads as the send it is;
+                // the funding shows in the detail drawer.
+                isSendConversion -> stringResource(R.string.wallet_sent)
                 conversionLabel != null -> conversionLabel
                 profile != null -> profile.displayString
                 else -> {
@@ -3287,14 +3301,18 @@ private fun TransactionRow(
         // "show my wallet without showing the numbers" screenshot works.
         Column(horizontalAlignment = Alignment.End) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                // A conversion is signless: the same money stays in the wallet
-                // in a different denomination, so neither + nor - is true.
+                // A conversion that reshaped the balance is signless: the same
+                // money stays in the wallet in a different denomination, so
+                // neither + nor - is true. One that funded a send keeps the
+                // minus — money left for a payee.
                 val sign = when {
+                    isSendConversion -> "-"
                     tx.isConversion -> ""
                     isIncoming -> "+"
                     else -> "-"
                 }
                 val signColor = when {
+                    isSendConversion -> MaterialTheme.colorScheme.error
                     tx.isConversion -> ConversionSky
                     isIncoming -> Color(0xFF2E7D32)
                     else -> MaterialTheme.colorScheme.error

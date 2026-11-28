@@ -1281,6 +1281,8 @@
     <string name="wallet_usd_confirm_body">Eligible incoming Bitcoin converts to USDB. Turning this off converts remaining USDB back to Bitcoin. Conversion rates and fees apply.</string>
     <string name="wallet_usd_confirm_not_now">Not now</string>
     <string name="wallet_usd_confirm_enable">Enable USD</string>
+    <string name="wallet_sats_available">%1$s sats available</string>
+    <string name="wallet_usd_holding_format">$%1$s in %2$s</string>
     <string name="wallet_usd_updating">Updating…</string>
     <string name="wallet_usd_enabling">Enabling…</string>
     <string name="wallet_usd_send_disclosure">This payment may convert %1$s to Bitcoin. The final rate and conversion fee are determined by Spark before settlement.</string>

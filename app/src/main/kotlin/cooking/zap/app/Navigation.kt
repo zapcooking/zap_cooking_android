@@ -1054,7 +1054,8 @@ fun WispNavHost(
                     navController.navigate(route)
                 },
                 walletConfigured = drawerWalletConfigured,
-                walletBalanceMsats = drawerWalletBalanceMsats
+                walletBalanceMsats = drawerWalletBalanceMsats,
+                stableBalance = walletViewModel.stableBalance.collectAsState().value
             )
             }
         }

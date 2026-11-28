@@ -97,7 +97,9 @@ import cooking.zap.app.nostr.ProfileData
 import cooking.zap.app.nostr.toNpub
 import cooking.zap.app.repo.AccountInfo
 import cooking.zap.app.repo.CurrencyPreferences
+import cooking.zap.app.repo.StableBalanceState
 import cooking.zap.app.repo.WalletBalanceDisplayMode
+import cooking.zap.app.ui.theme.ConversionSky
 import cooking.zap.app.ui.util.AmountFormatter
 import cooking.zap.app.ui.util.LocalCanSign
 
@@ -158,6 +160,7 @@ fun WispDrawerContent(
     // the balance is unknown (never fetched / connecting / errored).
     walletConfigured: Boolean = false,
     walletBalanceMsats: Long? = null,
+    stableBalance: StableBalanceState? = null,
 ) {
     ModalDrawerSheet(
         drawerContainerColor = MaterialTheme.colorScheme.surface,
@@ -380,6 +383,7 @@ fun WispDrawerContent(
                 pubkey = pubkey,
                 walletConfigured = walletConfigured,
                 balanceMsats = walletBalanceMsats,
+                stableBalance = stableBalance,
                 onOpenWallet = onWallet
             )
         }
@@ -817,6 +821,7 @@ private fun DrawerMiniWalletRow(
     pubkey: String?,
     walletConfigured: Boolean,
     balanceMsats: Long?,
+    stableBalance: StableBalanceState? = null,
     onOpenWallet: () -> Unit
 ) {
     val context = LocalContext.current
@@ -856,8 +861,15 @@ private fun DrawerMiniWalletRow(
         }
     }
 
+    // USD mode active with a USDB balance: the token leads the stripe (same
+    // hierarchy as the dashboard) and the sats step down as what's still
+    // spendable over Lightning. Holding USDB with the mode off keeps sats
+    // leading, worded so the token line can't read as a valuation.
+    val usd = stableBalance?.takeIf { it.active && it.hasBalance }
     val balanceText = when {
         !walletConfigured -> stringResource(R.string.drawer_set_up_wallet)
+        usd != null && displayMode != WalletBalanceDisplayMode.HIDDEN ->
+            "$" + usd.amountCompact + " " + usd.label
         displayMode == WalletBalanceDisplayMode.HIDDEN -> "* * * * *"
         balanceMsats == null ->
             // Never render an unknown balance as "0" — see the matching
@@ -880,6 +892,18 @@ private fun DrawerMiniWalletRow(
             }
         }
     }
+    val stableSecondary: String? = when {
+        usd != null && balanceMsats != null -> {
+            val sats = balanceMsats / 1000
+            val number = if (sats >= 1_000_000) AmountFormatter.formatSatsShort(sats)
+            else AmountFormatter.formatSatsOnly(sats)
+            stringResource(R.string.wallet_sats_available, number)
+        }
+        displayMode != WalletBalanceDisplayMode.HIDDEN &&
+            stableBalance != null && !stableBalance.active && stableBalance.hasBalance ->
+            stringResource(R.string.wallet_usd_holding_format, stableBalance.amountCompact, stableBalance.label)
+        else -> null
+    }
 
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -901,22 +925,37 @@ private fun DrawerMiniWalletRow(
         )
         Spacer(Modifier.width(12.dp))
         // One Text so TalkBack reads the figure as a unit.
-        AnimatedContent(
-            targetState = balanceText,
-            transitionSpec = {
-                (slideInVertically(tween(250)) { it / 4 } + fadeIn(tween(250))) togetherWith
-                    (slideOutVertically(tween(250)) { -it / 4 } + fadeOut(tween(250)))
-            },
-            label = "miniWalletBalance"
-        ) { text ->
-            Text(
-                text = text,
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+        Column {
+            AnimatedContent(
+                targetState = balanceText,
+                transitionSpec = {
+                    (slideInVertically(tween(250)) { it / 4 } + fadeIn(tween(250))) togetherWith
+                        (slideOutVertically(tween(250)) { -it / 4 } + fadeOut(tween(250)))
+                },
+                label = "miniWalletBalance"
+            ) { text ->
+                Text(
+                    text = text,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            if (stableSecondary != null) {
+                // Distinct piles of money, never summed — the token line
+                // steps under the sats instead of joining them.
+                Text(
+                    text = stableSecondary,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Medium,
+                    color = if (usd != null) ConversionSky
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
         Spacer(Modifier.weight(1f))
         if (walletConfigured) {
